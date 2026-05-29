@@ -17,40 +17,24 @@ name: oidc-reference
 # rather than hitting RS on a host port.
 
 services:
-  postgres:
-    image: postgres:18-alpine3.23
-    environment:
-      POSTGRES_DB: keycloak
-      POSTGRES_USER: keycloak
-      POSTGRES_PASSWORD: keycloak
-    volumes:
-      # Postgres 18 stores data under a major-version subdirectory and
-      # rejects mounts pinned to /var/lib/postgresql/data. Mount the parent
-      # so pg can manage /var/lib/postgresql/18/main itself.
-      - kc-db:/var/lib/postgresql
-    networks:
-      - oidc-internal
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   keycloak:
     image: quay.io/keycloak/keycloak:26.6.1
-    depends_on:
-      postgres:
-        condition: service_healthy
     command:
       - start-dev
       - --import-realm
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
-      KC_DB_USERNAME: keycloak
-      KC_DB_PASSWORD: keycloak
+      # Embedded H2 in the container's writable layer (no external volume).
+      # State is rebuilt from the realm seed on every cold `compose up`
+      # because the container is removed on `compose down` and the H2 file
+      # goes with it. That's the right tradeoff for a local reference: the
+      # realm JSON in authorization-server/realm/ is the source of truth,
+      # so persistence across container lifecycles would just invite drift
+      # between what's checked in and what an admin-console click set. A
+      # production deployment would swap to a managed Postgres/MySQL via
+      # KC_DB + KC_DB_URL.
+      KC_DB: dev-file
     # Keycloak stays on host :8080. APISIX is on :9080. They are NOT the
     # same ingress: browsers hit Keycloak directly for /realms/*, and hit
     # APISIX for /auth/* and /api/**. This keeps issuer URLs stable
@@ -199,19 +183,17 @@ services:
     networks:
       - oidc-internal
     healthcheck:
-      # /apisix/status is admin-only in 3.x standalone and is not served on
-      # the public 9080 listener — pinging it always 404s and would mark
-      # the container "unhealthy" even when the gateway is happy. Probe
-      # the public listener instead: any HTTP response (incl. 404 from the
-      # router) proves the worker is accepting connections.
-      test: ["CMD-SHELL", "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:9080/__healthcheck__ | grep -qE '^[1-5][0-9][0-9]$'"]
+      # The apache/apisix:3.11.0-debian image does not ship curl/wget/nc;
+      # bash and /dev/tcp DO work. A successful TCP open on 9080 proves
+      # the worker is accepting connections — that's the property we want
+      # for a "container is ready" gate. The admin endpoint /apisix/status
+      # is disabled in standalone mode, so HTTP-level probing has nothing
+      # public to hit anyway.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9080"]
       interval: 10s
       timeout: 3s
       retries: 10
       start_period: 15s
-
-volumes:
-  kc-db:
 
 # Single internal network for all backend services. Host exposure is
 # limited to the explicit `ports:` entries above (APISIX 9080/9180,

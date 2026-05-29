@@ -3,8 +3,8 @@ set -eu
 
 # Full-stack auth verification for the Frame B split shape.
 #
-# Brings the full Compose topology up (postgres, keycloak, valkey,
-# resource-server, auth-service, apisix), waits for every service to
+# Brings the full Compose topology up (keycloak, valkey, resource-server,
+# auth-service, apisix), waits for every service to
 # report healthy, and exercises the browser-facing ingress at
 # http://127.0.0.1:9080.
 #
@@ -49,7 +49,7 @@ trap cleanup EXIT INT TERM
 # CLIs. Times out after 180s.
 wait_for_compose_healthy() {
   deadline=$(( $(date +%s) + 180 ))
-  services="postgres keycloak valkey resource-server auth-service apisix"
+  services="keycloak valkey resource-server auth-service apisix"
   while :; do
     all_healthy=1
     for svc in $services; do

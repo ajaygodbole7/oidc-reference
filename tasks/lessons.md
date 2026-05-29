@@ -34,11 +34,6 @@ here. Lessons graduate or get pruned.
 - **Root cause**: When a realm JSON includes a `clientScopes` array, Keycloak does NOT also add its defaults. The import is authoritative.
 - **Rule**: Any realm JSON that customizes `clientScopes` must explicitly re-declare every built-in scope it still needs, with their standard protocol mappers (`preferred_username`, `email`, `realm_access.roles`, etc.).
 
-### 2026-05-25 — Postgres 18 moved the data directory
-- **Mistake**: `docker compose up postgres` failed with "PostgreSQL data in /var/lib/postgresql/data (unused mount/volume)".
-- **Root cause**: Postgres 18 puts data under a major-version subdirectory and rejects the legacy `/var/lib/postgresql/data` mount path.
-- **Rule**: For Postgres 18+, mount the volume at `/var/lib/postgresql` (not `/data`).
-
 ### 2026-05-25 — Replacing Spring Security's response-client RestClient loses the OAuth converters
 - **Mistake**: After swapping Spring's auto-wired RestClient for our timeout-configured one via `setRestClient(...)`, the live flow died with `IllegalArgumentException: additionalParameters cannot be null`.
 - **Root cause**: `RestClientAuthorizationCodeTokenResponseClient`'s default internal `RestClient` ships with `FormHttpMessageConverter` + `OAuth2AccessTokenResponseHttpMessageConverter`. Overriding the RestClient without re-registering them caused Jackson to deserialize `OAuth2AccessTokenResponse` via the no-arg constructor, leaving `additionalParameters` null and the assertion-on-read throwing.

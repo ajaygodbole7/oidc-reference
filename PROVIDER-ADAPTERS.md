@@ -45,9 +45,9 @@ A real user with an Entra tenant in hand should be able to:
 2. Open `docs/providers/entra.md` (or their provider's equivalent).
 3. Follow the numbered admin-console steps (~10–15 clicks).
 4. Copy four to six lines into `.env`.
-5. `docker compose up -d valkey traefik auth-service api-gateway
-   resource-server frontend` (omitting `keycloak` and `postgres` —
-   their IdP replaces Keycloak).
+5. `docker compose up -d valkey apisix` (omitting `keycloak` — their
+   IdP replaces it). Run the Auth Service, Resource Server, and SPA
+   on the host as usual.
 6. Open the browser to the app and complete the real login flow
    against their real IdP.
 
