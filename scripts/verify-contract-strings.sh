@@ -13,8 +13,8 @@ require_absent() {
   path="$2"
   if rg -n --hidden --glob '!.git/**' --glob '!frontend/node_modules/**' \
       --glob '!frontend/dist/**' --glob '!backend-resource-server/target/**' \
-      --glob '!bff/target/**' --glob '!tasks/done/**' \
-      --glob '!RESHAPE-FRAME-B.md' --glob '!docs/sessions/**' \
+      --glob '!auth-service/target/**' --glob '!tasks/done/**' \
+      --glob '!docs/sessions/**' \
       "$pattern" "$path" >/tmp/oidc-reference-security-rg.out 2>/dev/null; then
     cat /tmp/oidc-reference-security-rg.out >&2
     fail "forbidden pattern found: $pattern"
@@ -49,10 +49,10 @@ require_present "oidc-reference-auth-internal" README.md docs
 require_present "oidc-reference-auth" README.md docs
 require_present "/internal/refresh" README.md docs
 
-# SameSite=Strict on the session cookie was the prior contract. It must
-# not appear in active docs. The handoff (RESHAPE-FRAME-B.md) and the
-# SUPERSEDED task packets under tasks/done/ retain it in
-# "what-was-rejected" context, which is allowed.
+# SameSite=Strict on the SESSION cookie was the prior contract. It must
+# not appear in active docs. (The XSRF cookie is Strict; that's the
+# different cookie name and not what this guard matches.) SUPERSEDED task
+# packets under tasks/done/ retain it in "what-was-rejected" context.
 require_absent "SameSite=Strict" README.md docs tasks/active tasks/backlog.md AGENTS.md RFC9700-compliance.md
 
 old_spa_client='oidc-reference-''spa'
@@ -63,8 +63,8 @@ require_absent "Spring Session Data Redis" AGENTS.md README.md RFC9700-complianc
 
 # return_to migration: the browser-facing login-entry query parameter is
 # `return_to`. The prior `?next=` form is forbidden in active docs/code.
-# Historical references in tasks/done/, RESHAPE-FRAME-B.md, and session
-# changelogs are excluded by require_absent's glob list above.
+# Historical references in tasks/done/ and session changelogs are excluded
+# by require_absent's glob list above.
 require_present "return_to" docs/specs/SPEC-0001-core-oidc-flows.md
 require_present "return_to" README.md
 require_present "return_to" docs/agents/return-to-login-contract.md

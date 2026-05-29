@@ -95,8 +95,7 @@ recreates the realm without manual console clicks.
   `aud=oidc-reference-auth-internal` via the `auth.internal` audience
   mapper.
 - Used by the APISIX API Gateway to authenticate to the Auth Service's
-  `/internal/refresh` endpoint. See SPEC-0001 §"Internal RPCs" and
-  RESHAPE-FRAME-B.md §7.1.
+  `/internal/refresh` endpoint. See SPEC-0001 §7.1.
 - Secret: placeholder in realm JSON, generated locally and supplied via env.
 
 ### Service Client (`oidc-reference-service`)

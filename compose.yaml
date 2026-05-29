@@ -1,9 +1,10 @@
 name: oidc-reference
 
 # Local full-stack infrastructure for the OIDC reference. The shape is the
-# split-BFF model from RESHAPE-FRAME-B: a small Auth Service that owns the
-# OIDC dance + session, and an Ingress/API-gateway in front of everything
-# else. APISIX plays BOTH the public ingress AND the API gateway role for
+# split-BFF model: a small Auth Service that owns the OIDC dance + session,
+# and an Ingress/API-gateway in front of everything else. See
+# architecture-decisions.md §A6 for the split rationale. APISIX plays BOTH
+# the public ingress AND the API gateway role for
 # the local reference — there is no separate Traefik. Browsers reach the
 # stack at two places only:
 #   - http://127.0.0.1:9080  → APISIX (routes /auth/* → auth-service,

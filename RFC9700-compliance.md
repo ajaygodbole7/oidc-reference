@@ -8,20 +8,13 @@ Read the canonical flow first: root `README.md` (sequence diagram) and
 
 ## Status Legend
 
-> **Spec-first note.** This project is in spec-first phase. `🧾` below means
-> the contract is established but runtime verification is still pending.
-> `✅` is reserved for behavior proven by an executable check or concrete
-> local configuration.
-
 | Symbol | Meaning |
 |---|---|
-| ✅ | Verified by an executable check or concrete local config. |
-| 🧾 | Specified in the contract; implementation or runtime verification is still pending. |
-| 🟡 | Partial — covered in some surface only, or spec-but-not-realm. |
-| 📋 | Documented as future work; not yet wired into a concrete contract. |
+| ✅ | Verified by an executable check, concrete local config, or test. |
+| 🟡 | Partial — covered in some surface only, or implemented but not asserted. |
 | 🚫 | Not applicable to this reference's architecture (single AS, no in-browser tokens, etc.). |
 | 🔄 | Production-only concern; called out in spec, not enforced locally over HTTP. |
-| ⏳ | Known gap; tracked in `tasks/backlog.md`. |
+| ⏳ | Known gap, deliberately deferred. See "Known Gaps" + README "What's deliberately not here". |
 
 ## Summary
 
@@ -36,9 +29,9 @@ executable gate proves them.
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 2.1, 4.1.3 | Exact redirect-URI matching (`MUST`) | ✅ | Realm: `oidc-reference-bff` `redirectUris: ["http://127.0.0.1:5173/auth/callback/idp"]` (no wildcards; registration name is the generic `idp`, not the IdP brand). URI is the SPA origin so the OAuth callback flows through the Vite proxy and the session cookie binds to that origin. Smoke test asserts exact value. |
-| 2.1, 4.11 | No open redirectors (`MUST NOT`) | 🧾 | Auth Service saved-request replay accepts a user-influenced URL only after same-origin validation and falls back to `/` on failure; the validated value is replayed via a direct `302` from the callback. Logout uses a fixed post-logout redirect. Runtime proof belongs in the Auth Service saved-request tests. |
-| 2.1 | CSRF prevention (`MUST`) | 🧾 | Login CSRF is mitigated by `state` (server-side validated against `tx:{state}`), PKCE code-verifier (S256), and ID-token `nonce` validation per RFC 9700 §4.7. State-changing calls use a `SameSite=Lax` session cookie plus **signed** double-submit CSRF (`XSRF-TOKEN` HMAC-signed or session-bound, echoed as `X-XSRF-TOKEN`). Naive double-submit (unsigned cookie/header match) is explicitly rejected — it is defeated by cookie injection from a sibling-subdomain XSS. |
-| 2.1, 4.4 | Mix-up defense (`REQUIRED` when ≥2 AS) | 🚫 | Single Keycloak realm/issuer. If a second AS is added, Spring Security supports RFC 9207 `iss` parameter. |
+| 2.1, 4.11 | No open redirectors (`MUST NOT`) | ✅ | `AuthController#isValidReturnTo` validates the saved-request URL: same-origin relative path only, rejects absolute / `//` / missing leading slash / overlong / encoded backslash / control chars. Logout post-logout redirect is fixed. Asserted by `AuthControllerTest` return-to negative cases. |
+| 2.1 | CSRF prevention (`MUST`) | ✅ | Login CSRF: `state` (server-side validated against `tx:{state}`), PKCE S256, ID-token `nonce`, and `oauth_tx` browser-binding cookie. State-changing calls: `__Host-sid` (`SameSite=Lax`) + signed HMAC-SHA256 double-submit on `XSRF-TOKEN` / `X-XSRF-TOKEN`. Naive double-submit is rejected — `SignedCsrfSupport` enforces signature compare. |
+| 2.1, 4.4 | Mix-up defense (`REQUIRED` when ≥2 AS) | ✅ | Single Keycloak issuer locally, but `AuthController#callback` validates the RFC 9207 `iss` query parameter against the configured issuer when present (defense-in-depth even with one AS). |
 | 2.1 | Credential forwarding prevention | ✅ | Keycloak default — user credentials live in the Keycloak session and are never forwarded to clients. |
 
 ## §2.1.1 — Authorization Code Grant
@@ -47,8 +40,8 @@ executable gate proves them.
 |---|---|---|---|
 | 2.1.1 | Public-client PKCE (`MUST`) | 🚫 | No public client exists. The BFF is confidential — see `oidc-reference-bff` (`publicClient: false`). |
 | 2.1.1 | Confidential-client PKCE (`RECOMMENDED`) | ✅ | Enabled anyway: `attributes."pkce.code.challenge.method": "S256"` on the BFF client. |
-| 2.1.1 | OIDC `nonce` alternative (`MAY`) | 🧾 | BFF callback must validate the ID Token `nonce`; runtime proof depends on the TASK-0007 callback tests. |
-| 2.1.1 | Transaction-specific PKCE/nonce (`MUST`) | 🧾 | Per-request `code_verifier` and `nonce` written to the Redis-compatible state store under `tx:{state}` (separate keyspace); `state` is server-side validated against the stored record on callback. TASK-0008 tracks runtime implementation. |
+| 2.1.1 | OIDC `nonce` alternative (`MAY`) | ✅ | `JwtOidcIdTokenValidator` delegates to Nimbus `IDTokenValidator.validate(parsed, new Nonce(transaction.nonce()))`; mismatch throws `BadCredentialsException`. Asserted by `JwtOidcIdTokenValidatorTest#nonceMismatchIsRejected`. |
+| 2.1.1 | Transaction-specific PKCE/nonce (`MUST`) | ✅ | Per-request `code_verifier` and `nonce` generated in `AuthController#beginLogin` and written to `tx:{state}` via `OAuthTransaction`. `state` validated server-side via atomic `getAndDelete`. |
 | 2.1.1 | Constant-value detection on AS | 🟡 | Keycloak does not expose this knob; our client never generates constants. Risk lives upstream. |
 | 2.1.1 | `S256` challenge method (`SHOULD`) | ✅ | Realm requires `S256`; `plain` rejected. |
 | 2.1.1 | AS supports PKCE (`MUST`) | ✅ | Keycloak supports PKCE; discovery exposes `code_challenge_methods_supported`. |
@@ -75,7 +68,7 @@ executable gate proves them.
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 2.3 | Least privilege (`SHOULD`) | ✅ | BFF default scopes: `openid profile email roles api.audience api.read` (no admin/write by default). Service client default scopes: `api.audience service.jobs`. |
-| 2.3 | Audience restriction (`SHOULD`); RS verifies (`MUST`) | 🧾 | `api.audience` client scope with `oidc-audience-mapper` adds `oidc-reference-api` to `aud`. RS must validate via a configured audience validator; runtime proof belongs in RS negative JWT tests. |
+| 2.3 | Audience restriction (`SHOULD`); RS verifies (`MUST`) | ✅ | `api.audience` client scope's `oidc-audience-mapper` adds `oidc-reference-api` to `aud`. Resource Server's `application.yml` configures `spring.security.oauth2.resourceserver.jwt.audiences`. Wrong-audience rejection asserted by `ApiSecurityTest`. |
 | 2.3 | Resource/action restriction (scope or `authorization_details`) | ✅ | Scopes used: `api.read`, `api.write`, `admin.read`, `service.jobs`. RAR (RFC 9396) not used. |
 
 ## §2.4 — ROPC
@@ -117,13 +110,13 @@ executable gate proves them.
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 4.2.4 | No third-party resources on authz pages (`SHOULD NOT`) | 🧾 | Keycloak login page is self-hosted in the local profile. SPA third-party resource checks belong in frontend/security gates. |
-| 4.2.4 | `Referrer-Policy` header | 🟡 | Spring Security adds defaults but `Referrer-Policy: no-referrer` not explicitly set. Recommend in spec. |
+| 4.2.4 | No third-party resources on authz pages (`SHOULD NOT`) | ✅ | Keycloak login page is self-hosted in the local profile. SPA loads no third-party scripts. |
+| 4.2.4 | `Referrer-Policy` header | 🟡 | `Referrer-Policy: no-referrer` set explicitly on the logout 302 (id_token_hint carries PII) and on callback error responses; not yet on every response. Other security headers via Spring's defaults. |
 | 4.2.4 | Code response type over access-token types | ✅ | Covered. |
 | 4.2.4 | Code bound to client or PKCE | ✅ | Confidential client + PKCE both. |
 | 4.2.4 | Code invalidated on first use (`MUST`) | ✅ | Keycloak default. |
 | 4.2.4 | Revoke tokens issued from a re-used code (`SHOULD`) | ✅ | Keycloak default on code reuse. |
-| 4.2.4 | State invalidated after first use (`SHOULD`) | 🧾 | `tx:{state}` must be deleted on callback success or failure; TASK-0007 requires tests for this behavior. |
+| 4.2.4 | State invalidated after first use (`SHOULD`) | ✅ | `AuthController#callback` does `stateStore.getAndDelete(txKey)` atomically (Redis `GETDEL`). Asserted by `AuthControllerTest#callbackConsumesTransaction*` cases. |
 | 4.2.4 | `form_post` response mode | 🚫 | Default `query` mode. Code is short-lived and PKCE-bound; both core mitigations already apply. |
 
 ## §4.3 — Credential Leakage via Browser History
@@ -138,7 +131,7 @@ executable gate proves them.
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 4.4.2 | Bind issuer to authz request | 🚫 | Single AS. |
-| 4.4.2.1 | RFC 9207 `iss` parameter / `iss` in ID Token (`MUST`) | 🚫 | Single AS. ID Token still carries `iss`, validated by Spring Security on every callback. |
+| 4.4.2.1 | RFC 9207 `iss` parameter / `iss` in ID Token (`MUST`) | ✅ | ID Token `iss` validated by Nimbus `IDTokenValidator` on every callback. `AuthController#callback` also validates the RFC 9207 `iss` query parameter against the configured issuer when present (defense-in-depth even on single-AS). Asserted by `AuthControllerTest#callbackRejectsIssParamFromWrongIssuer`. |
 | 4.4.2.2 | Distinct redirect URI per issuer (`MUST`) | 🚫 | Single AS, single redirect URI. |
 
 ## §4.5 — Authorization Code Injection
@@ -146,20 +139,20 @@ executable gate proves them.
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 4.5.3.1 | PKCE for code injection (`REQUIRED` as countermeasure) | ✅ | Enforced. |
-| 4.5.3.2 | Validate `nonce` in ID Token from token endpoint (`MUST`); ignore tokens until validated (`MUST`) | 🧾 | BFF callback must validate ID Token signature, issuer, `aud` = BFF client id, expiry, and `nonce` before creating `sess:{sid}`. Runtime proof belongs in callback tests. |
+| 4.5.3.2 | Validate `nonce` in ID Token from token endpoint (`MUST`); ignore tokens until validated (`MUST`) | ✅ | `AuthorizationCodeTokenExchangeClient` validates the ID token via `JwtOidcIdTokenValidator` (Nimbus) — signature, iss, aud, exp, nonce, and `at_hash` when present — *before* `SessionRecord` is constructed. `sess:{sid}` only persists after validation succeeds. |
 | 4.5.4 | Prevent authorization-response read | ✅ | HTTPS in prod (documented); short-lived code + PKCE bind. |
 
 ## §4.6 — Access Token Injection
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 4.6.1 | `at_hash` mitigation (OIDC hybrid) | 🚫 | We use `code` flow, not hybrid. `at_hash` not in code-flow ID tokens. PKCE addresses the underlying threat for our shape. |
+| 4.6.1 | `at_hash` mitigation | ✅ | OIDC Core §3.1.3.7 step 7: `JwtOidcIdTokenValidator#enforceAtHash` validates `at_hash` via Nimbus `AccessTokenValidator` whenever the ID token carries the claim (Keycloak's ID tokens do in this flow). Mismatch throws `BadCredentialsException`. Asserted by `JwtOidcIdTokenValidatorTest#atHashMismatchIsRejected`. |
 
 ## §4.7 — CSRF
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 4.7.1 | CSRF token in `state` (or PKCE) | 🧾 | Authorization response CSRF is covered by `state` (server-side validated against `tx:{state}`), PKCE code-verifier (S256), and ID-token `nonce` validation; callback must reject any of the three failing. |
+| 4.7.1 | CSRF token in `state` (or PKCE) | ✅ | `state` validated server-side against `tx:{state}` (atomic `getAndDelete`); PKCE S256 enforced; ID-token `nonce` validated by `JwtOidcIdTokenValidator`. `oauth_tx` cookie adds browser binding for the inverse threat where the attacker initiated the OAuth flow. See `architecture-decisions.md` §B3. |
 | 4.7.1 | Verify AS supports PKCE before relying on it (`MUST`) | ✅ | BFF reads discovery via `issuer-uri`; Spring fails closed if endpoints missing. |
 | 4.7.1 | Protect `state` content if it carries app state (`MUST`) | ✅ | We do not embed app state in `state` — Spring's opaque random. |
 | 4.7.1 | PKCE robustness | ✅ | Used. |
@@ -175,15 +168,15 @@ executable gate proves them.
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 4.9.3 | Sender-constrained tokens to prevent replay | ⏳ | Not implemented. See "Known Gaps". |
-| 4.9.3 | Audience restriction | 🧾 | Required by the realm and RS contracts; verified only when real tokens with wrong/missing audience are rejected by RS tests. |
-| 4.9.3 | Treat tokens as secrets; no plaintext store/transfer (`MUST`) | 🧾 | RS must not persist tokens. BFF stores tokens in custom Redis-compatible `sess:{sid}` keys created only after callback; production guidance requires AUTH, TLS, encryption at rest (SPEC-0001 Threat Model). Runtime proof belongs in storage/logging tests. |
+| 4.9.3 | Audience restriction | ✅ | Asserted by `ApiSecurityTest` — wrong/missing audience tokens are rejected at the RS. |
+| 4.9.3 | Treat tokens as secrets; no plaintext store/transfer (`MUST`) | ✅ | RS does not persist tokens. Auth Service stores tokens in `sess:{sid}` only after ID-token validation succeeds. `SecurityAudit` log lines hash subject + sid; no token bytes ever logged. Production guidance still requires Valkey AUTH + TLS + encryption-at-rest (SPEC-0001 Threat Model). |
 
 ## §4.10 — Misuse of Stolen Tokens
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 4.10.1 | mTLS (RFC 8705) or DPoP (RFC 9449) | ⏳ | Deferred — see "Known Gaps". |
-| 4.10.2 | AS binds token to RS; RS verifies (`MUST` refuse on failure) | 🧾 | Audience mapper plus RS audience validation are required; wrong-audience rejection must be proven by executable tests. |
+| 4.10.2 | AS binds token to RS; RS verifies (`MUST` refuse on failure) | ✅ | `api.audience` mapper binds `aud=oidc-reference-api`; RS rejects mismatched audience. Asserted by `ApiSecurityTest`. |
 | 4.10.2 | Resource indicator (RFC 8707) `resource` parameter | 🟡 | Not used. We use scope-based audience binding via the `api.audience` scope, which is BCP-acceptable. |
 | 4.10.2 | Express audience as the URL the client calls (not logical name) | 🟡 | Using logical name `oidc-reference-api`. Defensible for a single-RS reference; for multi-RS, switch to URL form. |
 
@@ -191,7 +184,7 @@ executable gate proves them.
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 4.11.1 | Client open redirector (`MUST NOT`) | 🧾 | BFF saved-request replay is user-influenced but constrained: only same-origin saved URLs are honored; anything else falls back to `/`. |
+| 4.11.1 | Client open redirector (`MUST NOT`) | ✅ | `AuthController#isValidReturnTo` enforces same-origin relative path; anything else falls back to `/`. Asserted by `AuthControllerTest` return-to negative cases (`%5C`, `//`, absolute, control-char, overlong). |
 | 4.11.2 | AS no auto-redirect on bad `client_id`/`redirect_uri` (`MUST NOT`) | ✅ | Keycloak default. |
 | 4.11.2 | AS always authenticate user before redirect (`MUST`) | ✅ | Keycloak default. |
 | 4.11.2 | AS only auto-redirect if URI trusted (`SHOULD`) | ✅ | Keycloak default — only matched registered URIs. |
@@ -212,8 +205,8 @@ executable gate proves them.
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 4.14 | Rotation with reuse detection | 🧾 | Realm requires `revokeRefreshToken: true`, `refreshTokenMaxReuse: 0`; BFF must serialize refresh and invalidate session on reuse. TASK-0007 and BFF tests provide runtime proof. |
-| 4.14 | Audit on reuse | 🟡 | Reuse causes session invalidation; explicit audit-log event not yet wired in the BFF. Tracked in "Known Gaps". |
+| 4.14 | Rotation with reuse detection | ✅ | Realm: `revokeRefreshToken: true`, `refreshTokenMaxReuse: 0`. `AuthorizationCodeTokenRefreshClient` surfaces Keycloak's `invalid_grant` as `InvalidRefreshTokenException`; `InternalRefreshController` deletes `sess:{sid}` and returns 409. Per-session refresh serialized via `ReentrantLock` keyed on `sid`. Asserted by `InternalRefreshControllerTest`. |
+| 4.14 | Audit on reuse | ✅ | `InternalRefreshController` emits `SecurityAudit.event(... "refresh_token_reuse", "session_invalidated", subjectClaim)` with `sid_hash` (not raw sid) before the 409. Asserted by `InternalRefreshControllerTest`. |
 
 ## §4.15 — Client Impersonating Resource Owner
 
@@ -236,12 +229,11 @@ would close them. Each item must also have a backlog entry.
 
 | Gap | Why | What closes it |
 |---|---|---|
-| Sender-constrained access tokens (DPoP or mTLS) — §2.2.1, §4.9.3, §4.10.1 | Bearer tokens at the BFF↔RS hop; the BFF mitigates the browser-leakage primary motivation but not wire-level replay if the RS is reached directly. | Add Spring Security DPoP support on the BFF (`OAuth2AuthorizedClientManager` w/ DPoP provider) and on the RS (`DPoPAuthenticationProvider`). Add a `dpop` profile so the local stack can demonstrate it. |
-| Asymmetric client authentication — §2.5 | Both confidential clients use `client_secret_basic`. | Switch the BFF and service client to `private_key_jwt`; ship a local-dev keypair generator script; document key rotation. |
-| `Referrer-Policy: no-referrer` — §4.2.4 | Defensive header not set explicitly on BFF responses. | Add a `HeaderWriter` in BFF `SecurityConfig` setting `Referrer-Policy: no-referrer` and a baseline CSP. |
-| Audit log on refresh-token reuse — §4.14 | Session invalidates on reuse but no explicit audit event. | Add an `ApplicationListener<AbstractAuthenticationFailureEvent>` (or a wrapper around the `OAuth2AuthorizedClientManager` refresh provider) that emits a security audit event when Keycloak returns `invalid_grant` for a refresh attempt. |
-| Audience as URL form — §4.10.2.2 | Using logical `oidc-reference-api`. | If multi-RS is added, switch audience mapper to the RS base URL (e.g., `http://localhost:8082`) per BCP guidance. |
-| JAR (RFC 9101) / PAR (RFC 9126) | Not used; the BCP marks origin verification via JAR/PAR as `MAY`. | Optional follow-up if the reference wants to demonstrate the more advanced origin-verification options. |
+| Sender-constrained access tokens (DPoP or mTLS) — §2.2.1, §4.9.3, §4.10.1 | The BFF removes the primary browser-leakage motivation but tokens are bearer at the gateway → RS hop. | Reconsider when the RS is exposed to multi-tenant or untrusted callers. See README "What's deliberately not here". |
+| Asymmetric client authentication — §2.5 | All confidential clients use `client_secret_basic`. | Reconsider for FAPI / PSD2 compliance regimes. |
+| Global `Referrer-Policy: no-referrer` + CSP baseline — §4.2.4 | Set explicitly on the logout 302 and callback error responses; not yet on every response. | Add a `HeaderWriter` in `SecurityConfig` once the production-hardening pass starts. |
+| Audience as URL form — §4.10.2.2 | Using logical `oidc-reference-api`. | If multi-RS is added, switch the audience mapper to the RS base URL per BCP guidance. |
+| JAR (RFC 9101) / PAR (RFC 9126) / RAR (RFC 9396) | Not used; exact-match redirect URI + PKCE + state + nonce + `oauth_tx` cover the demonstrated flow. | Reconsider for multiple authorization servers or structured per-resource grants. |
 
 ## Architecture Notes
 
@@ -276,8 +268,12 @@ preserves these items. See SPEC-0001 §"Authorization Server Portability".
 Re-run the §2 and §4 mapping when any of the following change:
 
 - Realm JSON (`authorization-server/realm/oidc-reference-realm.json`).
-- BFF `SecurityConfig` (`bff/src/main/java/com/example/oidcreference/bff/SecurityConfig.java`).
-- RS `SecurityConfig` (`backend-resource-server/src/main/java/com/example/oidcreference/SecurityConfig.java`).
-- Any token endpoint behavior (refresh, rotation, audience mapping).
+- Auth Service `SecurityConfig` / `AuthController` / `JwtOidcIdTokenValidator`
+  (`auth-service/src/main/java/...`).
+- Resource Server `application.yml` JWT decoder config or
+  `ApiController` security annotations.
+- Lua gateway plugin (`api-gateway/plugins/bff-session.lua`) when it
+  changes CSRF or session-read behavior.
+- Any token endpoint behavior (refresh rotation, audience mapping).
 
 Cite the RFC section number and link the changed file path.

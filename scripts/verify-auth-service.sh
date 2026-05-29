@@ -3,10 +3,10 @@ set -eu
 
 # Verify script for the Auth Service module.
 #
-# Mirrors the verify-backend.sh idiom (and the now-retired verify-bff.sh):
-# assert layout, then run the module's Maven test phase. The combined BFF
-# has been split per RESHAPE-FRAME-B into the Auth Service (this module)
-# and the APISIX-based API Gateway (verified by verify-api-gateway.sh).
+# Mirrors the verify-backend.sh idiom: assert layout, then run the module's
+# Maven test phase. The BFF is split into the Auth Service (this module) and
+# the APISIX-based API Gateway (verified by verify-api-gateway.sh) — see
+# docs/architecture/architecture-decisions.md §A6.
 
 cd "$(dirname "$0")/../auth-service"
 

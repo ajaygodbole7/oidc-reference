@@ -16,11 +16,12 @@ token to the browser.
 
 ## Purpose
 
-The Auth Service is one of the two services that replaces the combined BFF
-under Frame B. Splitting the OAuth client surface from the routing surface
-mirrors production OIDC deployments at scale (identity team vs. platform
-team, different load characteristics) and makes the reference shape
-recognizable to production readers. See `RESHAPE-FRAME-B.md` §2.1.
+The Auth Service is one of the two services that implement the BFF pattern
+in this reference. Splitting the OAuth client surface from the routing
+surface mirrors production OIDC deployments at scale (identity team vs.
+platform team, different load characteristics) and makes the reference
+shape recognizable to production readers. See
+`docs/architecture/architecture-decisions.md` §A6.
 
 ## Owned Paths
 
@@ -62,7 +63,7 @@ SPEC-0001 §"Authorization Server Portability".
 | `/auth/callback/idp` | GET | none | Reads and DELs `tx:{state}` in Valkey. Exchanges `code + verifier + client_secret` at Keycloak token endpoint. Validates `id_token` (iss, aud=`oidc-reference-auth`, nonce match, RS256, exp/nbf). Writes `sess:{sid}` with sliding TTL 30m. Issues `__Host-sid` (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`) and signed `XSRF-TOKEN` (JS-readable, signed double-submit). Responds with a **direct 302** to the validated `saved_request` — no intermediate landing page. |
 | `/auth/me` | GET | session | Returns `{sub, preferred_username, name, email, roles}` from `sess:{sid}.claims`. Never returns a token. Response `Cache-Control: no-store`. |
 | `/auth/logout` | POST | session | Requires signed double-submit CSRF. DEL `sess:{sid}`. Clears `__Host-sid` and `XSRF-TOKEN`. Default response 302 to Keycloak `end_session_endpoint` with `id_token_hint`; `Accept: application/json` returns `{logoutUrl}` for SPA-driven navigation. |
-| `/internal/refresh` | POST | service token | Internal-network only (not reachable via ingress). OAuth Resource Server: validates bearer token (iss, sig, exp, `aud` contains `oidc-reference-auth-internal`, `azp`/`client_id`=`oidc-reference-api-gateway`, alg RS256). Acquires per-session refresh lock for `sid`. POST `grant_type=refresh_token` to Keycloak. Validates rotation. On Keycloak `invalid_grant`: emits structured refresh-reuse audit event, DEL session, returns 409. On success: updates `sess:{sid}`, returns `{refreshed_at, access_token_expires_at}`. See SPEC-0001 §"Internal RPCs" / RESHAPE-FRAME-B.md §7.1. |
+| `/internal/refresh` | POST | service token | Internal-network only (not reachable via ingress). OAuth Resource Server: validates bearer token (iss, sig, exp, `aud` contains `oidc-reference-auth-internal`, `azp`/`client_id`=`oidc-reference-api-gateway`, alg RS256). Acquires per-session refresh lock for `sid`. POST `grant_type=refresh_token` to Keycloak. Validates rotation. On Keycloak `invalid_grant`: emits structured refresh-reuse audit event, DEL session, returns 409. On success: updates `sess:{sid}`, returns `{refreshed_at, access_token_expires_at}`. See SPEC-0001 §7.1. |
 
 ## Session Cookie
 
@@ -70,8 +71,8 @@ SPEC-0001 §"Authorization Server Portability".
   `__Host-` without `Secure`).
 - `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`. `Secure` in production.
 - Opaque, ≥128 bits of entropy; not a token.
-- No intermediate landing page — the callback emits a direct 302 (B2
-  reversal; see RESHAPE-FRAME-B.md §2.2).
+- No intermediate landing page — the callback emits a direct 302. See
+  `docs/architecture/architecture-decisions.md` §B2 for the rationale.
 
 ## State Store Keys
 
@@ -80,14 +81,12 @@ SPEC-0001 §"Authorization Server Portability".
   `{verifier, nonce, saved_request, created_at, tx_cookie_hash}`.
   `tx_cookie_hash` carries the HMAC of the `oauth_tx` browser-binding
   cookie issued alongside the login 302; the callback fails closed when
-  the supplied cookie's HMAC does not match the stored hash. (This
-  reinstates the browser-binding primitive that B3 reversed in
-  RESHAPE-FRAME-B.md §2.3 — see `OAuthTxBinding` for the implementation
-  and Tier A in the staff-review trail for the rationale.)
+  the supplied cookie's HMAC does not match the stored hash. See
+  `docs/architecture/architecture-decisions.md` §B3 for the rationale and
+  `OAuthTxBinding.java` for the implementation.
 - `sess:{sid}` — sliding TTL 30m, absolute cap 12h. Custom Redis-compatible
-  session repository. Holds tokens and claims. Schema per SPEC-0001
-  §"Session Schema" and RESHAPE-FRAME-B.md §7.2. The Auth Service is the
-  sole writer; the API Gateway is a tolerant reader.
+  session repository. Holds tokens and claims. Schema per SPEC-0001 §7.2.
+  The Auth Service is the sole writer; the API Gateway is a tolerant reader.
 
 ## Signed CSRF
 
@@ -99,7 +98,9 @@ SPEC-0001 §"Authorization Server Portability".
   (state-changing requests are same-origin XHR; the cookie never needs to
   ride a cross-site navigation, and `Strict` denies it from ever doing so).
 - Validation: constant-time HMAC compare on receipt. Naive (unsigned)
-  double-submit is **explicitly rejected** — see RESHAPE-FRAME-B.md §7.3.
+  double-submit is explicitly rejected — see SPEC-0001 §7.3 and
+  `docs/architecture/architecture-decisions.md` §B4 for the cookie-injection
+  threat model.
 
 ## Security Requirements
 

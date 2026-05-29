@@ -196,6 +196,62 @@ Spec: SPEC-0001 Auth Service + API Gateway Endpoints; SPEC-0001 API
 Gateway Architecture (APISIX); SPEC-0001 §7.1 `/internal/refresh` contract;
 GOAL-0004 (Auth Service); GOAL-0005 (API Gateway).
 
+### A7. Nimbus oauth2-oidc-sdk Directly, Not spring-boot-starter-oauth2-client
+
+The Auth Service uses `com.nimbusds:oauth2-oidc-sdk` (the OAuth/OIDC client
+machinery) and `com.nimbusds:nimbus-jose-jwt` (JWS/JWE/JWK) **directly**,
+not the Spring Security OAuth2 Client starter. Spring Security still
+provides the filter chain (security headers, JWT decoder for the
+`/internal/*` Resource Server role); the OAuth flow itself bypasses
+`spring-boot-starter-oauth2-client`.
+
+**Rationale.** Both Nimbus libraries are already on the classpath as
+transitive dependencies of Spring Security, so the net dependency surface
+is unchanged. Two properties improve:
+
+1. **Spec visibility.** OIDC Core §3.1.3.7 validation, PKCE construction,
+   client-authentication method dispatch, and the token-endpoint
+   request/response shape become visible code in this reference rather
+   than framework-internal behavior. For a teaching repo, the OAuth/OIDC
+   wire shape *is* the lesson.
+2. **Portability.** The Nimbus helper classes
+   (`AuthorizationCodeTokenExchangeClient`,
+   `AuthorizationCodeTokenRefreshClient`, `JwtOidcIdTokenValidator`,
+   `OidcProviderMetadata`) carry zero framework imports beyond `java.*`,
+   `com.nimbusds.*`, and `jakarta.validation.*`. They lift unmodified into
+   Quarkus, Micronaut, Helidon, or plain servlets — only the host's DI
+   annotations and HTTP request type need to change.
+
+**Alternatives surveyed and rejected.**
+- **`spring-boot-starter-oauth2-client`.** Couples to Spring types
+  (`ClientRegistration`, `OAuth2AuthorizationExchange`,
+  `RestClientAuthorizationCodeTokenResponseClient`) that cannot leave the
+  framework. The teaching surface degrades when the OAuth contract is
+  hidden inside `OidcAuthorizationCodeAuthenticationProvider`.
+- **`pac4j-oidc`.** Misadvertised as framework-agnostic; declares
+  hard compile-time deps on `spring-core` and Guava.
+- **`jjwt`.** Cleaner fluent API for the JWT primitive but narrower spec
+  coverage; no built-in remote JWKS source. Would require pairing with a
+  separate OAuth client library — Nimbus already covers both.
+- **Quarkus / Micronaut OIDC client modules.** Hard-coupled to their
+  framework's filter chain — defeats the portability property above.
+
+**Trade-off.** OIDC Core §3.1.3.7 validation is explicit code in
+`JwtOidcIdTokenValidator` (~60 LOC) rather than a one-line Spring
+configuration. This is the right trade for a reference: explicit
+validation is auditable; framework-default validation is a black box that
+moves between Spring versions.
+
+**Production-readiness deltas vs Spring's wrapping.** Nimbus's
+`JWKSourceBuilder` is uniquely sophisticated — refresh-ahead caching,
+rate limiting, retry, outage tolerance, force-refresh on unknown `kid`.
+Spring's `NimbusJwtDecoder` wraps the same library but exposes a narrower
+default configuration.
+
+Spec: SPEC-0001 Target Stack; `JwtOidcIdTokenValidator.java` (validator
+construction); `AuthorizationCodeTokenExchangeClient.java` (token-endpoint
+client).
+
 ## B. Cookies, Sessions, And CSRF
 
 ### B1. Separate Transaction And Session Keyspaces
@@ -256,13 +312,14 @@ expectation for normal web apps.
 
 Spec: SPEC-0001 Session Cookie; SPEC-0001 CSRF.
 
-### B3. Login-CSRF Defense Is State + PKCE + Nonce
+### B3. Login-CSRF Defense Is State + PKCE + Nonce + `oauth_tx` Browser Binding
 
-Login-CSRF and session-swapping are defended by the OIDC-standard
-combination: server-side `state` validated against `tx:{state}`, PKCE
-code-verifier (S256, required even on the confidential client), and ID-token
-`nonce` validation. This is the explicit RFC 9700 §4.7 mitigation and the
-documented standard since OIDC Core.
+Login-CSRF and cross-user session fixation are defended by the
+OIDC-standard combination — server-side `state` validated against
+`tx:{state}`, PKCE code-verifier (S256, required even on the confidential
+client), and ID-token `nonce` validation — **plus** an `oauth_tx`
+browser-binding cookie whose HMAC is stored in `tx:{state}` and verified
+at the callback.
 
 - **`state`** — generated server-side, persisted as the key of `tx:{state}`,
   validated on callback. A callback with an attacker-supplied state has no
@@ -270,26 +327,47 @@ documented standard since OIDC Core.
 - **PKCE code-verifier** — prevents an attacker who has obtained a leaked
   authorization code from exchanging it; they lack the verifier.
 - **ID-token `nonce`** — binds the ID token to the authorization request,
-  preventing token substitution.
+  preventing token substitution at the token endpoint.
+- **`oauth_tx`** — `HttpOnly` cookie scoped to `Path=/auth/callback/idp`,
+  issued alongside the login `302`. Its HMAC (`tx_cookie_hash`) is stored
+  in `tx:{state}`. The callback computes `HMAC(supplied cookie)` and
+  rejects when it does not match.
 
-What was rejected: a short-lived `oauth_tx` browser-binding cookie hashed
-into `tx:{state}` as the `tx_cookie_hash` field. The attack it defended
-against required an attacker to have already executed an out-of-band
-compromise (obtaining a victim's valid `state` plus authorization code, then
-inducing the victim's browser to follow a malicious callback URL with
-attacker-controlled values). The marginal defense beyond OIDC-standard
-primitives is narrow. No mainstream production BFF implementation ships an
-equivalent. Adopting it put the reference on a security island and added a
-cookie, an extra `tx:{state}` field, an extra callback verification step,
-and a related test surface — for a defense already provided by OIDC-standard
-primitives. For a reference whose goal is teaching OIDC and the BFF pattern,
-the non-standard cookie reads as *"this reference does something nobody else
-does"* — the opposite of what a reference should communicate.
+**Why the first three are not enough.** RFC 9700 §4.7's `state` defense
+covers the case where the *victim* initiated the OAuth flow and the
+attacker cannot predict `state`. It does **not** cover the inverse: an
+attacker who runs their own login flow at the AS, captures the resulting
+`(code, state)` callback URL, and induces the victim to load it (a crafted
+link, a redirect from an attacker page, an open-redirect chain in another
+property). The victim's browser then hits `/auth/callback/idp` with values
+the *attacker* controls; `tx:{state}` exists (the attacker created it),
+PKCE succeeds (the attacker generated the verifier), the ID-token `nonce`
+matches (the attacker chose it). The result is a session minted from the
+attacker's identity logged into the victim's browser — a session-fixation
+class attack.
 
-Trade-off: none additional. The OIDC-standard combination is the canonical
-reference shape.
+The `oauth_tx` cookie closes this: the victim's browser cannot present a
+cookie matching the attacker's stored hash because the cookie was set on
+the attacker's browser in their own flow. The callback fails closed
+without ever calling the token endpoint.
 
-Spec: SPEC-0001 Login Entry Conditions; SPEC-0001 Callback verification.
+**Cost.** One additional cookie (`Path=/auth/callback/idp`, so the
+browser only sends it on the one path that needs it), one field in the
+`tx:{state}` record, one HMAC verification at the callback. The
+`SignedCsrfSupport.hmacSha256` helper is reused, so no new crypto
+machinery.
+
+**Earlier rejection.** An earlier version of this document rejected
+`oauth_tx` on the framing of "no mainstream BFF ships this." That framing
+was wrong on two counts: (a) the threat it defends against is real and
+the OIDC standards do not cover it directly; (b) equivalent
+browser-binding cookies are documented in Curity's and Auth0's BFF
+reference patterns. The reinstatement decision came out of the Tier A
+staff-review pass; see `OAuthTxBinding.java` for the implementation and
+SPEC-0001 §"State Store Keys" for the wire shape.
+
+Spec: SPEC-0001 §"State Store Keys" + Login Entry Conditions + Callback
+verification.
 
 ### B4. Signed Double-Submit CSRF
 

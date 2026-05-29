@@ -21,7 +21,7 @@ combined BFF under Frame B. It is intentionally an **APISIX** deployment
 (declarative YAML routes plus a custom Lua plugin) rather than a Spring
 service — this matches production OIDC reference deployments at scale, where
 the routing/bearer-injection surface is a dedicated gateway, not yet
-another Spring app. See `RESHAPE-FRAME-B.md` §2.1.
+another Spring app. See `docs/architecture/architecture-decisions.md` §A6.
 
 ## Owned Paths
 
@@ -81,11 +81,11 @@ following pipeline:
    window (default 60s of now), call `POST /internal/refresh` against the
    Auth Service with the Gateway's cached Client-Credentials token. On
    `200`, re-read `sess:{sid}` to pick up the rotated token. Failure
-   handling per `RESHAPE-FRAME-B.md` §7.1 (Gateway-side response table).
+   handling per SPEC-0001 §7.1 (Gateway-side response table).
 4. **Signed CSRF validation.** On `POST`/`PUT`/`DELETE`/`PATCH`: extract
    `XSRF-TOKEN` cookie and `X-XSRF-TOKEN` header; verify HMAC
    (constant-time compare) using the shared signing key. Reject naive
-   double-submit; see RESHAPE-FRAME-B.md §7.3.
+   double-submit; see SPEC-0001 §7.3.
 5. **Header shaping.** Strip inbound `Cookie` header. Strip hop-by-hop
    headers (`Connection`, `Keep-Alive`, `Proxy-Authenticate`,
    `Proxy-Authorization`, `TE`, `Trailers`, `Transfer-Encoding`,
@@ -203,7 +203,6 @@ Stop and report if:
 - APISIX's `resty.redis` or `resty.http` is unavailable or does not
   support the operations the plugin needs.
 - The Auth Service `/internal/refresh` endpoint contract diverges from
-  `RESHAPE-FRAME-B.md` §7.1 in a way that breaks the Gateway-side handling
-  table.
+  SPEC-0001 §7.1 in a way that breaks the Gateway-side handling table.
 - The `oidc-reference-api-gateway` Keycloak client or the `auth.internal`
   scope is missing.

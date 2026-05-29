@@ -10,8 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Verifies the HMAC-signed double-submit CSRF contract from
- * SPEC-0001 §7.3 / RESHAPE-FRAME-B §7.3.
+ * Verifies the HMAC-signed double-submit CSRF contract from SPEC-0001 §7.3.
  *
  * <p>Naive double-submit ("compare cookie value to header value") is
  * vulnerable to a cookie-injection attacker on a sibling subdomain who can
