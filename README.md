@@ -12,6 +12,45 @@ BCP) and OIDC Core §3.1.3.7 for ID-token validation. Two flows are
 demonstrated: browser login via Authorization Code + PKCE with
 saved-request replay, and service-to-service via Client Credentials.
 
+## Why this shape
+
+**Why BFF and not a public-client SPA running PKCE in the browser.**
+Browser PKCE is valid OAuth, but any successful XSS can use or exfiltrate
+tokens reachable by JavaScript, browser refresh-token rotation is fragile
+in cross-origin policies, and silent iframe renewal is no longer a
+dependable browser primitive. A server-side BFF keeps the access /
+refresh / ID token off the browser entirely. A token-mediating backend
+that still hands access tokens to JavaScript was also rejected for the
+same XSS-exfiltration reason.
+
+**Why split BFF into Auth Service + API Gateway, not one combined
+service.** Production OIDC deployments at meaningful scale separate the
+OAuth surface from the API-gateway surface — different teams (identity
+vs. platform), different scaling characteristics (auth is low-frequency
+big-payload, API is high-frequency small-payload), different operational
+concerns. The "BFF" name historically (Sam Newman, 2015) referred to a
+per-frontend API aggregator sitting *after* auth; conflating it with the
+OAuth client role obscures both. A combined BFF is also valid; this
+reference ships the split because that's the shape production readers
+recognize.
+
+**Why a server-side state store, not a framework HTTP-session blob.** The
+two pieces of state have different lifetimes and addressing: a short
+pre-auth OAuth transaction keyed by `state`, and a longer post-auth
+session keyed by `sid`. Keeping them as separate keyspaces (`tx:{state}`
+and `sess:{sid}`) means the transaction is keyed by the OAuth `state`
+itself — no pre-auth session cookie, and so no session-fixation class to
+defend against. Both keyspaces are inspectable, which is the right
+property for a reference and for incident response.
+
+**Why standard OAuth/OIDC interfaces, not provider-specific APIs.** All
+application code branches on `iss` / `aud` / scopes / claim paths /
+endpoints from `.well-known/openid-configuration` — never on the provider
+brand. Provider differences live in configuration: `app.roles-claim-path`
+for the claim shape, env vars for the issuer and client credentials. The
+provider swap is a config exercise; SPEC-0001 Appendix A enumerates the
+files that change.
+
 ## Architecture
 
 | Component | Role |
@@ -162,6 +201,36 @@ sequenceDiagram
 | Per-session refresh lock (Java); `lua-resty-lock` around CC-token fetch (Lua) | — | `InternalRefreshController`, `bff-session.lua` |
 | Rate-limit on `/auth/login` + `/auth/callback/idp` (APISIX `limit-req`) | — | `apisix.yaml.template` |
 | Boot-time sentinel guard refusing default dev secrets in `prod` profile | — | `SecretSentinelValidator` (Java), `bff-session.lua` |
+
+## What's deliberately not here
+
+For a reference repo, what isn't shipped is part of the contract. Each
+non-adoption below has a reconsideration trigger; the full rationale lives
+in [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
+§F.
+
+- **Sender-constrained tokens (DPoP / mTLS).** The BFF pattern removes the
+  primary browser-token leakage vector, and the RS sits behind the API
+  Gateway. Reconsider when the RS is exposed to multi-tenant or untrusted
+  callers.
+- **Asymmetric client authentication (`private_key_jwt`, mTLS to the AS).**
+  Shared-secret client auth is sufficient for the teaching baseline.
+  Reconsider for FAPI / PSD2 or any compliance regime that mandates it.
+- **JAR, PAR, RAR.** Exact redirect-URI matching + PKCE + state + nonce
+  cover the demonstrated flow; scopes cover the authorization model.
+  Reconsider for multiple authorization servers, untrusted-network
+  authorization request handling, or structured per-resource grants.
+- **OIDC Back-Channel Logout / Front-Channel Logout.** RP-initiated logout
+  covers user-driven logout; BCL requires AS-to-BFF reachability that
+  doesn't fit the local-only posture. Reconsider for SSO ecosystems with
+  central session termination across relying parties.
+- **OIDC Session Management.** Same reasoning as BCL.
+- **Encrypted-at-rest sessions in Valkey.** Local Valkey runs without
+  AUTH/TLS/encryption. Reconsider before any non-local deployment alongside
+  state-store AUTH, TLS, and network isolation.
+- **Distributed refresh lock.** The Auth Service uses an in-process
+  `ReentrantLock` keyed by `sid`. Clustered deployments need a state-store
+  `SET NX EX` equivalent.
 
 ## Stack
 
