@@ -1,30 +1,41 @@
-# OIDC Reference
+# oidc-reference
 
-World-class local OAuth 2.1 and OpenID Connect reference project.
+Local reference implementation of the Backend-for-Frontend (BFF) session
+pattern for OAuth 2.1 and OpenID Connect Core 1.0. The browser holds no
+access, refresh, or ID token; the OIDC client role lives in a confidential
+server-side service. Session identity is an opaque `HttpOnly` cookie;
+tokens live in a Redis-compatible state store keyed by that cookie.
 
-This repository is intentionally spec-first. Implementation work should begin by
-reading `AGENTS.md`, then the documents under `docs/`.
+The implementation follows
+[RFC 9700](https://datatracker.ietf.org/doc/rfc9700/) (OAuth 2.0 Security
+BCP) and OIDC Core §3.1.3.7 for ID-token validation. Two flows are
+demonstrated: browser login via Authorization Code + PKCE with
+saved-request replay, and service-to-service via Client Credentials.
 
 ## Architecture
 
-The browser never holds an access, refresh, or ID token. The BFF session
-pattern is implemented as two cooperating services — a dedicated **Auth
-Service** (the confidential OAuth/OIDC client, owner of `/auth/*`) and a
-dedicated **API Gateway** (owner of `/api/**`, bearer-injection and
-allowlist enforcement) — fronted by a single ingress. Tokens live in a
-Redis-compatible server-side state store (Valkey locally) and are addressed
-by an opaque, `HttpOnly` session cookie. Two flows are demonstrated:
-browser user login (saved-request + PKCE) and service-to-service (Client
-Credentials).
+Five components, split along trust boundaries:
 
-### Browser flow — Authorization Code + PKCE (split BFF; saved-request replay)
+| Component | Role |
+|---|---|
+| `frontend/` | React + TypeScript SPA. Cookie-authenticated. No OIDC client library in the browser. |
+| `auth-service/` | Spring Boot Auth Service. Confidential OIDC client (Nimbus `oauth2-oidc-sdk`). Owns `/auth/*`, the OAuth round-trip, session storage, and `/internal/refresh`. |
+| `api-gateway/` | Apache APISIX (standalone) + custom Lua plugin (`bff-session`). Owns `/api/**` allowlist, `sess:{sid}` lookup, bearer injection, signed-CSRF validation, and refresh delegation. |
+| `backend-resource-server/` | Spring Boot Resource Server. JWT validation only; never sees session cookies. |
+| `authorization-server/` | Keycloak realm + Compose service (the local IdP). |
 
-Login is triggered either **implicitly** (the browser hits any protected
-URL while unauthenticated) or **explicitly** (the user clicks a Sign in
-link that navigates to `/auth/login`). The API Gateway detects no-session
-on `/api/**` and (for top-level navigation) bounces to `/auth/login`. The
-Auth Service runs the OAuth round-trip, then issues a direct `302` to the
-saved request URL with the session and CSRF cookies attached.
+The vendor choices (Keycloak, APISIX, Valkey) are not load-bearing on the
+pattern; SPEC-0001 Appendix A enumerates the files that change to swap
+each one.
+
+### Browser flow — Authorization Code + PKCE
+
+Login is triggered either by the browser hitting a protected URL while
+unauthenticated, or by an explicit navigation to `/auth/login`. The API
+Gateway detects no-session on `/api/**` and, for top-level navigations,
+bounces to `/auth/login`. The Auth Service runs the OAuth round-trip and
+returns a `302` to the originally-requested URL with the session and CSRF
+cookies attached.
 
 ```mermaid
 sequenceDiagram
@@ -90,21 +101,17 @@ sequenceDiagram
     K-->>B: 302 /  (post-logout redirect)
 ```
 
-**XHR vs top-level navigation.** When a `fetch`/XHR to `/api/*` arrives
-without a session, the API Gateway returns `401` (not a redirect — XHR
-cannot render the AS login page). The SPA reacts by performing a top-level
-navigation to `/auth/login` or to the originally-intended URL, which
-triggers the saved-request flow above. The implicit saved-request dance
-is reserved for top-level document navigations. The API Gateway distinguishes
-the two using Fetch Metadata (`Sec-Fetch-Mode: navigate`,
-`Sec-Fetch-Dest: document`) and uses `Accept: text/html` only as a
-fallback; fetch/API requests fail fast.
+A `fetch`/XHR to `/api/*` without a session returns `401`, not a redirect
+(XHR cannot render an external login page). The SPA performs the top-level
+navigation itself. The gateway distinguishes XHR from document navigation
+via `Sec-Fetch-Mode` and `Sec-Fetch-Dest`, with `Accept: text/html` as a
+fallback.
 
-### Service flow — Client Credentials (no Auth Service or API Gateway in path)
+### Service flow — Client Credentials
 
-Machine-to-machine clients obtain a token directly from the
-Authorization Server and call the Resource Server with a bearer token.
-Neither the Auth Service nor the API Gateway is involved.
+Machine-to-machine callers obtain a token directly from the Authorization
+Server and call the Resource Server with a bearer. Neither the Auth
+Service nor the API Gateway is in the path.
 
 ```mermaid
 sequenceDiagram
@@ -122,39 +129,98 @@ sequenceDiagram
     R-->>SC: 200 {result}
 ```
 
-### Cookie attributes are the production contract
+### Session and CSRF cookies
 
-The diagrams are the production contract. The session cookie is `__Host-sid`
-with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`. In local
-HTTP mode the cookie name downgrades to `sid` and `Secure` is dropped
-(browsers reject `__Host-` without `Secure`). The CSRF cookie (`XSRF-TOKEN`)
-is a JS-readable, **signed** token (HMAC over the value, or session-bound)
-that the SPA echoes as the `X-XSRF-TOKEN` header on state-changing requests.
-Naive unsigned double-submit is rejected — see decision B4.
+- **Session cookie.** `__Host-sid` with `HttpOnly`, `Secure`,
+  `SameSite=Lax`, `Path=/`, no `Domain`. In local HTTP mode the name
+  downgrades to `sid` and `Secure` is dropped (browsers reject `__Host-`
+  without `Secure`). `SameSite=Lax` is required for the cross-site
+  Keycloak → callback redirect; the signed CSRF token provides
+  state-change protection.
+- **CSRF cookie.** `XSRF-TOKEN` is JS-readable and carries an
+  HMAC-SHA256-signed value (`<value>.<hmac>`). The SPA echoes it as
+  `X-XSRF-TOKEN` on state-changing requests. Unsigned double-submit is
+  rejected: an attacker with a sibling-subdomain `document.cookie` write
+  could otherwise forge a matching pair. `SameSite=Strict` (set by the
+  signing party) tightens the surface further.
+- **Browser-binding cookie.** `oauth_tx` is issued at `/auth/login` with
+  `Path=/auth/callback/idp` and `SameSite=Lax`. Its HMAC is stored in
+  `tx:{state}`; the callback rejects when the supplied cookie's HMAC
+  doesn't match (defends against an attacker who exfiltrates `(code,
+  state)` but is in a different user-agent).
 
-## Current Status
+## Security controls
 
-The project is in specification and architecture setup.
+| Control | Reference | Where |
+|---|---|---|
+| Authorization Code + PKCE S256 | OIDC Core §3.1.2 | `auth-service` |
+| `state`, `nonce`, ID-token signature/iss/aud/exp | OIDC Core §3.1.3 | `JwtOidcIdTokenValidator` |
+| `at_hash` when present | OIDC Core §3.1.3.7 step 7 | `JwtOidcIdTokenValidator` |
+| `iss` query-param mix-up defense | [RFC 9207](https://datatracker.ietf.org/doc/rfc9207/) | `AuthController#callback` |
+| Refresh-token rotation + reuse detection → 409 + session invalidation | [RFC 9700 §4.14](https://datatracker.ietf.org/doc/rfc9700/) | `AuthorizationCodeTokenRefreshClient` + realm |
+| Signed double-submit CSRF (HMAC-SHA256, base64url) | — | `SignedCsrfSupport`, `bff-session.lua` |
+| `oauth_tx` browser-binding cookie | — | `OAuthTxBinding` |
+| RP-initiated logout with `id_token_hint` | OIDC RP-Initiated Logout 1.0 | `AuthController#logout` |
+| `redirect_uri` pinned via `app.base-url` (defeats Host-header injection) | — | `AuthController#baseUrl` |
+| Per-session refresh lock (Java); `lua-resty-lock` around CC-token fetch (Lua) | — | `InternalRefreshController`, `bff-session.lua` |
+| Rate-limit on `/auth/login` + `/auth/callback/idp` (APISIX `limit-req`) | — | `apisix.yaml.template` |
+| Boot-time sentinel guard refusing default dev secrets in `prod` profile | — | `SecretSentinelValidator` (Java), `bff-session.lua` |
 
-Start here:
+## Stack
 
-- `AGENTS.md`
-- `docs/README.md`
-- `docs/specs/SPEC-0001-core-oidc-flows.md`
-- `RFC9700-compliance.md`
-- `tasks/backlog.md`
+- React 18 + TypeScript, Vite
+- Java 25 + Spring Boot 4 (Auth Service, Resource Server)
+- Nimbus `oauth2-oidc-sdk` for OIDC discovery, JWKS, ID-token validation,
+  PKCE
+- Spring Security 6 (JWT decoder, validator composition)
+- Apache APISIX 3.x (standalone mode) + custom Lua plugin (OpenResty +
+  `resty.http`, `resty.lock`)
+- Keycloak 26 (local IdP)
+- Valkey 9 (Redis-compatible state store)
+- Docker Compose for the local stack
 
-## Intended Stack
+## Run locally
 
-- React + TypeScript SPA (no in-browser OIDC client).
-- Java 25 + Spring Boot 4.1.0-RC1 Auth Service (OAuth/OIDC confidential
-  client, Nimbus oauth2-oidc-sdk direct).
-- Apache APISIX standalone mode API Gateway, with a custom Lua plugin for
-  BFF session lookup, bearer injection, signed CSRF validation, and
-  refresh delegation to the Auth Service.
-- Redis-compatible server-side state store for session and PKCE-transaction
-  storage; Valkey is the local reference implementation.
-- Java 25 + Spring Boot 4.1.0-RC1 Resource Server (JWT validation).
-- Keycloak local Authorization Server / Identity Provider.
-- Docker Compose local infrastructure.
-- No cloud dependencies.
+The Auth Service and Resource Server run on the host for fast inner-loop
+iteration; everything else runs in Compose.
+
+```sh
+# 1. Render the APISIX route file with required env vars.
+CSRF_SIGNING_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+GATEWAY_CLIENT_SECRET=LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY \
+  ./scripts/render-apisix-config.sh
+
+# 2. Bring up Keycloak, Valkey, APISIX.
+docker compose up -d
+
+# 3. In separate shells: Auth Service, Resource Server, SPA.
+(cd auth-service && ./mvnw spring-boot:run)
+(cd backend-resource-server && ./mvnw spring-boot:run)
+(cd frontend && npm install && npm run dev)
+```
+
+Browser entry: <http://127.0.0.1:5173/>. Sign in as `alice` / `alice` (the
+realm seed).
+
+End-to-end verification:
+
+```sh
+./scripts/verify-all.sh          # unit + integration + gateway smoke
+```
+
+## Documentation
+
+- [`docs/specs/SPEC-0001-core-oidc-flows.md`](docs/specs/SPEC-0001-core-oidc-flows.md)
+  — build contract. Includes Appendix A: vendor-surface analysis (what
+  changes to swap IdP / gateway / state store).
+- [`docs/architecture/overview.md`](docs/architecture/overview.md) —
+  architecture orientation.
+- [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
+  — design rationale and rejected alternatives.
+- [`docs/goals/`](docs/goals/) — per-component goals (frontend, RS,
+  authorization server, Auth Service, API Gateway).
+- [`RFC9700-compliance.md`](RFC9700-compliance.md) — control-by-control
+  status against RFC 9700.
+- [`PROVIDER-ADAPTERS.md`](PROVIDER-ADAPTERS.md) — claim-shape matrix for
+  swapping the IdP (Keycloak, Auth0, Okta, Entra).
+- [`AGENTS.md`](AGENTS.md) — contributor operating contract.
