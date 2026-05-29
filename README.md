@@ -288,6 +288,9 @@ RUN_FULL_STACK_AUTH=1 ./scripts/verify-all.sh   # also brings the stack up and r
 - [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
   — rationale + rejected alternatives.
 - [`docs/goals/`](docs/goals/) — per-component goals.
+- [`SECURITY.md`](SECURITY.md) — threat model, crypto primitives, key
+  handling, audit-logging surface, production-hardening list,
+  vulnerability reporting.
 - [`OIDC-compliance.md`](OIDC-compliance.md) — conformance matrix against
   OpenID Connect Core 1.0 + Discovery + RP-Initiated Logout.
 - [`RFC9700-compliance.md`](RFC9700-compliance.md) — control-by-control
