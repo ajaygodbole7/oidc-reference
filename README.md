@@ -172,7 +172,7 @@ sequenceDiagram
 - Java 25 + Spring Boot 4 (Auth Service, Resource Server)
 - Nimbus `oauth2-oidc-sdk` for OIDC discovery, JWKS, ID-token validation,
   PKCE
-- Spring Security 6 (JWT decoder, validator composition)
+- Spring Security 7 (JWT decoder, validator composition)
 - Apache APISIX 3.x (standalone mode) + custom Lua plugin (OpenResty +
   `resty.http`, `resty.lock`)
 - Keycloak 26 (local IdP)
