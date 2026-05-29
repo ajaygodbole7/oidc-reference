@@ -288,8 +288,10 @@ RUN_FULL_STACK_AUTH=1 ./scripts/verify-all.sh   # also brings the stack up and r
 - [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
   — rationale + rejected alternatives.
 - [`docs/goals/`](docs/goals/) — per-component goals.
+- [`OIDC-compliance.md`](OIDC-compliance.md) — conformance matrix against
+  OpenID Connect Core 1.0 + Discovery + RP-Initiated Logout.
 - [`RFC9700-compliance.md`](RFC9700-compliance.md) — control-by-control
-  status against RFC 9700.
+  status against RFC 9700 (OAuth 2.0 Security BCP, also OAuth 2.1 baseline).
 - [`PROVIDER-ADAPTERS.md`](PROVIDER-ADAPTERS.md) — IdP swap walkthrough
   (Keycloak / Auth0 / Okta / Entra).
 - [`AGENTS.md`](AGENTS.md) — contributor operating contract.
