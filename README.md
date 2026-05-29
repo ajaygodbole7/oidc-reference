@@ -14,19 +14,16 @@ saved-request replay, and service-to-service via Client Credentials.
 
 ## Architecture
 
-Five components, split along trust boundaries:
-
 | Component | Role |
 |---|---|
 | `frontend/` | React + TypeScript SPA. Cookie-authenticated. No OIDC client library in the browser. |
-| `auth-service/` | Spring Boot Auth Service. Confidential OIDC client (Nimbus `oauth2-oidc-sdk`). Owns `/auth/*`, the OAuth round-trip, session storage, and `/internal/refresh`. |
-| `api-gateway/` | Apache APISIX (standalone) + custom Lua plugin (`bff-session`). Owns `/api/**` allowlist, `sess:{sid}` lookup, bearer injection, signed-CSRF validation, and refresh delegation. |
-| `backend-resource-server/` | Spring Boot Resource Server. JWT validation only; never sees session cookies. |
-| `authorization-server/` | Keycloak realm + Compose service (the local IdP). |
+| `auth-service/` | Confidential OIDC client (Nimbus `oauth2-oidc-sdk`). Owns `/auth/*`, the OAuth round-trip, session storage, and `/internal/refresh`. |
+| `api-gateway/` | APISIX standalone + custom Lua plugin (`bff-session`). Owns `/api/**` allowlist, `sess:{sid}` lookup, bearer injection, signed-CSRF validation, and refresh delegation. |
+| `backend-resource-server/` | JWT validation only; never sees session cookies. |
+| `authorization-server/` | Keycloak realm + Compose service. |
 
-The vendor choices (Keycloak, APISIX, Valkey) are not load-bearing on the
-pattern; SPEC-0001 Appendix A enumerates the files that change to swap
-each one.
+The vendor choices (Keycloak, APISIX, Valkey) are interchangeable;
+SPEC-0001 Appendix A enumerates the files that change to swap each.
 
 ### Browser flow — Authorization Code + PKCE
 
@@ -173,54 +170,57 @@ sequenceDiagram
 - Nimbus `oauth2-oidc-sdk` for OIDC discovery, JWKS, ID-token validation,
   PKCE
 - Spring Security 7 (JWT decoder, validator composition)
-- Apache APISIX 3.x (standalone mode) + custom Lua plugin (OpenResty +
-  `resty.http`, `resty.lock`)
-- Keycloak 26 (local IdP)
+- Apache APISIX 3.11 standalone + custom Lua plugin
+  (`lua-resty-http`, `lua-resty-lock`)
+- Keycloak 26 (embedded H2 via `KC_DB=dev-file`; no separate database)
 - Valkey 9 (Redis-compatible state store)
-- Docker Compose for the local stack
+- Docker Compose
 
 ## Run locally
 
-The Auth Service and Resource Server run on the host for fast inner-loop
-iteration; everything else runs in Compose.
+Prerequisites: Docker Desktop or equivalent, Java 25, Node 20+, `gettext`
+(for `envsubst` in the render script).
+
+The Auth Service, Resource Server, and SPA run on the host for fast
+inner-loop iteration; Keycloak, Valkey, and APISIX run in Compose.
 
 ```sh
-# 1. Render the APISIX route file with required env vars.
+# 1. Render the APISIX route file from env vars.
 CSRF_SIGNING_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
 GATEWAY_CLIENT_SECRET=LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY \
   ./scripts/render-apisix-config.sh
 
-# 2. Bring up Keycloak, Valkey, APISIX.
+# 2. Bring the infra up.
 docker compose up -d
 
-# 3. In separate shells: Auth Service, Resource Server, SPA.
-(cd auth-service && ./mvnw spring-boot:run)
-(cd backend-resource-server && ./mvnw spring-boot:run)
-(cd frontend && npm install && npm run dev)
+# 3. In three separate shells:
+cd auth-service              && ./mvnw spring-boot:run
+cd backend-resource-server   && ./mvnw spring-boot:run
+cd frontend                  && npm install && npm run dev
 ```
 
-Browser entry: <http://127.0.0.1:5173/>. Sign in as `alice` / `alice` (the
-realm seed).
+- SPA: <http://127.0.0.1:5173/> — sign in as `alice` / `alice`.
+- Keycloak admin console: <http://localhost:8080/> — sign in as
+  `admin` / `admin` to inspect the seeded realm.
 
-End-to-end verification:
+Verification:
 
 ```sh
-./scripts/verify-all.sh          # unit + integration + gateway smoke
+./scripts/verify-all.sh                  # per-component checks + secret scan
+RUN_FULL_STACK_AUTH=1 ./scripts/verify-all.sh   # also brings the stack up and runs the gateway suite
 ```
 
 ## Documentation
 
 - [`docs/specs/SPEC-0001-core-oidc-flows.md`](docs/specs/SPEC-0001-core-oidc-flows.md)
-  — build contract. Includes Appendix A: vendor-surface analysis (what
-  changes to swap IdP / gateway / state store).
-- [`docs/architecture/overview.md`](docs/architecture/overview.md) —
-  architecture orientation.
+  — the build contract. Wire formats for `sess:{sid}`, `tx:{state}`,
+  `/internal/refresh`, signed CSRF; threat model; trust boundaries.
+  Appendix A is the vendor-swap matrix.
 - [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
-  — design rationale and rejected alternatives.
-- [`docs/goals/`](docs/goals/) — per-component goals (frontend, RS,
-  authorization server, Auth Service, API Gateway).
+  — rationale + rejected alternatives.
+- [`docs/goals/`](docs/goals/) — per-component goals.
 - [`RFC9700-compliance.md`](RFC9700-compliance.md) — control-by-control
   status against RFC 9700.
-- [`PROVIDER-ADAPTERS.md`](PROVIDER-ADAPTERS.md) — claim-shape matrix for
-  swapping the IdP (Keycloak, Auth0, Okta, Entra).
+- [`PROVIDER-ADAPTERS.md`](PROVIDER-ADAPTERS.md) — IdP swap walkthrough
+  (Keycloak / Auth0 / Okta / Entra).
 - [`AGENTS.md`](AGENTS.md) — contributor operating contract.
