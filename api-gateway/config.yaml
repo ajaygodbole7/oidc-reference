@@ -1,0 +1,66 @@
+#
+# APISIX node config — standalone mode.
+#
+# Source of truth: docs/specs/SPEC-0001-core-oidc-flows.md
+#                  §"API Gateway Architecture (APISIX)"
+#                  docs/goals/GOAL-0005-api-gateway.md
+#
+# Standalone mode (data_plane + yaml provider) loads routes from
+# apisix.yaml on disk. No etcd is required for the local reference shape.
+# The Admin API is disabled because routes are declarative; opening the
+# Admin API in standalone is a footgun (changes via Admin API would be
+# overwritten on the next yaml reload) and is also an attack surface.
+
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+apisix:
+  node_listen: 9080
+  enable_admin: false
+  # The bff-session plugin is required by APISIX as
+  # `apisix.plugins.bff-session` and the file is mounted at
+  # /usr/local/apisix/apisix/plugins/bff-session.lua (see compose.yaml).
+  # The default Lua package path already covers /usr/local/apisix/?.lua,
+  # so no extra path is needed — leaving an entry here that doesn't
+  # resolve apisix.plugins.* would silently mask future load failures.
+  extra_lua_path: "/usr/local/apisix/?.lua"
+  # Shared dict for the Client-Credentials token cache. Sized small —
+  # we cache at most one token per worker plus a worker-local lock entry.
+  proxy_cache:
+    cache_ttl: 10s
+    zones:
+      - name: disk_cache_one
+        memory_size: 1m
+        disk_size: 1m
+        disk_path: /tmp/apisix-cache
+        cache_levels: "1:2"
+
+nginx_config:
+  # warn — not info. APISIX info-level logs dump the full route plugin
+  # config (including gateway_client_secret, cookie_signing_key) and
+  # request/response headers on the access path. With real secrets
+  # interpolated those values must NEVER hit disk; warn keeps the
+  # operational signal we want without the secret leak. Bump to info
+  # only inside a focused debugging session, never in committed config.
+  error_log_level: warn
+  # Pre-declare the shared dict used by the bff-session plugin for the
+  # gateway's Client-Credentials token cache. Keyed by worker; each entry
+  # is a small JSON blob (token + expires_at), so 1m is generous.
+  http_configuration_snippet: |
+    lua_shared_dict cc_token_cache 1m;
+    lua_shared_dict cc_token_lock 64k;
+
+plugins:
+  # Custom plugin — see plugins/bff-session.lua. Attached per-route in
+  # apisix.yaml; declared here so APISIX will load it at startup.
+  - bff-session
+  # Built-ins used by routes below.
+  - proxy-rewrite
+  # B10: per-IP leaky-bucket on /auth/login and /auth/callback/idp routes
+  # so a forged-IP burst cannot exhaust tx:{state} entries or burn token-
+  # exchange CPU. Standalone mode requires every per-route plugin to also
+  # appear in this allowlist; the route-level config in apisix.yaml.template
+  # supplies rate/burst/key.
+  - limit-req

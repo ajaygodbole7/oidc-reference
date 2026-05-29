@@ -1,0 +1,47 @@
+# Frontend
+
+React + TypeScript + Vite SPA. **No OAuth/OIDC client library** — the BFF
+owns the flow.
+
+Primary Goal:
+
+- `../docs/goals/GOAL-0001-frontend-react-pkce.md`
+
+## How auth works here
+
+- Sign in is a top-level navigation to `/auth/login` (a BFF endpoint).
+- After Keycloak login, the browser lands back at `/` with an `HttpOnly`
+  session cookie set by the BFF.
+- The SPA loads user identity from `/auth/me`.
+- All API calls go to `/api/*` with `credentials: "include"`.
+- Sign out POSTs `/auth/logout` with the CSRF header, then performs a
+  top-level navigation to the BFF-provided logout redirect.
+
+The browser never holds an access, refresh, or ID token.
+
+## Local Contract
+
+- Dev server: `http://127.0.0.1:5173`
+- BFF target: `http://localhost:8081` (override via `VITE_BFF_TARGET`)
+- Vite proxies `/auth` and `/api` → BFF so the session cookie is same-origin
+  in dev.
+
+## Commands
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run test                              # Vitest unit tests
+npm run test:e2e                          # Playwright (anonymous always)
+E2E_FULL_STACK=1 npm run test:e2e         # Includes authenticated session
+../scripts/verify-frontend.sh
+```
+
+## Harness Requirements
+
+- `package.json` defines `build`, `test`, and `test:e2e`.
+- `playwright.config.ts` stores traces and screenshots under
+  `frontend/test-results/`.
+- Tests assert no tokens are written to `localStorage`, `sessionStorage`,
+  `document.cookie`, or IndexedDB.

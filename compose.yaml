@@ -1,0 +1,222 @@
+name: oidc-reference
+
+# Local full-stack infrastructure for the OIDC reference. The shape is the
+# split-BFF model from RESHAPE-FRAME-B: a small Auth Service that owns the
+# OIDC dance + session, and an Ingress/API-gateway in front of everything
+# else. APISIX plays BOTH the public ingress AND the API gateway role for
+# the local reference — there is no separate Traefik. Browsers reach the
+# stack at two places only:
+#   - http://127.0.0.1:9080  → APISIX (routes /auth/* → auth-service,
+#                              /api/** → resource-server)
+#   - http://127.0.0.1:8080  → Keycloak directly (OIDC /realms/* paths)
+# Everything else is on an internal Compose network with no host port.
+#
+# Resource Server and auth-service are NOT exposed on the host — only
+# APISIX reaches them. The cross-service smoke (verify-cross-service.sh)
+# now runs inside the Compose network via `docker compose exec apisix`,
+# rather than hitting RS on a host port.
+
+services:
+  postgres:
+    image: postgres:18-alpine3.23
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak
+    volumes:
+      # Postgres 18 stores data under a major-version subdirectory and
+      # rejects mounts pinned to /var/lib/postgresql/data. Mount the parent
+      # so pg can manage /var/lib/postgresql/18/main itself.
+      - kc-db:/var/lib/postgresql
+    networks:
+      - oidc-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - start-dev
+      - --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak
+    # Keycloak stays on host :8080. APISIX is on :9080. They are NOT the
+    # same ingress: browsers hit Keycloak directly for /realms/*, and hit
+    # APISIX for /auth/* and /api/**. This keeps issuer URLs stable
+    # (http://localhost:8080/realms/oidc-reference) without requiring
+    # APISIX to proxy Keycloak.
+    ports:
+      # Bind to loopback explicitly. The docs say "local reference,
+      # never expose outside the host"; without a bind address Docker
+      # publishes on 0.0.0.0 and the realm + admin console become
+      # LAN-reachable. Loopback keeps the surface honest.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./authorization-server/realm:/opt/keycloak/data/import:ro
+    networks:
+      - oidc-internal
+    # Bash /dev/tcp is in the UBI-based image, so we don't need curl /
+    # wget. The discovery document returns 200 only once the realm
+    # import has completed, so this check covers both "Keycloak is up"
+    # and "the realm we depend on is loaded" — important because the
+    # downstream services (Auth Service / RS) can't function until that
+    # discovery doc is reachable.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          exec 3<>/dev/tcp/localhost/8080 &&
+          printf 'GET /realms/oidc-reference/.well-known/openid-configuration HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          head -n1 <&3 | grep -q ' 200 '
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  valkey:
+    image: valkey/valkey:9.1-alpine
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    # Host port kept for inner-loop dev: contributors who run the Auth
+    # Service via `./mvnw spring-boot:run` (rather than the Compose image)
+    # need to reach Valkey at 127.0.0.1:6379. Once the reshape settles and
+    # everyone runs Auth Service inside Compose, drop the host binding so
+    # Valkey is internal-only. Bind to loopback only — Valkey stores
+    # token-bearing `sess:{sid}` values, so LAN exposure would be a
+    # serious leak. Tracked as a follow-up; intentionally kept here only
+    # to avoid breaking mid-reshape inner-loop dev.
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - oidc-internal
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Resource Server and Auth Service are NOT in Compose for the local
+  # reference: contributors run them via `./mvnw spring-boot:run` from
+  # `backend-resource-server/` and `auth-service/` for fast inner-loop
+  # iteration. Docker images for both modules exist (their Dockerfiles
+  # are in tree) but containerisation is not the deliverable — the
+  # reference's value is the BFF pattern + the OIDC mechanics, not the
+  # deployment surface. APISIX reaches both services via
+  # `host.docker.internal:PORT` (see the `extra_hosts` block below).
+
+  # APISIX is both the public ingress AND the API gateway for this
+  # reference. We pin 3.11.0-debian: it is the current stable line as of
+  # the Frame B reshape, and the debian variant has curl preinstalled
+  # which we lean on for the healthcheck. Bump deliberately when a newer
+  # stable lands; do not float to :latest.
+  #
+  # Standalone mode (APISIX_STAND_ALONE=true) reads routes from
+  # ./api-gateway/apisix.yaml on disk instead of etcd. That keeps the
+  # local reference single-container and zero-state — routes are
+  # declarative in-repo, just like everything else.
+  apisix:
+    image: apache/apisix:3.11.0-debian
+    depends_on:
+      valkey:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    extra_hosts:
+      # APISIX runs in a container; Auth Service + Resource Server run on
+      # the host via `./mvnw spring-boot:run`. host.docker.internal is the
+      # Docker-Desktop-provided gateway back to the host. On Linux this
+      # requires :host-gateway (Docker 20.10+).
+      - "host.docker.internal:host-gateway"
+    environment:
+      APISIX_STAND_ALONE: "true"
+      # Pin the container TZ to UTC. bff-session.lua's parse_iso8601_utc
+      # uses os.time() to interpret a struct read from an ISO-8601 UTC
+      # string and corrects with (local_now - utc_now). The correction
+      # is sound, but pinning TZ=UTC removes the offset arithmetic from
+      # the hot path entirely. Hosts with a non-UTC TZ would otherwise
+      # see one extra subtraction per session read.
+      TZ: "UTC"
+      # HMAC key for the signed double-submit CSRF cookie. The bff-session
+      # Lua plugin and the Auth Service MUST share this key so cookies
+      # signed by one validate at the other. APISIX supports env
+      # interpolation of `${CSRF_SIGNING_KEY}` inside apisix.yaml plugin
+      # config (standalone mode); the gateway agent owns wiring that
+      # substitution at plugin-config load time.
+      # 32 zero-bytes base64-encoded — must be valid base64 (the plugin and
+      # the Auth Service both decode it before HMAC). Recognized as the
+      # known-dev sentinel by SecretSentinelValidator (Java) and the
+      # bff-session.lua boot guard (Lua); both refuse to operate when a
+      # production profile is active. Shared literal so a single search
+      # finds every place to rotate before any deploy.
+      CSRF_SIGNING_KEY: ${CSRF_SIGNING_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+      # Gateway's Keycloak client secret — used by the plugin to obtain a
+      # Client-Credentials bearer when calling Auth Service /internal/refresh.
+      # Matches the seeded realm value (authorization-server/realm/oidc-
+      # reference-realm.json) so zero-config dev works; the same marker is
+      # checked by SecretSentinelValidator on the Auth Service side.
+      GATEWAY_CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET:-LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY}
+    volumes:
+      # APISIX standalone-mode entrypoint rewrites config.yaml on startup
+      # (no-op sed substitutions on our already-standalone file, but the
+      # shell `> file` redirect fails against a read-only mount). Mount RW
+      # so the rewrite succeeds; the file remains authoritative on each
+      # `compose up`.
+      - ./api-gateway/config.yaml:/usr/local/apisix/conf/config.yaml
+      # Mount the RENDERED route file, not the template. The template
+      # (api-gateway/apisix.yaml.template) is tracked; the .local file
+      # is produced by `scripts/render-apisix-config.sh` from $GATEWAY_
+      # CLIENT_SECRET + $CSRF_SIGNING_KEY and is gitignored. Compose
+      # will error out at start if the file doesn't exist — that's the
+      # intended UX, it forces the operator to run the render script
+      # rather than booting with placeholder secrets.
+      - ./api-gateway/apisix.yaml.local:/usr/local/apisix/conf/apisix.yaml:ro
+      # APISIX requires custom plugins under the apisix.plugins.* dotted
+      # namespace (see plugin.lua load_plugin). The default Lua package
+      # path resolves apisix.plugins.bff-session to
+      # /usr/local/apisix/apisix/plugins/bff-session.lua, so the mount
+      # MUST land there. Mounting at /usr/local/apisix/plugins/ silently
+      # fails to load (plugin.lua emits "module 'apisix.plugins.bff-session'
+      # not found" and the route falls through to a bare proxy).
+      - ./api-gateway/plugins/bff-session.lua:/usr/local/apisix/apisix/plugins/bff-session.lua:ro
+    # 9080: public HTTP (browser-facing), bound to loopback only.
+    # The admin port (9180) is intentionally NOT published: APISIX
+    # standalone mode disables the admin API (enable_admin: false in
+    # api-gateway/config.yaml), so the port serves no purpose. Removing
+    # the binding eliminates the confusing "admin port exposed but
+    # disabled" surface.
+    ports:
+      - "127.0.0.1:9080:9080"
+    networks:
+      - oidc-internal
+    healthcheck:
+      # /apisix/status is admin-only in 3.x standalone and is not served on
+      # the public 9080 listener — pinging it always 404s and would mark
+      # the container "unhealthy" even when the gateway is happy. Probe
+      # the public listener instead: any HTTP response (incl. 404 from the
+      # router) proves the worker is accepting connections.
+      test: ["CMD-SHELL", "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:9080/__healthcheck__ | grep -qE '^[1-5][0-9][0-9]$'"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  kc-db:
+
+# Single internal network for all backend services. Host exposure is
+# limited to the explicit `ports:` entries above (APISIX 9080/9180,
+# Keycloak 8080, Valkey 6379 during inner-loop dev). Everything else is
+# reachable only via service-name DNS inside this network.
+networks:
+  oidc-internal:
+    driver: bridge

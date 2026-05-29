@@ -1,0 +1,36 @@
+{
+  "$comment": "Canonical sess:{sid} payload per SPEC-0001 §7.2. The Auth Service is the sole writer; the API Gateway is a tolerant reader. Both sides MUST agree on field NAMES, TYPES, and TIMESTAMP FORMAT (ISO-8601 UTC, RFC 3339 profile, Zulu suffix). Field additions are allowed for the writer; readers MUST ignore unknown fields. Field removals or renames are breaking and require coordinated changes on both sides. The cross-component contract tests load this fixture into the Java SessionRecord and the Lua plugin's parser.",
+  "spec": "docs/specs/SPEC-0001-core-oidc-flows.md#72-session-schema-contract",
+  "required_fields_writer": [
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "access_token_expires_at",
+    "refresh_token_expires_at",
+    "created_at",
+    "absolute_expires_at",
+    "claims",
+    "xsrf_token"
+  ],
+  "required_fields_reader": [
+    "access_token",
+    "access_token_expires_at"
+  ],
+  "payload": {
+    "access_token": "ZXhhbXBsZS5hY2Nlc3MtdG9rZW4tZml4dHVyZQ",
+    "refresh_token": "ZXhhbXBsZS5yZWZyZXNoLXRva2VuLWZpeHR1cmU",
+    "id_token": "ZXhhbXBsZS5pZC10b2tlbi1maXh0dXJl",
+    "access_token_expires_at": "2026-06-01T12:34:56Z",
+    "refresh_token_expires_at": "2026-06-01T13:04:56Z",
+    "created_at": "2026-06-01T12:29:56Z",
+    "absolute_expires_at": "2026-06-02T00:29:56Z",
+    "claims": {
+      "sub": "00000000-0000-4000-8000-000000000001",
+      "preferred_username": "alice",
+      "name": "Alice Example",
+      "email": "alice@example.test",
+      "roles": ["user"]
+    },
+    "xsrf_token": "fixture-xsrf.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+}

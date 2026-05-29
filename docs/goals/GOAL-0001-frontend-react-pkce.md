@@ -1,0 +1,131 @@
+# GOAL-0001: Frontend React SPA (BFF Cookie Client)
+
+> Filename retains `pkce` for historical link stability. The SPA does **not**
+> perform PKCE — the BFF does. This goal owns the cookie-authenticated SPA
+> that talks only to the BFF.
+
+## Directory
+
+`frontend/`
+
+## Goal
+
+Deliver a React + TypeScript + Vite SPA that authenticates by calling BFF
+endpoints (`/auth/login`, `/auth/me`, `/auth/logout`) and consumes APIs
+through the BFF proxy (`/api/*`) using only the same-origin session cookie.
+The SPA must contain no OAuth/OIDC client library and no token-handling
+code, and Playwright must prove that after a real authenticated session no
+token resides in `localStorage`, `sessionStorage`, IndexedDB, or
+JS-visible cookies.
+
+## Purpose
+
+The frontend demonstrates the browser side of the BFF pattern: tokens are
+invisible to JavaScript. Login is a navigation, not a fetch; API calls are
+cookie-authenticated against the same origin; UI authorization is cosmetic.
+
+## Owned Paths
+
+- `frontend/`
+- Frontend-specific tests under `frontend/`
+- Frontend docs scoped to browser behavior
+- Frontend task packets
+
+## Avoid Paths
+
+- `bff/`
+- `backend-resource-server/`
+- `authorization-server/`
+- Shared root config unless explicitly coordinated
+
+## Required Technology
+
+- React `19.2.6`, TypeScript `6.0.3`, Vite `8.0.14`, Vitest `4.1.7`,
+  Playwright `1.60.0`.
+- Vite dev-server proxy with two upstreams so the cookie is same-origin in
+  dev: `/auth/*` → Auth Service (`http://localhost:8081`) and `/api/**` →
+  APISIX API Gateway (`http://localhost:9080`). Both upstreams honor
+  `X-Forwarded-Host` / `-Proto` / `-Port`. (In the full Compose stack
+  Traefik takes both paths on a single browser-facing port; the Vite proxy
+  is the dev-loop equivalent.)
+- **No OAuth/OIDC client library.** No `oidc-client-ts`, no `oauth4webapi`,
+  no `auth0-spa-js`.
+
+## Required User Journeys
+
+- Visitor unauthenticated → home page shows Sign in.
+- Login is triggered by either a top-level navigation to a protected URL
+  (implicit, saved-request) or by clicking Sign in which navigates to
+  `/auth/login` (explicit; saved-request defaults to `/`).
+- SPA reacts to a `401` from `/api/*` by performing a top-level
+  navigation (it does not try to handle the AS login page in an XHR).
+- Browser redirected to Keycloak, user authenticates, BFF callback returns
+  the same-origin landing page with the Strict session cookie, and the
+  landing page navigates to the saved request URL. For explicit Sign in,
+  the saved request defaults to `/`.
+- SPA loads user state from `/auth/me`.
+- SPA calls `GET /api/me` and `GET /api/user-data`; renders results.
+- SPA renders a denied response honestly (no pretending the user has
+  access).
+- User clicks Logout → `POST /auth/logout` with `Accept: application/json`
+  and CSRF header → BFF clears session and returns `logoutUrl` → SPA performs
+  top-level navigation through OIDC end-session.
+
+## Security Requirements
+
+- No OAuth/OIDC client library.
+- No `localStorage`, `sessionStorage`, IndexedDB, or JS-readable cookie
+  writes of any token, code, or claim payload.
+- All `fetch` calls use `credentials: "include"` against same-origin
+  `/auth/*` and `/api/*` paths only.
+- CSRF token (returned by BFF on first GET, sent as header) on every
+  POST/PUT/DELETE.
+- Never log responses that include sensitive claims; redact email, sub.
+- UI authorization is display-only; backend enforces.
+
+## Acceptance Criteria
+
+- `npm install` and `npm run dev` work.
+- `npm run build` succeeds.
+- `npm run test` (Vitest) and `npm run test:e2e` (Playwright) run green.
+- Playwright proves login, callback, `/auth/me`, protected API call,
+  denied state, logout.
+- Playwright authenticated-session assertion confirms zero tokens in any
+  browser-side storage.
+- The app is configured via Vite env files (no secret values).
+- Docs explain why no OIDC library is present.
+
+## Required Tests
+
+- Sign in link points to `/auth/login` (navigation, not fetch).
+- `/auth/me` happy path renders identity.
+- `/auth/me` 401 renders unauthenticated state.
+- `GET /api/me` happy path.
+- `GET /api/user-data` happy path.
+- `GET /api/user-data` 403 renders honest denial.
+- Logout button POSTs `/auth/logout` with CSRF and navigates to returned
+  `logoutUrl`.
+- Playwright end-to-end against live stack with Keycloak login automation.
+- Playwright storage assertion: after login, `localStorage`,
+  `sessionStorage`, `document.cookie`, and IndexedDB contain no tokens.
+- Saved-request replay: top-level navigation to a protected URL passes
+  through the callback landing page and ends, after OAuth, on that same URL
+  — not on `/`.
+- XHR `401`: `fetch('/api/me')` with no session yields `401`, and the SPA
+  reacts by initiating a top-level navigation.
+
+## Evidence For Completion
+
+- Vitest output.
+- Playwright trace for full flow.
+- Storage assertion output.
+- Docs section on cookie + same-origin proxy design.
+
+## Blocked Conditions
+
+Stop and report if:
+
+- BFF `/auth/*` or `/api/*` is unavailable.
+- Vite proxy cannot reach the BFF host.
+- Keycloak login automation cannot be driven from Playwright in the local
+  environment.

@@ -1,0 +1,24 @@
+node_modules/
+dist/
+target/
+test-results/
+playwright-report/
+.idea/
+.env
+.env.local
+.env.*.local
+.local/
+authorization-server/secrets/
+bff/target/
+backend-resource-server/target/
+.DS_Store
+# Per-contributor agent tooling state; never tracked.
+.claude/
+CLAUDE.md
+.codex/
+.cursor/
+.aider*
+# Rendered APISIX route file. Tracked source of truth is
+# api-gateway/apisix.yaml.template; scripts/render-apisix-config.sh
+# produces this file with real secrets substituted from the host env.
+api-gateway/apisix.yaml.local

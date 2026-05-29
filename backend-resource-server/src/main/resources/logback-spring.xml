@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logging defaults are Boot's own (pattern, levels, color). What this file
+  adds: profile-aware console format.
+
+    !dev  → Spring Boot 4 structured logging (ECS JSON, set via
+            logging.structured.format.console=ecs in application.yml).
+    dev   → human-readable pattern, no structured encoding, for local runs.
+
+  Boot's console-appender.xml respects the CONSOLE_LOG_STRUCTURED_FORMAT
+  system property; we clear it under the `dev` profile so the pattern path
+  is used instead of the JSON encoder.
+-->
+<configuration>
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+  <springProfile name="dev">
+    <property name="CONSOLE_LOG_STRUCTURED_FORMAT" value=""/>
+  </springProfile>
+
+  <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+
+  <logger name="org.springframework.security" level="INFO"/>
+</configuration>

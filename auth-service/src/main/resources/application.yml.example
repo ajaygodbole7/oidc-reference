@@ -1,0 +1,58 @@
+# Auth Service configuration template.
+#
+# The real application.yml is gitignored and created in
+# TASK-0008-auth-service-spec-to-code. This file documents the keys the
+# Auth Service will read so reviewers can see the configuration surface
+# without an implementation in place.
+#
+# server:
+#   port: ${SERVER_PORT:8083}
+#   forward-headers-strategy: framework
+#
+# spring:
+#   application:
+#     name: oidc-reference-auth-service
+#   threads:
+#     virtual:
+#       enabled: true
+#   data:
+#     redis:
+#       host: ${REDIS_HOST:localhost}
+#       port: ${REDIS_PORT:6379}
+#
+# app:
+#   # OIDC provider discovery + confidential-client credentials. Read by the
+#   # Nimbus-based discovery, token-exchange, refresh, and id-token validator
+#   # beans. The client_id matches the Keycloak client renamed in Commit 4.
+#   issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8080/realms/oidc-reference}
+#   client-id: oidc-reference-auth
+#   client-secret: ${AUTH_CLIENT_SECRET:dev-auth-secret-rotate-me}
+#   redirect-uri: ${AUTH_REDIRECT_URI:http://localhost/auth/callback/idp}
+#   scopes:
+#     - openid
+#     - profile
+#     - email
+#     - roles
+#     - api.audience
+#     - api.read
+#
+#   # Cookie attributes per SPEC-0001 §Cookie attributes. Production runs
+#   # __Host-sid + Secure; local HTTP downgrades to sid without Secure.
+#   cookie:
+#     session-name: ${SESSION_COOKIE_NAME:sid}
+#     csrf-name: ${CSRF_COOKIE_NAME:XSRF-TOKEN}
+#     # HMAC key used to sign the double-submit CSRF token (B4). 32+ bytes.
+#     signing-key: ${CSRF_SIGNING_KEY:dev-csrf-signing-key-rotate-me}
+#     secure: ${COOKIE_SECURE:false}
+#
+#   # /internal/refresh is called by the API Gateway with a Client
+#   # Credentials access token bound to scope auth.internal and audience
+#   # oidc-reference-auth-internal. See SPEC-0001 §7.1.
+#   internal:
+#     audience: oidc-reference-auth-internal
+#     scope: auth.internal
+#
+# management:
+#   server:
+#     port: ${MANAGEMENT_PORT:9083}
+#     address: ${MANAGEMENT_ADDRESS:127.0.0.1}
