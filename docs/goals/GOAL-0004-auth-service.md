@@ -59,7 +59,7 @@ SPEC-0001 §"Authorization Server Portability".
 
 | Path | Method | Auth | Behavior |
 |---|---|---|---|
-| `/auth/login` | GET | none | Accepts optional `next` query parameter (the saved-request URL). Validates `next` is same-origin and defaults to `/`. Generates `state`, `nonce`, PKCE verifier. Writes `tx:{state} = {verifier, nonce, saved_request, created_at}` TTL 5m. 302 to Keycloak authorization endpoint with `code_challenge=S256`, `state`, `nonce`. |
+| `/auth/login` | GET | none | **Requires** a `return_to` query parameter (the saved-request URL); validates it is a same-origin relative path and rejects a missing, absolute, protocol-relative, non-`/`-leading, overlong, or backslash-encoded value with `400` (no silent default to `/`). Generates `state`, `nonce`, PKCE verifier. Writes `tx:{state} = {verifier, nonce, saved_request, created_at}` TTL 5m. 302 to Keycloak authorization endpoint with `code_challenge=S256`, `state`, `nonce`. |
 | `/auth/callback/idp` | GET | none | Reads and DELs `tx:{state}` in Valkey. Exchanges `code + verifier + client_secret` at Keycloak token endpoint. Validates `id_token` (iss, aud=`oidc-reference-auth`, nonce match, RS256, exp/nbf). Writes `sess:{sid}` with sliding TTL 30m. Issues `__Host-sid` (`HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`) and signed `XSRF-TOKEN` (JS-readable, signed double-submit). Responds with a **direct 302** to the validated `saved_request` — no intermediate landing page. |
 | `/auth/me` | GET | session | Returns `{sub, preferred_username, name, email, roles}` from `sess:{sid}.claims`. Never returns a token. Response `Cache-Control: no-store`. |
 | `/auth/logout` | POST | session | Requires signed double-submit CSRF. DEL `sess:{sid}`. Clears `__Host-sid` and `XSRF-TOKEN`. Builds the Keycloak `end_session_endpoint` URL with `id_token_hint` **server-side** and stores it under a single-use opaque handle (`logout:{handle}`, TTL 2m). Returns a **same-origin** JSON body `{"logoutUrl":"/auth/logout/continue?lc={handle}"}`. The id_token never reaches SPA JS or any SPA-readable body. |
@@ -158,8 +158,9 @@ SPEC-0001 §"Authorization Server Portability".
 
 - `/auth/login` returns 302 to Keycloak with `code_challenge=S256`,
   `state`, `nonce`.
-- `/auth/login?return_to=<protected-URL>` persists `saved_request = <that URL>`
-  when same-origin; defaults to `/` when absent or cross-origin.
+- `/auth/login?return_to=<same-origin path>` persists `saved_request = <that URL>`;
+  a missing, cross-origin (absolute), or otherwise invalid `return_to` is
+  rejected with `400` (no silent default to `/`).
 - ID-token validation negatives — port the existing
   `JwtOidcIdTokenValidatorTest` from the retired `bff/`: wrong issuer,
   wrong audience (`aud != oidc-reference-auth`), wrong nonce, wrong

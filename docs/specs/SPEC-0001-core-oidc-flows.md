@@ -1132,6 +1132,7 @@ Changes required:
 | `idp_token_url` in `apisix.yaml.template` | per-route plugin config | The Lua plugin field is IdP-vendor neutral; just point it at the new IdP's token endpoint. |
 | RS audience name | `oidc-reference-realm.json` audience-mapper config OR the equivalent on the new IdP | The RS expects `oidc-reference-api` in `aud`; the IdP must be configured to add that value. |
 | Internal-refresh audience | same | Gateway's CC token must carry `oidc-reference-auth-internal` in `aud`; configure equivalent on the new IdP. |
+| Gateway / service client identity | hardcoded in `apisix.yaml.template`, `InternalRefreshController` (`EXPECTED_CLIENT_ID`), `ApiController` (`SERVICE_CLIENTS`) | This reference's internal trust topology, not a per-provider OIDC value. The gateway's confidential client must be named `oidc-reference-api-gateway` on the new IdP (and the RS service-account allowlist matched), OR these fixed identifiers edited. See `provider-adapters.md` §"Portability scope" — config-only covers the provider-facing OIDC surface, not these fixed identifiers. |
 
 What does NOT change:
 

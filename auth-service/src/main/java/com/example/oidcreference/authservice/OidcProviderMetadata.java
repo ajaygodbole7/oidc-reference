@@ -66,10 +66,25 @@ public record OidcProviderMetadata(
           m.getTokenEndpointURI(),
           m.getJWKSetURI(),
           m.getEndSessionEndpointURI(),
-          m.getIssuer().getValue(),
+          requireMatchingIssuer(m.getIssuer().getValue(), props.issuerUri().toString()),
           props.scopes());
     } catch (Exception e) {
       throw new IllegalStateException("OIDC discovery failed at " + props.issuerUri(), e);
     }
+  }
+
+  // OIDC Discovery / RFC 8414 §3.3: the `issuer` in the discovery document MUST
+  // be identical to the issuer used to fetch it. A mismatch means the document
+  // was served by — or redirected to — a different authority, which is an
+  // issuer mix-up vector. Fail closed at startup rather than trust a drifted
+  // issuer for the rest of the process lifetime. Exact string equality is what
+  // the spec requires (no normalization).
+  static String requireMatchingIssuer(String discovered, String configured) {
+    if (!configured.equals(discovered)) {
+      throw new IllegalStateException(
+          "OIDC discovery issuer mismatch: document advertised '" + discovered
+          + "' but configured issuer is '" + configured + "'");
+    }
+    return discovered;
   }
 }

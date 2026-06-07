@@ -5,9 +5,27 @@ only the API Gateway, the Auth Service is the confidential OIDC client, and the
 Resource Server validates standard JWT claims. Keycloak is the local reference
 Authorization Server, not a code dependency.
 
-The promise is configuration-only provider swap for a standard OIDC provider.
-If an IdP requires application-code branches by provider brand, that provider
-is outside the current reference contract.
+The promise is configuration-only swap of the **provider-facing OIDC surface** —
+issuer, endpoints, audience, scopes, and role-claim path — for a standard OIDC
+provider, demonstrated end-to-end by the alternate-claim Keycloak realm gate
+(`just e2e-portability`). What is **not** config-driven is this reference's
+internal trust topology: the gateway↔Auth-Service client identity, the internal
+refresh audience, and the Resource Server's service-account allowlist are fixed
+to the identifiers this reference ships and would be set per deployment. If an
+IdP requires application-code branches by provider brand, that provider is
+outside the current reference contract.
+
+### Portability scope
+
+| Config-driven (proven by `just e2e-portability`) | Fixed to this reference's topology (set per deployment) |
+|---|---|
+| Issuer (`OIDC_ISSUER_URI`), endpoints (`APP_*_URI`) | Gateway client id (`oidc-reference-api-gateway`) |
+| API audience (`OIDC_AUDIENCE`) | Internal refresh audience (`oidc-reference-auth-internal`) |
+| Role-claim path (`OIDC_ROLES_CLAIM_PATH`), scopes (`OIDC_SCOPES`) | RS service-account allowlist (`ApiController.SERVICE_CLIENTS`) |
+
+To run this reference against a real third-party IdP, you would additionally set
+those topology identifiers to match the clients you register there; they are
+hardcoded here because a single reference deployment has exactly one of each.
 
 ## Supported Configuration Surface
 
