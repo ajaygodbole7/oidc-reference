@@ -178,9 +178,10 @@ topology, not new OIDC content.
   /internal/refresh`. Keeps OAuth client logic in one place. Adds ~one RPC
   per refresh window per session.
 - **Internal RPC auth.** Client Credentials via Keycloak. The API Gateway
-  is a third Keycloak client (`oidc-reference-api-gateway`) with Client
-  Credentials only. The Auth Service acts as OAuth Resource Server for
-  `/internal/*` with `aud=oidc-reference-auth-internal`. mTLS noted as
+  is a third confidential client (`oidc-reference-api-gateway` by local
+  default) with Client Credentials only. The Auth Service acts as OAuth
+  Resource Server for `/internal/*` with the configured internal-refresh
+  audience (`oidc-reference-auth-internal` by local default). mTLS noted as
   production hardening.
 - **Ingress.** APISIX is itself the ingress in the full Compose stack — no
   separate Traefik or NGINX in front of it. The frontend dev loop uses the

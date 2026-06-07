@@ -12,9 +12,10 @@ Service** client (Authorization Code + PKCE S256 + refresh rotation), a
 confidential **API Gateway** client (Client Credentials, for the internal
 `/internal/refresh` RPC), and a confidential **service** client (Client
 Credentials), attaches an `oidc-audience-mapper` so issued access tokens
-carry `aud=oidc-reference-api` and `aud=oidc-reference-auth-internal` as
-appropriate, and is verified by a smoke script that issues real tokens via
-`curl` and inspects the claims.
+carry the configured API audience and the configured internal-refresh
+audience as appropriate (local defaults `oidc-reference-api` and
+`oidc-reference-auth-internal`), and is verified by a smoke script that
+issues real tokens via `curl` and inspects the claims.
 
 This goal scopes the **local reference IdP only**. The Auth Service, API
 Gateway, and Resource Server are IdP-agnostic OIDC clients; swapping to AWS
@@ -88,14 +89,14 @@ recreates the realm without manual console clicks.
 - Optional scopes: `api.write`, `admin.read`.
 - Secret: placeholder in realm JSON, generated locally and supplied via env.
 
-### API Gateway Client (`oidc-reference-api-gateway`)
+### API Gateway Client (`oidc-reference-api-gateway` Local Default)
 
 - Confidential.
 - Client Credentials enabled, service accounts enabled.
 - Browser flows (standard, implicit) disabled. Direct access grants
   disabled.
-- Default scopes: `auth.internal`. Issued access tokens carry
-  `aud=oidc-reference-auth-internal` via the `auth.internal` audience
+- Default scopes: `auth.internal`. Issued access tokens carry the
+  configured internal-refresh audience via the `auth.internal` audience
   mapper.
 - Used by the APISIX API Gateway to authenticate to the Auth Service's
   `/internal/refresh` endpoint. See SPEC-0001 §7.1.
@@ -129,10 +130,9 @@ user vs service-account identity.
 - Service client obtains a token via `curl` Client Credentials.
 - Issued service token contains `aud=oidc-reference-api` and `scope`
   includes `service.jobs`.
-- Issued API-Gateway service token contains
-  `aud=oidc-reference-auth-internal` and `scope` includes
-  `auth.internal` (or `internal.refresh` if scope-based authorization is
-  enabled).
+- Issued API-Gateway service token contains the configured
+  internal-refresh audience and `scope` includes `auth.internal` (or
+  `internal.refresh` if scope-based authorization is enabled).
 - No committed secrets.
 - Docs explain every client, scope, mapper, test user.
 

@@ -53,7 +53,7 @@ the Auth Service behind the gateway.
   dev: `/auth/*` → Auth Service (`http://localhost:8081`) and `/api/**` →
   APISIX API Gateway (`http://localhost:9080`). Both upstreams honor
   `X-Forwarded-Host` / `-Proto` / `-Port`. (In the full Compose stack
-  Traefik takes both paths on a single browser-facing port; the Vite proxy
+  APISIX takes both paths on a single browser-facing port; the Vite proxy
   is the dev-loop equivalent.)
 - **No OAuth/OIDC client library.** No `oidc-client-ts`, no `oauth4webapi`,
   no `auth0-spa-js`.
@@ -63,13 +63,12 @@ the Auth Service behind the gateway.
 - Visitor unauthenticated → home page shows Sign in.
 - Login is triggered by either a top-level navigation to a protected URL
   (implicit, saved-request) or by clicking Sign in which navigates to
-  `/auth/login` (explicit; saved-request defaults to `/`).
+  `/auth/login?return_to=<current-route>`. A bare `/auth/login` is invalid.
 - SPA reacts to a `401` from `/api/*` by performing a top-level
   navigation (it does not try to handle the AS login page in an XHR).
-- Browser redirected to Keycloak, user authenticates, BFF callback returns
-  the same-origin landing page with the Strict session cookie, and the
-  landing page navigates to the saved request URL. For explicit Sign in,
-  the saved request defaults to `/`.
+- Browser redirected to Keycloak, user authenticates, and the Auth Service
+  callback returns a direct same-origin `302` to the validated saved request
+  URL while setting the Lax session cookie.
 - SPA loads user state from `/auth/me`.
 - SPA calls `GET /api/me` and `GET /api/user-data`; renders results.
 - SPA renders a denied response honestly (no pretending the user has
@@ -107,7 +106,8 @@ the Auth Service behind the gateway.
 
 ## Required Tests
 
-- Sign in link points to `/auth/login` (navigation, not fetch).
+- Sign in link points to `/auth/login?return_to=<current-route>`
+  (navigation, not fetch).
 - `/auth/me` happy path renders identity.
 - `/auth/me` 401 renders unauthenticated state.
 - `GET /api/me` happy path.

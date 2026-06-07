@@ -124,7 +124,7 @@ sequenceDiagram
     G->>V: GET sess:{sid}
     opt access_token within refresh window
         G->>A: POST /internal/refresh (Authorization Bearer gateway-service-token, body sid)
-        A->>A: Acquire per-sid lock, validate Client Credentials token (aud=oidc-reference-auth-internal)
+        A->>A: Acquire per-sid lock, validate Client Credentials token (configured internal audience)
         A->>K: POST /token  (grant_type=refresh_token)
         K-->>A: rotated access_token + refresh_token
         A->>V: UPDATE sess:{sid}

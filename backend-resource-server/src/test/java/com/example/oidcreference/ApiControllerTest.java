@@ -16,7 +16,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 class ApiControllerTest {
 
   private final ApiController controller =
-      new ApiController(Set.of("custom-gateway", "custom-service"), "custom-jobs");
+      new ApiController(Set.of("custom-gateway", "custom-service", "custom-jobs"), "custom-jobs");
 
   @Test
   void meDeniesAConfiguredServiceClient() {
@@ -43,6 +43,13 @@ class ApiControllerTest {
   void jobsRejectsAClientThatIsNotTheConfiguredJobsClient() {
     assertThatThrownBy(() -> controller.jobs(jwtWithAzp("custom-gateway")))
         .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
+  void constructorRejectsJobsClientOutsideServiceAllowlist() {
+    assertThatThrownBy(() -> new ApiController(Set.of("custom-gateway"), "custom-jobs"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("app.jobs-client-id");
   }
 
   private static Jwt jwtWithAzp(String azp) {

@@ -22,9 +22,8 @@
 --   6. Strip Cookie + hop-by-hop headers; inject Authorization: Bearer.
 --   7. Header_filter phase adds Cache-Control: no-store on the response.
 --
--- The plugin's identity (oidc-reference-api-gateway) and the CSRF
--- signing key are supplied via plugin conf in apisix.yaml. No secrets
--- are hard-coded in this module.
+-- The plugin's gateway-client identity and the CSRF signing key are supplied
+-- via plugin conf in apisix.yaml. No secrets are hard-coded in this module.
 --
 
 local core        = require("apisix.core")
@@ -55,7 +54,7 @@ local schema = {
     "valkey_host", "valkey_port", "auth_service_base",
     "idp_token_url", "gateway_client_id",
     "gateway_client_secret", "cookie_signing_key",
-    "refresh_window_seconds", "expected_audience",
+    "refresh_window_seconds",
   },
   properties = {
     valkey_host             = { type = "string" },
@@ -67,7 +66,6 @@ local schema = {
     gateway_client_secret   = { type = "string" },
     cookie_signing_key      = { type = "string" },                   -- std-base64-encoded 256-bit key
     refresh_window_seconds  = { type = "integer", default = 60 },
-    expected_audience       = { type = "string",  default = "oidc-reference-auth-internal" },
   },
 }
 

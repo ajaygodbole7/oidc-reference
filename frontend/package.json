@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test tests/e2e/auth.spec.ts",
     "check:bundle": "node scripts/check-bundle-size.js",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build && npm run check:bundle"
   },

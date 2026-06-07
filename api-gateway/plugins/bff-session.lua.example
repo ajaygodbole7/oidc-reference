@@ -18,8 +18,8 @@
 --      shared signing key (B4).
 --   5. Refresh delegation. When access_token is within the refresh
 --      window, POST /internal/refresh on the Auth Service with a Client
---      Credentials bearer (scope auth.internal,
---      aud=oidc-reference-auth-internal); then re-read sess:{sid}.
+--      Credentials bearer for the configured gateway client and
+--      internal-refresh audience; then re-read sess:{sid}.
 --   6. Fetch Metadata classification. Use Sec-Fetch-Mode / Sec-Fetch-Dest
 --      to distinguish top-level navigation from XHR/fetch when issuing
 --      the no-session response.

@@ -96,6 +96,8 @@ services:
       APP_COOKIE_SIGNING_KEY: ${CSRF_SIGNING_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
       CSRF_SIGNING_KEY: ${CSRF_SIGNING_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
       AUTH_CLIENT_SECRET: ${AUTH_CLIENT_SECRET:-LOCAL_DEV_AUTH_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY}
+      GATEWAY_CLIENT_ID: ${GATEWAY_CLIENT_ID:-oidc-reference-api-gateway}
+      INTERNAL_REFRESH_AUDIENCE: ${INTERNAL_REFRESH_AUDIENCE:-oidc-reference-auth-internal}
     depends_on:
       keycloak:
         condition: service_healthy
@@ -121,6 +123,8 @@ services:
       OIDC_ISSUER_URI: http://localhost:8080/realms/oidc-reference
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/oidc-reference/protocol/openid-connect/certs
       OIDC_AUDIENCE: oidc-reference-api
+      RS_SERVICE_CLIENT_IDS: ${RS_SERVICE_CLIENT_IDS:-oidc-reference-api-gateway,oidc-reference-service}
+      RS_JOBS_CLIENT_ID: ${RS_JOBS_CLIENT_ID:-oidc-reference-service}
     depends_on:
       keycloak:
         condition: service_healthy

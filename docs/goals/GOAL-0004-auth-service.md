@@ -11,8 +11,9 @@ role for the reference. It exposes `/auth/*` to the browser through the
 ingress, is the sole writer of `tx:{state}` and `sess:{sid}` in Valkey, holds
 the per-session refresh lock, and exposes `/internal/refresh` to the API
 Gateway as an OAuth Resource Server bound to the
-`oidc-reference-auth-internal` audience. The Auth Service never returns a
-token to the browser.
+configured internal-refresh audience (default
+`oidc-reference-auth-internal`). The Auth Service never returns a token to
+the browser.
 
 ## Purpose
 
@@ -64,7 +65,7 @@ SPEC-0001 §"Authorization Server Portability".
 | `/auth/me` | GET | session | Returns `{sub, preferred_username, name, email, roles}` from `sess:{sid}.claims`. Never returns a token. Response `Cache-Control: no-store`. |
 | `/auth/logout` | POST | session | Requires signed double-submit CSRF. DEL `sess:{sid}`. Clears `__Host-sid` and `XSRF-TOKEN`. Builds the Keycloak `end_session_endpoint` URL with `id_token_hint` **server-side** and stores it under a single-use opaque handle (`logout:{handle}`, TTL 2m). Returns a **same-origin** JSON body `{"logoutUrl":"/auth/logout/continue?lc={handle}"}`. The id_token never reaches SPA JS or any SPA-readable body. |
 | `/auth/logout/continue` | GET | none | Resolves the single-use `logout:{handle}` (GET-then-DEL) and `302`s to the Keycloak `end_session_endpoint` URL with `id_token_hint` and `Referrer-Policy: no-referrer`. Unknown/expired/missing handle → `302` to `/`. No session required; the opaque handle is the capability. See SPEC-0001 §"Auth Service Endpoints". |
-| `/internal/refresh` | POST | service token | Internal-network only (not reachable via ingress). OAuth Resource Server: validates bearer token (iss, sig, exp, `aud` contains `oidc-reference-auth-internal`, `azp`/`client_id`=`oidc-reference-api-gateway`, alg RS256). Acquires per-session refresh lock for `sid`. POST `grant_type=refresh_token` to Keycloak. Validates rotation. On Keycloak `invalid_grant` (refresh token expired/revoked, SSO max reached, or reuse — not distinguishable at the RP): emits the structured `refresh_token_rejected` / `session_invalidated` audit event, DEL session, returns 409. On success: updates `sess:{sid}`, returns `{refreshed_at, access_token_expires_at}`. See SPEC-0001 §7.1. |
+| `/internal/refresh` | POST | service token | Internal-network only (not reachable via ingress). OAuth Resource Server: validates bearer token (iss, sig, exp, `aud` contains the configured internal-refresh audience, `azp`/`client_id` equals the configured gateway client id, alg RS256). Local defaults are `oidc-reference-auth-internal` and `oidc-reference-api-gateway`. Acquires per-session refresh lock for `sid`. POST `grant_type=refresh_token` to Keycloak. Validates rotation. On Keycloak `invalid_grant` (refresh token expired/revoked, SSO max reached, or reuse — not distinguishable at the RP): emits the structured `refresh_token_rejected` / `session_invalidated` audit event, DEL session, returns 409. On success: updates `sess:{sid}`, returns `{refreshed_at, access_token_expires_at}`. See SPEC-0001 §7.1. |
 
 ## Session Cookie
 
@@ -134,7 +135,7 @@ SPEC-0001 §"Authorization Server Portability".
 - `./mvnw test` green.
 - App starts on port `8081` and reaches Keycloak + Valkey.
 - Login → callback → `/auth/me` end-to-end against local stack via the
-  ingress (Vite proxy in dev; Traefik in full Compose).
+  ingress (Vite proxy in dev; APISIX in full Compose).
 - Cookie has documented attributes (`SameSite=Lax`, `HttpOnly`) verified by
   integration test.
 - Callback returns a **direct 302** to `saved_request` (no landing page);
@@ -143,9 +144,9 @@ SPEC-0001 §"Authorization Server Portability".
   token or claim is stored in a framework-managed HTTP session.
 - Refresh rotation works; an `invalid_grant` on refresh invalidates the
   session and emits the structured `refresh_token_rejected` audit event.
-- `/internal/refresh` rejects calls without a valid
-  `oidc-reference-api-gateway` Client Credentials token whose audience
-  contains `oidc-reference-auth-internal`.
+- `/internal/refresh` rejects calls without a valid Client Credentials token
+  whose audience contains the configured internal-refresh audience and whose
+  `azp`/`client_id` equals the configured gateway client id.
 - Signed CSRF token tamper rejection: a token with a forged signature or a
   modified value is rejected; a valid token is accepted.
 - Logout deletes the session and returns a same-origin
@@ -209,7 +210,7 @@ Stop and report if:
 - Spring Boot `4.1.0-RC1`, Nimbus `oauth2-oidc-sdk`, or the chosen
   Redis-compatible client artifacts are unavailable.
 - Valkey image unavailable.
-- Keycloak `oidc-reference-auth` or `oidc-reference-api-gateway` client
-  missing or misconfigured.
+- Keycloak `oidc-reference-auth` or local gateway client
+  (`oidc-reference-api-gateway` by default) missing or misconfigured.
 - The realm-level `auth.internal` scope or the
-  `oidc-reference-auth-internal` audience mapper is missing.
+  configured internal-refresh audience mapper is missing.

@@ -187,10 +187,11 @@ except through documented configuration.
 - Protocol mappers (required):
   - `oidc-audience-mapper` on `api.audience` adds `oidc-reference-api` to
     `aud` for every access token that includes the scope.
-  - `oidc-audience-mapper` on `auth.internal` adds
-    `oidc-reference-auth-internal` to `aud` for every access token that
-    includes the scope. Used by `oidc-reference-api-gateway` to
-    authenticate to the Auth Service on `/internal/*`.
+  - `oidc-audience-mapper` on `auth.internal` adds the configured
+    internal-refresh audience to `aud` for every access token that includes
+    the scope. Local default: `oidc-reference-auth-internal`. Used by the
+    configured gateway client (local default `oidc-reference-api-gateway`)
+    to authenticate to the Auth Service on `/internal/*`.
   - `oidc-usermodel-realm-role-mapper` on user-bound clients emits
     `realm_access.roles` (Keycloak default; verify it is not removed).
 
@@ -216,16 +217,16 @@ except through documented configuration.
   `api.read`.
 - Secret: generated locally, supplied via env, gitignored.
 
-### API Gateway Client (`oidc-reference-api-gateway`)
+### API Gateway Client (`oidc-reference-api-gateway` Local Default)
 
 - Confidential. **Client Credentials only.** Service accounts enabled.
   Browser flows disabled. Direct access grants disabled. Standard flow
   disabled.
 - Default scopes: `auth.internal`.
 - Used by the APISIX `bff-session` plugin to obtain a service token whose
-  `aud` contains `oidc-reference-auth-internal`. The token is presented as
-  the Bearer credential on `POST /internal/refresh` calls to the Auth
-  Service.
+  `aud` contains the configured internal-refresh audience. The token is
+  presented as the Bearer credential on `POST /internal/refresh` calls to
+  the Auth Service.
 - Token cache: the Gateway holds a single in-process cached token per
   worker, refreshed proactively when remaining lifetime falls below 60s.
 - Secret: generated locally, supplied via env, gitignored.
@@ -327,7 +328,7 @@ protocol-relative, no leading slash, overlong, encoded backslash).
 
 | Path | Method | Auth | Purpose |
 |---|---|---|---|
-| `/internal/refresh` | POST | Client Credentials (Bearer JWT, `aud=oidc-reference-auth-internal`, `azp/client_id=oidc-reference-api-gateway`) | Auth Service endpoint, called by the API Gateway. Reachable only on the internal Compose network — never via the browser-facing ingress. Performs the refresh-token grant against Keycloak under a per-session lock, validates rotation, emits the `refresh_token_rejected` audit event on `invalid_grant`, and updates `sess:{sid}`. Full contract per §7.1. |
+| `/internal/refresh` | POST | Client Credentials (Bearer JWT, `aud` contains configured internal-refresh audience; `azp`/`client_id` equals configured gateway client id) | Auth Service endpoint, called by the API Gateway. Local defaults are `oidc-reference-auth-internal` and `oidc-reference-api-gateway`. Reachable only on the internal Compose network — never via the browser-facing ingress. Performs the refresh-token grant against Keycloak under a per-session lock, validates rotation, emits the `refresh_token_rejected` audit event on `invalid_grant`, and updates `sess:{sid}`. Full contract per §7.1. |
 
 ### Session Cookie
 
@@ -508,7 +509,7 @@ algorithm, and signing-key rotation contract.
 | API Gateway as SSRF | `/api/**` allowlist only in APISIX route config; no arbitrary upstream URLs |
 | Open redirect | Saved-request target is same-origin validated; Auth-Service-issued redirects use fixed or allowlisted targets |
 | Access token replay | Short access-token lifetime; audience binding |
-| Audience confusion | Auth Service validates `id_token.aud = oidc-reference-auth`; Auth Service `/internal/*` validates Bearer `aud` contains `oidc-reference-auth-internal` and `azp/client_id = oidc-reference-api-gateway`; RS validates `access_token.aud` contains `oidc-reference-api` |
+| Audience confusion | Auth Service validates `id_token.aud = oidc-reference-auth`; Auth Service `/internal/*` validates Bearer `aud` contains the configured internal-refresh audience and `azp/client_id` equals the configured gateway client id; RS validates `access_token.aud` contains the configured API audience |
 | Internal-RPC compromise | `/internal/refresh` reachable only on the internal Compose network; Bearer-validated Client Credentials with audience binding; per-session lock prevents concurrent refresh races |
 | CSRF signing-key compromise | 256-bit env-supplied secret, gitignored; documented rotation procedure with grace-window acceptance of the prior key (§7.3) |
 | Overbroad scopes | Per-client default scopes are least-privilege |
@@ -534,10 +535,11 @@ add a fourth service that violates them.
 
 - **Gateway → Auth Service.** Mutual non-trust at the transport level.
   Every call to `/internal/*` carries a Client Credentials bearer token
-  issued to the `oidc-reference-api-gateway` Keycloak client, validated
-  by Auth Service per the §7.1 contract (`iss`, `sig`, `exp`, `aud=
-  oidc-reference-auth-internal`, `azp/client_id=oidc-reference-api-
-  gateway`, `alg=RS256`). No shared secrets between services, no
+  issued to the configured gateway client, validated by Auth Service per
+  the §7.1 contract (`iss`, `sig`, `exp`, configured internal-refresh
+  `aud`, configured gateway `azp`/`client_id`, `alg=RS256`). Local
+  defaults are `oidc-reference-api-gateway` and
+  `oidc-reference-auth-internal`. No shared secrets between services, no
   trusted-network assumption.
 
 - **Gateway → Valkey, Auth Service → Valkey.** Shared single-tenant
@@ -584,8 +586,8 @@ restarting the worker processes.
    with no `Location` header.
 3. **Refresh check.** If `access_token_expires_at` is within 60s,
    call `POST /internal/refresh` on the Auth Service (§7.1) with the
-   cached `oidc-reference-api-gateway` service token. Map response codes
-   to browser-facing status per the §7.1 handling table. On 200, re-read
+   cached configured gateway-client service token. Map response codes to
+   browser-facing status per the §7.1 handling table. On 200, re-read
    `sess:{sid}` to pick up the rotated access token.
 4. **Signed CSRF validation.** On state-changing methods
    (`POST`/`PUT`/`DELETE`/`PATCH`), validate the signed double-submit
@@ -600,10 +602,11 @@ restarting the worker processes.
    `Transfer-Encoding`, `Upgrade`). Preserve the query string.
 
 **Service-token cache.** The plugin holds a single in-process cached
-service token per nginx worker (`oidc-reference-api-gateway` Client
-Credentials). Proactive refresh when remaining lifetime falls below 60s;
-serialized with a worker-local lock so concurrent requests do not trigger
-duplicate Keycloak calls. Invalidated on Auth Service 401 (per §7.1).
+service token per nginx worker for the configured gateway client
+(`oidc-reference-api-gateway` by default). Proactive refresh when
+remaining lifetime falls below 60s; serialized with a worker-local lock so
+concurrent requests do not trigger duplicate Keycloak calls. Invalidated
+on Auth Service 401 (per §7.1).
 
 **Timeouts and circuit breaker on `/internal/refresh`** per §7.1: connect
 1s, read 5s, rolling-window circuit breaker that distinguishes transport
@@ -634,8 +637,10 @@ Bearer-token validation requirements (Auth Service):
   - iss     = configured Keycloak issuer
   - sig     = valid signature per JWKS
   - exp     = not expired
-  - aud     contains "oidc-reference-auth-internal"
-  - azp or client_id = "oidc-reference-api-gateway"
+  - aud     contains configured internal-refresh audience
+              (default "oidc-reference-auth-internal")
+  - azp or client_id = configured gateway client id
+              (default "oidc-reference-api-gateway")
   - alg     = RS256
   - scope   contains "internal.refresh"  (if scope-based authorization
             is enabled; otherwise audience binding alone is sufficient)
@@ -933,9 +938,9 @@ cannot forge a valid signature.
   scope, role. Every check has a negative test.
 - Audience checks are token-type-specific: Auth Service validates
   `id_token.aud` against `oidc-reference-auth`; Auth Service `/internal/*`
-  validates Bearer `aud` contains `oidc-reference-auth-internal` and
-  `azp/client_id = oidc-reference-api-gateway`; RS validates
-  `access_token.aud` against `oidc-reference-api`.
+  validates Bearer `aud` contains the configured internal-refresh audience
+  and `azp/client_id` equals the configured gateway client id; RS validates
+  `access_token.aud` against the configured API audience.
 - Client Credentials demonstrated end-to-end without Auth Service or API
   Gateway involvement (service client → Keycloak → RS).
 - Every protected endpoint has positive and negative authorization tests.
@@ -958,8 +963,8 @@ cannot forge a valid signature.
   overlong, encoded backslash).
 - API Gateway `/internal/refresh` precondition: the Auth Service rejects
   any `/internal/refresh` call lacking a valid Bearer token whose `aud`
-  contains `oidc-reference-auth-internal` and whose `azp/client_id` is
-  `oidc-reference-api-gateway`.
+  contains the configured internal-refresh audience and whose
+  `azp/client_id` equals the configured gateway client id.
 - Signed CSRF token rejection on tamper: a token whose `token-value-base64`
   is modified but whose HMAC is unchanged is rejected; a token with a
   forged HMAC is rejected; only a token whose HMAC matches the recomputed
@@ -977,14 +982,15 @@ cannot forge a valid signature.
   reachable.
 - Auth Service client (`oidc-reference-auth`): confidential, PKCE `S256`
   required, refresh rotation enabled.
-- API Gateway client (`oidc-reference-api-gateway`): confidential, Client
-  Credentials only, service accounts enabled, browser flows disabled,
-  direct access grants disabled, default scope `auth.internal`.
+- API Gateway client (`oidc-reference-api-gateway` local default):
+  confidential, Client Credentials only, service accounts enabled, browser
+  flows disabled, direct access grants disabled, default scope
+  `auth.internal`.
 - Service client: cannot perform Authorization Code Flow.
 - `smoke.sh` issues a real service token via `curl` and asserts `aud`
   contains `oidc-reference-api` and `scope` contains `service.jobs`.
 - `smoke.sh` issues a real API Gateway service token via `curl` and asserts
-  `aud` contains `oidc-reference-auth-internal`.
+  `aud` contains the configured internal-refresh audience.
 
 **Auth Service**
 
@@ -1054,10 +1060,10 @@ cannot forge a valid signature.
   Bearer <access_token>`; inbound `Cookie` is stripped; hop-by-hop
   headers are stripped; query string is preserved.
 - Refresh delegation: when `access_token_expires_at` is within 60s, the
-  plugin calls `POST /internal/refresh` with the cached
-  `oidc-reference-api-gateway` service token. On 200 the plugin re-reads
-  `sess:{sid}` and proceeds. On 401 the plugin invalidates the cached
-  service token and retries once; second 401 → 502 to browser plus
+  plugin calls `POST /internal/refresh` with the cached configured gateway
+  client service token. On 200 the plugin re-reads `sess:{sid}` and
+  proceeds. On 401 the plugin invalidates the cached service token and
+  retries once; second 401 → 502 to browser plus
   Gateway audit event. On 404 → 401 to browser plus cookie expiry. On
   409 → 401 to browser plus Gateway audit event. On 502 → 503 to browser
   with `Retry-After: 1` (session not invalidated).
@@ -1171,8 +1177,8 @@ Wire contracts the alternate gateway MUST satisfy:
    base64url-no-padding output, `.` separator.
 4. **Refresh delegation.** When `sess.access_token_expires_at` is within
    the refresh window, `POST /internal/refresh` with a Client-Credentials
-   bearer carrying `aud=oidc-reference-auth-internal` and `azp=<gateway
-   client_id>`. Handle the §7.1 status table.
+   bearer carrying the configured internal-refresh audience and
+   `azp=<configured gateway client id>`. Handle the §7.1 status table.
 5. **No-session response shape.** XHR → `401`. Top-level document
    navigation → `302 /auth/login?return_to=<original URL>`. Classification
    via `Sec-Fetch-Mode`/`Sec-Fetch-Dest` with `Accept` as the fallback.

@@ -28,6 +28,10 @@ class ApiController {
       @Value("${app.jobs-client-id}") String jobsClientId) {
     this.serviceClients = Set.copyOf(serviceClients);
     this.jobsClientId = jobsClientId;
+    if (!this.serviceClients.contains(this.jobsClientId)) {
+      throw new IllegalArgumentException(
+          "app.jobs-client-id must be included in app.service-client-ids");
+    }
   }
 
   @GetMapping("/public")

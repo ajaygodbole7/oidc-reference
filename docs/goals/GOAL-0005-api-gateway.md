@@ -96,7 +96,8 @@ following pipeline:
 ### Client-Credentials token cache
 
 The Gateway holds a single in-process cache entry for its
-`oidc-reference-api-gateway` service token. Discipline:
+configured gateway-client service token (local default
+`oidc-reference-api-gateway`). Discipline:
 
 - Fetched lazily on first need; cached across requests.
 - Refreshed **proactively** when remaining lifetime < threshold
@@ -127,9 +128,9 @@ The Gateway holds a single in-process cache entry for its
 - Inbound `Cookie` header is stripped before the upstream call; the
   Resource Server must never see a cookie.
 - Hop-by-hop headers stripped per RFC 7230 §6.1.
-- The Gateway is itself a confidential Keycloak client
-  (`oidc-reference-api-gateway`); secret supplied via env (per E2),
-  gitignored.
+- The Gateway is itself a confidential client; client id and secret supplied
+  via env (per E2), gitignored. Local default client id:
+  `oidc-reference-api-gateway`.
 - The CSRF signing key is shared with the Auth Service via env; key
   rotation must accept the old key during a grace window so rolling
   restarts of either service do not break in-flight sessions.
@@ -204,5 +205,5 @@ Stop and report if:
   support the operations the plugin needs.
 - The Auth Service `/internal/refresh` endpoint contract diverges from
   SPEC-0001 §7.1 in a way that breaks the Gateway-side handling table.
-- The `oidc-reference-api-gateway` Keycloak client or the `auth.internal`
-  scope is missing.
+- The configured gateway client (`oidc-reference-api-gateway` by default) or
+  the `auth.internal` scope is missing.

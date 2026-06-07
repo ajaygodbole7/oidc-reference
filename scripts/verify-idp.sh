@@ -23,7 +23,11 @@ docker compose config >/dev/null
 # probe and assert the rendered config reflects it (a hardcoded value would not).
 probe_pw="__sentinel_probe__"
 rendered_cfg="$(mktemp)"
-trap 'rm -f "$rendered_cfg"' EXIT
+cleanup() {
+  docker compose down --remove-orphans >/dev/null 2>&1 || true
+  rm -f "$rendered_cfg"
+}
+trap cleanup EXIT INT TERM
 KC_BOOTSTRAP_ADMIN_PASSWORD="$probe_pw" docker compose config --format json >"$rendered_cfg"
 node - "$rendered_cfg" "$probe_pw" <<'NODE'
 const fs = require("fs");
@@ -47,5 +51,6 @@ console.log("authorization-server compose security checks passed (loopback bind 
 NODE
 
 SMOKE_SKIP_DISCOVERY=1 tests/smoke.sh
+docker compose down --remove-orphans >/dev/null 2>&1 || true
 docker compose up -d
 tests/smoke.sh

@@ -54,8 +54,8 @@
 #   cookie_signing_key      : base64-encoded 256-bit HMAC key, SHARED
 #                             with the Auth Service (SPEC §7.3).
 #   refresh_window_seconds  : 60 (per SPEC §"Refresh and Rotation").
-#   expected_audience       : oidc-reference-auth-internal (informational;
-#                             actual aud check happens at Auth Service).
+#   internal audience       : enforced by Auth Service; configured there via
+#                             INTERNAL_REFRESH_AUDIENCE.
 
 upstreams:
   - id: resource-server
@@ -96,7 +96,6 @@ routes:
         gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
         cookie_signing_key: ${CSRF_SIGNING_KEY}
         refresh_window_seconds: 60
-        expected_audience: oidc-reference-auth-internal
 
   - id: api-user-data
     uri: /api/user-data
@@ -112,7 +111,6 @@ routes:
         gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
         cookie_signing_key: ${CSRF_SIGNING_KEY}
         refresh_window_seconds: 60
-        expected_audience: oidc-reference-auth-internal
 
   - id: api-admin
     uri: /api/admin
@@ -128,7 +126,6 @@ routes:
         gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
         cookie_signing_key: ${CSRF_SIGNING_KEY}
         refresh_window_seconds: 60
-        expected_audience: oidc-reference-auth-internal
 
   # Test harness only. The Resource Server endpoint exists only when the
   # `gateway-test` Spring profile is active; default/prod profile returns
@@ -149,7 +146,6 @@ routes:
         gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
         cookie_signing_key: ${CSRF_SIGNING_KEY}
         refresh_window_seconds: 60
-        expected_audience: oidc-reference-auth-internal
 
   # ---- /auth/* passthrough with rate-limiting on the kickoff edge ----
   # The Auth Service owns its own auth on /auth/* (session cookie + its
