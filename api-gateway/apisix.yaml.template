@@ -37,6 +37,10 @@
 #                             MUST agree byte-for-byte.
 #   ${APISIX_IDP_TOKEN_URL}   Backchannel token endpoint used by the
 #                             gateway's Client Credentials refresh RPC.
+#   ${GATEWAY_CLIENT_ID}      Confidential client id the gateway
+#                             authenticates as for the refresh RPC.
+#                             Default oidc-reference-api-gateway; set to
+#                             the id the target IdP assigns.
 #
 # Plugin config keys (per plugins/bff-session.lua schema):
 #   valkey_host             : Valkey hostname on the Compose network.
@@ -88,7 +92,7 @@ routes:
         valkey_port: 6379
         auth_service_base: http://auth-service:8081
         idp_token_url: ${APISIX_IDP_TOKEN_URL}
-        gateway_client_id: oidc-reference-api-gateway
+        gateway_client_id: ${GATEWAY_CLIENT_ID}
         gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
         cookie_signing_key: ${CSRF_SIGNING_KEY}
         refresh_window_seconds: 60
@@ -104,7 +108,7 @@ routes:
         valkey_port: 6379
         auth_service_base: http://auth-service:8081
         idp_token_url: ${APISIX_IDP_TOKEN_URL}
-        gateway_client_id: oidc-reference-api-gateway
+        gateway_client_id: ${GATEWAY_CLIENT_ID}
         gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
         cookie_signing_key: ${CSRF_SIGNING_KEY}
         refresh_window_seconds: 60
@@ -120,7 +124,7 @@ routes:
         valkey_port: 6379
         auth_service_base: http://auth-service:8081
         idp_token_url: ${APISIX_IDP_TOKEN_URL}
-        gateway_client_id: oidc-reference-api-gateway
+        gateway_client_id: ${GATEWAY_CLIENT_ID}
         gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
         cookie_signing_key: ${CSRF_SIGNING_KEY}
         refresh_window_seconds: 60
@@ -141,7 +145,7 @@ routes:
         valkey_port: 6379
         auth_service_base: http://auth-service:8081
         idp_token_url: ${APISIX_IDP_TOKEN_URL}
-        gateway_client_id: oidc-reference-api-gateway
+        gateway_client_id: ${GATEWAY_CLIENT_ID}
         gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
         cookie_signing_key: ${CSRF_SIGNING_KEY}
         refresh_window_seconds: 60

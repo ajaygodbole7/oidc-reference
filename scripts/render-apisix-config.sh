@@ -34,8 +34,15 @@ fi
 APISIX_IDP_TOKEN_URL="${APISIX_IDP_TOKEN_URL:-http://keycloak:8080/realms/oidc-reference/protocol/openid-connect/token}"
 export APISIX_IDP_TOKEN_URL
 
+# The gateway's confidential client id. Default is the local Keycloak client
+# name; override (alongside the Auth Service's GATEWAY_CLIENT_ID) when the IdP
+# assigns a different id. The gateway authenticates AS this client for the
+# /internal/refresh client-credentials call.
+GATEWAY_CLIENT_ID="${GATEWAY_CLIENT_ID:-oidc-reference-api-gateway}"
+export GATEWAY_CLIENT_ID
+
 missing=
-for var in GATEWAY_CLIENT_SECRET CSRF_SIGNING_KEY APISIX_IDP_TOKEN_URL; do
+for var in GATEWAY_CLIENT_SECRET CSRF_SIGNING_KEY APISIX_IDP_TOKEN_URL GATEWAY_CLIENT_ID; do
   eval "value=\${$var:-}"
   if [ -z "$value" ]; then
     missing="$missing $var"
@@ -59,7 +66,7 @@ if ! command -v envsubst >/dev/null 2>&1; then
 fi
 
 # shellcheck disable=SC2016
-envsubst '${GATEWAY_CLIENT_SECRET} ${CSRF_SIGNING_KEY} ${APISIX_IDP_TOKEN_URL}' \
+envsubst '${GATEWAY_CLIENT_SECRET} ${CSRF_SIGNING_KEY} ${APISIX_IDP_TOKEN_URL} ${GATEWAY_CLIENT_ID}' \
   < "$TEMPLATE" > "$RENDERED"
 
 # Startup guard: a REPLACE_ME_ in the rendered file means an unsubstituted
@@ -77,7 +84,7 @@ fi
 
 # Also refuse empty values that envsubst may have collapsed into nothing
 # for keys we know must be non-empty.
-for key in gateway_client_secret cookie_signing_key idp_token_url; do
+for key in gateway_client_secret cookie_signing_key idp_token_url gateway_client_id; do
   # YAML key followed by zero-or-more spaces and then end-of-line is
   # the empty-string footgun. Real values are non-empty.
   if grep -E "^[[:space:]]+${key}:[[:space:]]*$" "$RENDERED" >/dev/null 2>&1; then

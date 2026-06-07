@@ -68,7 +68,9 @@ class AuthorizationCodeTokenRefreshClientTest {
         Set.of("openid"),
         java.util.List.of("realm_access", "roles"),
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        requireRotation);
+        requireRotation,
+        "oidc-reference-api-gateway",
+        "oidc-reference-auth-internal");
   }
 
   // Stub HTTP-less subclass: pretends the AS returned `tokens`. The default

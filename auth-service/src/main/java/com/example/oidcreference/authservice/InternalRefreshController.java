@@ -26,8 +26,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/internal")
 class InternalRefreshController {
   private static final Logger log = LoggerFactory.getLogger(InternalRefreshController.class);
-  private static final String EXPECTED_AUDIENCE = "oidc-reference-auth-internal";
-  private static final String EXPECTED_CLIENT_ID = "oidc-reference-api-gateway";
 
   private final StateStore stateStore;
   private final JsonCodec json;
@@ -55,7 +53,8 @@ class InternalRefreshController {
       SecurityAudit.event(request, 401, "auth_denied", "missing_bearer");
       return problem(401, "missing bearer token");
     }
-    if (!hasExpectedAudience(callerJwt) || !hasExpectedCaller(callerJwt)) {
+    if (!hasExpectedAudience(callerJwt, props.internalAudience())
+        || !hasExpectedCaller(callerJwt, props.gatewayClientId())) {
       SecurityAudit.event(request, 401, "auth_denied", "bearer_audience_or_client_mismatch");
       return problem(401, "bearer token audience or client mismatch");
     }
@@ -194,18 +193,20 @@ class InternalRefreshController {
     });
   }
 
-  private static boolean hasExpectedAudience(Jwt jwt) {
+  // Package-private + parameterized so the configurable identity is unit-tested
+  // directly (InternalRefreshIdentityCheckTest) without a Spring context.
+  static boolean hasExpectedAudience(Jwt jwt, String expectedAudience) {
     List<String> aud = jwt.getAudience();
-    return aud != null && aud.contains(EXPECTED_AUDIENCE);
+    return aud != null && aud.contains(expectedAudience);
   }
 
-  private static boolean hasExpectedCaller(Jwt jwt) {
+  static boolean hasExpectedCaller(Jwt jwt, String expectedClientId) {
     var azp = jwt.getClaimAsString("azp");
-    if (EXPECTED_CLIENT_ID.equals(azp)) {
+    if (expectedClientId.equals(azp)) {
       return true;
     }
     var clientId = jwt.getClaimAsString("client_id");
-    return EXPECTED_CLIENT_ID.equals(clientId);
+    return expectedClientId.equals(clientId);
   }
 
   private static ResponseEntity<ProblemDetail> problem(int status, String detail) {

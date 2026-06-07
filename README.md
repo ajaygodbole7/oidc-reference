@@ -48,12 +48,12 @@ application code branches on `iss` / `aud` / scopes / claim paths /
 endpoints from `.well-known/openid-configuration` — never on the provider
 brand. Provider differences live in configuration: `app.roles-claim-path`
 for the claim shape, env vars for the issuer and client credentials. Swapping
-the provider-facing OIDC surface (issuer, endpoints, audience, scopes, roles)
-is a config exercise — proven by the alternate-realm gate `just e2e-portability`.
-A few internal trust identifiers (the gateway/service client ids and the
-internal refresh audience) are fixed to this reference's topology and set per
-deployment; SPEC-0001 Appendix A and `provider-adapters.md` §"Portability
-scope" enumerate exactly what changes.
+a provider is a config exercise — issuer, endpoints, audience, scopes, roles,
+**and** the internal trust identifiers (gateway/service client ids, internal
+refresh audience) are all env knobs with local-Keycloak defaults; nothing
+provider-facing is baked into Java or APISIX. The alternate-realm gate
+`just e2e-portability` proves the token-shape swap end-to-end; SPEC-0001
+Appendix A and `provider-adapters.md` §"Portability scope" enumerate every knob.
 
 ## Architecture
 

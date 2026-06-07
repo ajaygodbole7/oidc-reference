@@ -74,5 +74,21 @@ public record AuthProperties(
      * rotation + reuse detection — keep this true; silently reusing an
      * un-rotated refresh token would defeat the reuse-detection chain.
      */
-    @NotNull @DefaultValue("true") Boolean refreshRequireRotation) {
+    @NotNull @DefaultValue("true") Boolean refreshRequireRotation,
+    /**
+     * Client id of the API Gateway's confidential client, as the IdP issues it.
+     * The {@code /internal/refresh} caller check requires the bearer's {@code
+     * azp}/{@code client_id} to equal this. Deployment topology, not a
+     * per-provider OIDC value — real IdPs (Okta/Auth0/Entra) assign client ids
+     * you do not choose, so this must be configurable. Default is the local
+     * Keycloak client name.
+     */
+    @NotBlank @DefaultValue("oidc-reference-api-gateway") String gatewayClientId,
+    /**
+     * Audience the API Gateway's Client-Credentials token must carry for
+     * {@code /internal/refresh}. Enforced at the Order-1 filter and re-asserted
+     * in the controller. Configurable for the same reason as
+     * {@link #gatewayClientId}. Default is the local reference value.
+     */
+    @NotBlank @DefaultValue("oidc-reference-auth-internal") String internalAudience) {
 }

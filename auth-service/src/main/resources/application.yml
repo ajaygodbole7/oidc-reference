@@ -38,6 +38,12 @@ app:
   #   Okta:     [groups]
   #   Auth0:    [https://your-app/roles]    (custom-namespaced claim)
   roles-claim-path: ${OIDC_ROLES_CLAIM_PATH:realm_access,roles}
+  # Internal trust identifiers — deployment topology, not per-provider OIDC
+  # values (real IdPs assign client ids you don't choose). The gateway's
+  # confidential client id and the audience its CC token must carry for
+  # /internal/refresh. Defaults are this reference's local Keycloak values.
+  gateway-client-id: ${GATEWAY_CLIENT_ID:oidc-reference-api-gateway}
+  internal-audience: ${INTERNAL_REFRESH_AUDIENCE:oidc-reference-auth-internal}
   session-refresh-window: 60s
   # The default below is a literal sentinel — 32 zero-bytes base64-encoded.
   # SignedCsrfSupport.hmacSha256 requires standard base64, which forbids the

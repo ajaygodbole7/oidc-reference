@@ -1131,8 +1131,9 @@ Changes required:
 | `compose.yaml` keycloak service | `compose.yaml` | Remove the Keycloak service (which uses embedded H2 via `KC_DB=dev-file` — there is no separate database) if the target IdP is hosted (Auth0, Okta) or replaced with a different local container (Hydra, Dex). The realm-smoke script `authorization-server/tests/smoke.sh` is Keycloak-specific and would be deleted or rewritten. |
 | `idp_token_url` in `apisix.yaml.template` | per-route plugin config | The Lua plugin field is IdP-vendor neutral; just point it at the new IdP's token endpoint. |
 | RS audience name | `oidc-reference-realm.json` audience-mapper config OR the equivalent on the new IdP | The RS expects `oidc-reference-api` in `aud`; the IdP must be configured to add that value. |
-| Internal-refresh audience | same | Gateway's CC token must carry `oidc-reference-auth-internal` in `aud`; configure equivalent on the new IdP. |
-| Gateway / service client identity | hardcoded in `apisix.yaml.template`, `InternalRefreshController` (`EXPECTED_CLIENT_ID`), `ApiController` (`SERVICE_CLIENTS`) | This reference's internal trust topology, not a per-provider OIDC value. The gateway's confidential client must be named `oidc-reference-api-gateway` on the new IdP (and the RS service-account allowlist matched), OR these fixed identifiers edited. See `provider-adapters.md` §"Portability scope" — config-only covers the provider-facing OIDC surface, not these fixed identifiers. |
+| `INTERNAL_REFRESH_AUDIENCE` | Auth Service env | Audience the gateway's CC token must carry for `/internal/refresh`. Default `oidc-reference-auth-internal`; set to whatever the new IdP issues for the gateway client. |
+| `GATEWAY_CLIENT_ID` | Auth Service env + APISIX render | The gateway's confidential client id — the Auth Service requires it in the caller's `azp`/`client_id`, and APISIX authenticates as it. Real IdPs assign client ids you don't choose, so this is a config knob (default `oidc-reference-api-gateway`), set in both places. |
+| `RS_SERVICE_CLIENT_IDS` / `RS_JOBS_CLIENT_ID` | Resource Server env | Service-account allowlist (denied on `/api/me`) and the single client allowed to `POST /api/jobs`. Defaults are the local Keycloak client names. |
 
 What does NOT change:
 

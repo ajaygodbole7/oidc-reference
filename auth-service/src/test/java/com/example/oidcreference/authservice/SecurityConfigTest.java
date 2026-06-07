@@ -84,7 +84,7 @@ class SecurityConfigTest {
   void internalJwtValidatorAcceptsKeycloakStringAudience() {
     Jwt jwt = internalJwt("http://idp.example", "oidc-reference-auth-internal");
 
-    assertThat(SecurityConfig.internalJwtValidator("http://idp.example").validate(jwt).hasErrors())
+    assertThat(SecurityConfig.internalJwtValidator("http://idp.example", "oidc-reference-auth-internal").validate(jwt).hasErrors())
         .isFalse();
   }
 
@@ -93,7 +93,7 @@ class SecurityConfigTest {
     Jwt jwt = internalJwt(
         "http://idp.example", List.of("other-audience", "oidc-reference-auth-internal"));
 
-    assertThat(SecurityConfig.internalJwtValidator("http://idp.example").validate(jwt).hasErrors())
+    assertThat(SecurityConfig.internalJwtValidator("http://idp.example", "oidc-reference-auth-internal").validate(jwt).hasErrors())
         .isFalse();
   }
 
@@ -101,7 +101,7 @@ class SecurityConfigTest {
   void internalJwtValidatorRejectsWrongAudience() {
     Jwt jwt = internalJwt("http://idp.example", "oidc-reference-api");
 
-    assertThat(SecurityConfig.internalJwtValidator("http://idp.example").validate(jwt).hasErrors())
+    assertThat(SecurityConfig.internalJwtValidator("http://idp.example", "oidc-reference-auth-internal").validate(jwt).hasErrors())
         .isTrue();
   }
 
@@ -109,7 +109,20 @@ class SecurityConfigTest {
   void internalJwtValidatorRejectsArrayWithoutExpectedAudience() {
     Jwt jwt = internalJwt("http://idp.example", List.of("oidc-reference-api", "other-api"));
 
-    assertThat(SecurityConfig.internalJwtValidator("http://idp.example").validate(jwt).hasErrors())
+    assertThat(SecurityConfig.internalJwtValidator("http://idp.example", "oidc-reference-auth-internal").validate(jwt).hasErrors())
+        .isTrue();
+  }
+
+  @Test
+  void internalJwtValidatorHonorsAConfiguredNonDefaultAudience() {
+    // A non-default internal audience must validate, and the shipped default
+    // must be rejected under that config — proving the value is config-driven,
+    // not pinned to oidc-reference-auth-internal.
+    assertThat(SecurityConfig.internalJwtValidator("http://idp.example", "custom-internal-aud")
+            .validate(internalJwt("http://idp.example", "custom-internal-aud")).hasErrors())
+        .isFalse();
+    assertThat(SecurityConfig.internalJwtValidator("http://idp.example", "custom-internal-aud")
+            .validate(internalJwt("http://idp.example", "oidc-reference-auth-internal")).hasErrors())
         .isTrue();
   }
 

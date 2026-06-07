@@ -131,7 +131,9 @@ class SecretSentinelValidatorTest {
         Set.of("openid"),
         java.util.List.of("realm_access", "roles"),
         cookieKey,
-        true);
+        true,
+        "oidc-reference-api-gateway",
+        "oidc-reference-auth-internal");
   }
 
   @SuppressWarnings("unused")

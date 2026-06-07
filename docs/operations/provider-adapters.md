@@ -5,27 +5,34 @@ only the API Gateway, the Auth Service is the confidential OIDC client, and the
 Resource Server validates standard JWT claims. Keycloak is the local reference
 Authorization Server, not a code dependency.
 
-The promise is configuration-only swap of the **provider-facing OIDC surface** —
-issuer, endpoints, audience, scopes, and role-claim path — for a standard OIDC
-provider, demonstrated end-to-end by the alternate-claim Keycloak realm gate
-(`just e2e-portability`). What is **not** config-driven is this reference's
-internal trust topology: the gateway↔Auth-Service client identity, the internal
-refresh audience, and the Resource Server's service-account allowlist are fixed
-to the identifiers this reference ships and would be set per deployment. If an
-IdP requires application-code branches by provider brand, that provider is
-outside the current reference contract.
+The promise is configuration-only provider swap for a standard OIDC provider:
+the issuer, endpoints, audience, scopes, role-claim path, **and** the internal
+trust identifiers (the gateway's client id, the internal-refresh audience, and
+the Resource Server's service-account allowlist) are all env-configurable. No
+provider-facing identifier is baked into Java or APISIX. The alternate-claim
+Keycloak realm gate (`just e2e-portability`) proves a config-only swap of the
+token shape end-to-end. If an IdP requires application-code branches by provider
+brand, that provider is outside the current reference contract.
 
 ### Portability scope
 
-| Config-driven (proven by `just e2e-portability`) | Fixed to this reference's topology (set per deployment) |
-|---|---|
-| Issuer (`OIDC_ISSUER_URI`), endpoints (`APP_*_URI`) | Gateway client id (`oidc-reference-api-gateway`) |
-| API audience (`OIDC_AUDIENCE`) | Internal refresh audience (`oidc-reference-auth-internal`) |
-| Role-claim path (`OIDC_ROLES_CLAIM_PATH`), scopes (`OIDC_SCOPES`) | RS service-account allowlist (`ApiController.SERVICE_CLIENTS`) |
+Everything an IdP swap touches is configuration. The defaults are this
+reference's local Keycloak names — real IdPs (Okta/Auth0/Entra) assign client
+ids you don't choose, so the trust identifiers are knobs, not constants.
 
-To run this reference against a real third-party IdP, you would additionally set
-those topology identifiers to match the clients you register there; they are
-hardcoded here because a single reference deployment has exactly one of each.
+| Config knob | Default | Env var |
+|---|---|---|
+| Issuer / endpoints | local Keycloak | `OIDC_ISSUER_URI`, `APP_*_URI` |
+| API audience | `oidc-reference-api` | `OIDC_AUDIENCE` |
+| Role-claim path / scopes | `realm_access,roles` / Keycloak scopes | `OIDC_ROLES_CLAIM_PATH`, `OIDC_SCOPES` |
+| Gateway client id | `oidc-reference-api-gateway` | `GATEWAY_CLIENT_ID` (Auth Service + APISIX render) |
+| Internal-refresh audience | `oidc-reference-auth-internal` | `INTERNAL_REFRESH_AUDIENCE` (Auth Service) |
+| RS service-account allowlist | `oidc-reference-api-gateway,oidc-reference-service` | `RS_SERVICE_CLIENT_IDS` |
+| RS jobs client id | `oidc-reference-service` | `RS_JOBS_CLIENT_ID` |
+
+What stays Keycloak-specific is provisioning *format*, not identity values: the
+realm seed JSON and the Keycloak smoke script are replaced wholesale by the
+target IdP's own provisioning (Terraform, Management API, etc.).
 
 ## Supported Configuration Surface
 
@@ -43,6 +50,10 @@ provider-specific overlay.
 | `AUTH_CLIENT_SECRET` | Auth Service | Confidential OIDC client secret. |
 | `OIDC_SCOPES` | Auth Service | Comma-separated requested scopes. Defaults to the local Keycloak scopes. |
 | `OIDC_ROLES_CLAIM_PATH` | Auth Service, Resource Server | Comma-separated claim path for roles/groups, for example `realm_access,roles` or `groups`. |
+| `GATEWAY_CLIENT_ID` | Auth Service, APISIX | Client id the gateway authenticates as for `/internal/refresh`, and the value the Auth Service requires in the caller's `azp`/`client_id`. Set in both. Default `oidc-reference-api-gateway`. |
+| `INTERNAL_REFRESH_AUDIENCE` | Auth Service | Audience the gateway's Client-Credentials token must carry for `/internal/refresh`. Default `oidc-reference-auth-internal`. |
+| `RS_SERVICE_CLIENT_IDS` | Resource Server | Comma-separated client ids treated as service accounts (denied on `/api/me`). Default `oidc-reference-api-gateway,oidc-reference-service`. |
+| `RS_JOBS_CLIENT_ID` | Resource Server | The single service client authorized to `POST /api/jobs`. Default `oidc-reference-service`. |
 | `OIDC_AUDIENCE` | Resource Server | Required access-token audience for `/api/**`. |
 | `GATEWAY_CLIENT_SECRET` | APISIX | API Gateway client-credentials secret for `/internal/refresh`. |
 | `CSRF_SIGNING_KEY` | Auth Service, APISIX | Shared 256-bit Base64 HMAC key for signed double-submit CSRF. |

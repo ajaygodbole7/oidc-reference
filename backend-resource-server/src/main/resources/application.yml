@@ -16,6 +16,13 @@ spring:
 app:
   audience: ${OIDC_AUDIENCE:oidc-reference-api}
   roles-claim-path: ${OIDC_ROLES_CLAIM_PATH:realm_access,roles}
+  # Service-account client ids are deployment topology, not a per-provider OIDC
+  # value (Okta/Auth0/Entra assign client ids you don't choose). Defaults are
+  # the local Keycloak client names. service-client-ids is the allowlist that
+  # is denied on /api/me (user identity required); jobs-client-id is the single
+  # service client authorized to POST /api/jobs.
+  service-client-ids: ${RS_SERVICE_CLIENT_IDS:oidc-reference-api-gateway,oidc-reference-service}
+  jobs-client-id: ${RS_JOBS_CLIENT_ID:oidc-reference-service}
 
 # Actuator is bound to localhost on a dedicated management port. The main
 # /api/** filter chain ends in anyRequest().denyAll(), so colocating actuator

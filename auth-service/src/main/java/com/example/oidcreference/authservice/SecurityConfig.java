@@ -26,7 +26,6 @@ import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWrite
 //  CSRF, cookies, and session lifecycle are owned by AuthController.
 @Configuration
 class SecurityConfig {
-  private static final String INTERNAL_AUDIENCE = "oidc-reference-auth-internal";
 
   @Bean
   @Order(1)
@@ -74,23 +73,27 @@ class SecurityConfig {
     //   - DelegatingOAuth2TokenValidator composes them and aggregates errors.
     // Spring's stack stays canonical so a future Spring Security bump picks
     // up upstream fixes (e.g., timestamp-skew handling) without us re-tracing.
-    decoder.setJwtValidator(internalJwtValidator(props.issuerUri().toString()));
+    decoder.setJwtValidator(
+        internalJwtValidator(props.issuerUri().toString(), props.internalAudience()));
     return decoder;
   }
 
-  static OAuth2TokenValidator<Jwt> internalJwtValidator(String issuerUri) {
+  // internalAudience is parameterized (not a constant) so the configurable
+  // value is enforced at the filter and unit-tested with a non-default audience
+  // (SecurityConfigTest).
+  static OAuth2TokenValidator<Jwt> internalJwtValidator(String issuerUri, String internalAudience) {
     OAuth2TokenValidator<Jwt> defaults = JwtValidators.createDefaultWithIssuer(issuerUri);
-    OAuth2TokenValidator<Jwt> audience =
-        new JwtClaimValidator<>(JwtClaimNames.AUD, SecurityConfig::hasInternalAudience);
+    OAuth2TokenValidator<Jwt> audience = new JwtClaimValidator<>(
+        JwtClaimNames.AUD, aud -> hasInternalAudience(aud, internalAudience));
     return new DelegatingOAuth2TokenValidator<>(defaults, audience);
   }
 
-  private static boolean hasInternalAudience(Object aud) {
+  static boolean hasInternalAudience(Object aud, String expected) {
     if (aud instanceof String value) {
-      return INTERNAL_AUDIENCE.equals(value);
+      return expected.equals(value);
     }
     if (aud instanceof Collection<?> values) {
-      return values.stream().anyMatch(INTERNAL_AUDIENCE::equals);
+      return values.stream().anyMatch(expected::equals);
     }
     return false;
   }
