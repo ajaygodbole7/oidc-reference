@@ -1,0 +1,72 @@
+#!/usr/bin/env sh
+set -eu
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "$SCRIPT_DIR/lib/common.sh"
+ROOT="$(repo_root "$SCRIPT_DIR")"
+cd "$ROOT"
+
+# Authenticated full-stack E2E gate — the run that actually exercises login →
+# callback → /auth/me (roles) → API call → logout, and asserts NO token reaches
+# the browser. This is the gate that catches the class of bug a mock-heavy unit
+# suite misses (e.g. realm-claim-vs-code mismatches, id_token leaking to JS).
+#
+# It brings the WHOLE stack up from a clean slate (so a changed realm re-imports),
+# runs the Playwright authenticated suite against real Keycloak, then tears down.
+# Unlike verify-frontend.sh's Playwright run, the authenticated tests are NOT
+# skipped here — E2E_FULL_STACK=1 is set.
+require_cmd docker "Install Docker Desktop or Colima."
+require_cmd node   "Install Node 20+ (e.g. via nvm)."
+
+DEV_CSRF_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+
+# Local single-run lock. The whole stack binds fixed host ports (9080, Keycloak,
+# Valkey, …), so two concurrent authenticated runs would collide. mkdir of a lock
+# DIR is the atomic primitive: it fails if the dir already exists (POSIX-atomic),
+# so there is no check-then-create race. .local/ is gitignored.
+LOCK="$ROOT/.local/e2e-auth.lock"
+mkdir -p "$ROOT/.local"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  die "another authenticated E2E run is active (lock: $LOCK) — wait for it or remove the lock"
+fi
+
+# Teardown is deterministic: tear the stack down AND release the lock on any exit
+# (success, failure, or signal). Order: stack first, then lock, so the port-owning
+# run is fully gone before the lock frees.
+cleanup() {
+  _status=$?
+  trap - EXIT INT TERM
+  if [ "$_status" -ne 0 ]; then
+    warn "authenticated E2E failed; recent APISIX plugin diagnostics follow"
+    docker compose logs --no-color --tail=220 apisix 2>/dev/null \
+      | grep 'bff-session.lua' || true
+  fi
+  sh "$SCRIPT_DIR/down.sh" >/dev/null 2>&1 || true
+  rmdir "$LOCK" 2>/dev/null || rm -rf "$LOCK" 2>/dev/null || true
+  exit "$_status"
+}
+trap cleanup EXIT INT TERM
+
+# Clean slate first so a changed Keycloak realm is re-imported (the container is
+# removed on down, and KC_DB=dev-file rebuilds from the mounted realm on up).
+info "tearing down any existing stack for a clean slate"
+sh "$SCRIPT_DIR/down.sh" >/dev/null 2>&1 || true
+
+RESOURCE_SERVER_SPRING_PROFILES_ACTIVE=gateway-test sh "$SCRIPT_DIR/up.sh"
+
+info "running authenticated browser E2E (Playwright, full stack)"
+# Run ONLY the dedicated reference suite (login → callback → /auth/me → API →
+# logout, and the no-token-in-browser assertion). --workers=1 keeps it serial:
+# the suite drives one shared real stack, not parallel isolated workers.
+(
+  cd "$ROOT/frontend"
+  E2E_FULL_STACK=1 \
+    VITE_AUTH_TARGET=http://127.0.0.1:9080 \
+    VITE_API_TARGET=http://127.0.0.1:9080 \
+    npx playwright test tests/e2e/reference-flow.spec.ts --workers=1
+)
+
+info "running gateway refresh-delegation proof (real login session)"
+RUN_LIVE_GATEWAY_TESTS=1 RUN_REFRESH_TESTS=1 CSRF_SIGNING_KEY="$DEV_CSRF_KEY" \
+  sh "$ROOT/api-gateway/tests/test-gateway-behavior.sh"
+
+success "authenticated full-stack E2E passed"

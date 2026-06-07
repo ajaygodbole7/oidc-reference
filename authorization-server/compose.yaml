@@ -1,0 +1,20 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.1
+    command:
+      - start-dev
+      - --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      # Overridable via the environment so a non-local deployment sets a real
+      # password without editing this file. The `admin` default is for local
+      # dev only and is safe solely because the port below is loopback-bound.
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:-admin}
+    ports:
+      # Bind to loopback explicitly. Without a bind address Docker publishes on
+      # 0.0.0.0 and the admin console + realm become LAN-reachable. Matches the
+      # root compose.yaml posture: "local reference, never expose outside the host".
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./realm:/opt/keycloak/data/import:ro
+

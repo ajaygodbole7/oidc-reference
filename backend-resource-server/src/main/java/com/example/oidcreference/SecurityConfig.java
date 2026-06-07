@@ -1,0 +1,207 @@
+package com.example.oidcreference;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtClaimNames;
+import org.springframework.security.oauth2.jwt.JwtClaimValidator;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.web.AuthenticationEntryPoint;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+@Configuration
+class SecurityConfig {
+  private static final Logger SECURITY_AUDIT = LoggerFactory.getLogger("security.audit");
+
+  // Browser never reaches the Resource Server directly. CORS is denied for
+  // browser origins as defense in depth; the BFF proxies on /api/**.
+  @Bean
+  SecurityFilterChain securityFilterChain(
+      HttpSecurity http,
+      JwtAuthenticationConverter jwtAuthenticationConverter,
+      AuthenticationEntryPoint authenticationEntryPoint,
+      AccessDeniedHandler accessDeniedHandler) throws Exception {
+    return http
+        .csrf(AbstractHttpConfigurer::disable)
+        .cors(Customizer.withDefaults())
+        .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .authorizeHttpRequests(authorize -> authorize
+            .requestMatchers("/actuator/**").permitAll()
+            .requestMatchers("/api/public").permitAll()
+            .requestMatchers("/api/me").authenticated()
+            .requestMatchers("/api/user-data").hasAuthority("SCOPE_api.read")
+            .requestMatchers("/api/admin").hasAuthority("ROLE_admin")
+            .requestMatchers("/api/jobs").hasAuthority("SCOPE_service.jobs")
+            .requestMatchers("/api/_test/echo").authenticated()
+            .anyRequest().denyAll())
+        .oauth2ResourceServer(o -> o
+            .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter))
+            .authenticationEntryPoint(authenticationEntryPoint)
+            .accessDeniedHandler(accessDeniedHandler))
+        .exceptionHandling(e -> e
+            .authenticationEntryPoint(authenticationEntryPoint)
+            .accessDeniedHandler(accessDeniedHandler))
+        .build();
+  }
+
+  @Bean
+  JwtDecoder jwtDecoder(
+      @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String issuerUri,
+      @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri:}") String jwkSetUri,
+      @Value("${app.audience}") String requiredAudience) {
+    NimbusJwtDecoder decoder = jwkSetUri == null || jwkSetUri.isBlank()
+        ? NimbusJwtDecoder
+            .withIssuerLocation(issuerUri)
+            .jwsAlgorithm(SignatureAlgorithm.RS256)
+            .build()
+        : NimbusJwtDecoder
+            .withJwkSetUri(jwkSetUri)
+            .jwsAlgorithm(SignatureAlgorithm.RS256)
+            .build();
+    decoder.setJwtValidator(jwtValidator(issuerUri, requiredAudience));
+    return decoder;
+  }
+
+  // Package-private so negative-path unit tests can exercise the exact same
+  // validator chain the production decoder uses (issuer + default exp/iat/nbf
+  // + required-audience). Keeps the prod path and the test path in lockstep:
+  // if a validator is added here, the negative suite picks it up for free.
+  static OAuth2TokenValidator<Jwt> jwtValidator(String issuerUri, String audience) {
+    OAuth2TokenValidator<Jwt> defaults = JwtValidators.createDefaultWithIssuer(issuerUri);
+    OAuth2TokenValidator<Jwt> audienceValidator = new JwtClaimValidator<Object>(
+        JwtClaimNames.AUD,
+        aud -> hasAudience(aud, audience));
+    return new DelegatingOAuth2TokenValidator<>(defaults, audienceValidator);
+  }
+
+  private static boolean hasAudience(Object aud, String audience) {
+    if (aud instanceof String value) {
+      return audience.equals(value);
+    }
+    if (aud instanceof Collection<?> values) {
+      return values.stream().anyMatch(audience::equals);
+    }
+    return false;
+  }
+
+  // Maps standard `scope` / `scp` claims -> SCOPE_* and the configured
+  // roles claim path -> ROLE_*.
+  @Bean
+  JwtAuthenticationConverter jwtAuthenticationConverter(
+      @Value("${app.roles-claim-path}") List<String> rolesClaimPath) {
+    JwtGrantedAuthoritiesConverter scopes = new JwtGrantedAuthoritiesConverter();
+    scopes.setAuthorityPrefix("SCOPE_");
+    JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+    converter.setJwtGrantedAuthoritiesConverter(jwt -> {
+      Collection<GrantedAuthority> all = new ArrayList<>(scopes.convert(jwt));
+      Object claim = nestedClaim(jwt.getClaims(), rolesClaimPath);
+      if (claim instanceof Collection<?> roles) {
+        for (Object role : roles) {
+          if (role != null && !role.toString().isBlank()) {
+            all.add(new SimpleGrantedAuthority("ROLE_" + role));
+          }
+        }
+      }
+      return all;
+    });
+    return converter;
+  }
+
+  private static Object nestedClaim(Map<String, Object> claims, List<String> path) {
+    Object current = claims;
+    for (String segment : path) {
+      if (!(current instanceof Map<?, ?> map)) {
+        return null;
+      }
+      current = map.get(segment);
+    }
+    return current;
+  }
+
+  @Bean
+  AuthenticationEntryPoint authenticationEntryPoint() {
+    return (request, response, ex) -> {
+      logSecurityAudit(request, HttpStatus.UNAUTHORIZED, "authentication_required");
+      writeProblem(response, HttpStatus.UNAUTHORIZED, "Unauthorized",
+        "Authentication is required to access this resource.");
+    };
+  }
+
+  @Bean
+  AccessDeniedHandler accessDeniedHandler() {
+    return (request, response, ex) -> {
+      logSecurityAudit(request, HttpStatus.FORBIDDEN, "insufficient_authority");
+      writeProblem(response, HttpStatus.FORBIDDEN, "Forbidden",
+        "Access denied: the token does not include the required scope or role.");
+    };
+  }
+
+  private static void logSecurityAudit(
+      HttpServletRequest request,
+      HttpStatus status,
+      String reason) {
+    SECURITY_AUDIT.info(
+        "security_audit event=access_denied status={} method={} path={} reason={} remote={}",
+        status.value(),
+        request.getMethod(),
+        request.getRequestURI(),
+        reason,
+        request.getRemoteAddr());
+  }
+
+  private static void writeProblem(
+      HttpServletResponse response,
+      HttpStatus status, String title, String detail) throws IOException {
+    response.setStatus(status.value());
+    response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+    response.getWriter().write(
+        "{\"type\":\"about:blank\",\"title\":\"%s\",\"status\":%d,\"detail\":\"%s\"}"
+        .formatted(
+            escapeJson(title),
+            status.value(),
+            escapeJson(detail)));
+  }
+
+  private static String escapeJson(String value) {
+    return value.replace("\\", "\\\\").replace("\"", "\\\"");
+  }
+
+  @Bean
+  CorsConfigurationSource corsConfigurationSource() {
+    CorsConfiguration denyBrowserOrigins = new CorsConfiguration();
+    denyBrowserOrigins.setAllowedOrigins(List.of());
+    denyBrowserOrigins.setAllowedMethods(List.of());
+    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+    source.registerCorsConfiguration("/api/**", denyBrowserOrigins);
+    return source;
+  }
+}

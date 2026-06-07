@@ -1,0 +1,192 @@
+#
+# APISIX route table — standalone mode. TEMPLATE FILE.
+#
+# This is the tracked source of truth. The runtime config is rendered
+# from this template into `api-gateway/apisix.yaml.local` (gitignored)
+# by `scripts/render-apisix-config.sh`, which substitutes ${VAR}
+# placeholders from the host environment and fails if any REPLACE_ME_
+# literal sneaks in. Compose mounts the rendered .local file.
+#
+# Do NOT edit apisix.yaml.local by hand — your changes will be
+# overwritten on the next render. Edit this template instead.
+#
+# Source of truth:
+#   docs/specs/SPEC-0001-core-oidc-flows.md §"API Gateway Endpoints"
+#   docs/goals/GOAL-0005-api-gateway.md
+#
+# Browser-facing routes:
+#   /auth/*    -> auth-service:8081  (passthrough; no bff-session plugin)
+#   /api/me    -> resource-server:8082  (bff-session plugin)
+#   /api/user-data -> resource-server:8082  (bff-session plugin)
+#   /api/admin -> resource-server:8082  (bff-session plugin)
+#   /api/_test/echo -> resource-server:8082  (test-profile only)
+#
+# Off-allowlist /api/* paths match no route and APISIX returns 404
+# before the plugin runs — the allowlist IS the set of declared routes.
+#
+# Required env vars (rendered into the .local file at substitution time):
+#   ${GATEWAY_CLIENT_SECRET}  Keycloak secret for the API Gateway's
+#                             Client-Credentials grant against
+#                             /internal/refresh. MUST match the realm
+#                             definition for client `oidc-reference-api-
+#                             gateway`.
+#   ${CSRF_SIGNING_KEY}       Base64-encoded 256-bit HMAC key SHARED
+#                             with the Auth Service for signed double-
+#                             submit CSRF (SPEC §7.3). The gateway's
+#                             validator and the Auth Service's signer
+#                             MUST agree byte-for-byte.
+#   ${APISIX_IDP_TOKEN_URL}   Backchannel token endpoint used by the
+#                             gateway's Client Credentials refresh RPC.
+#
+# Plugin config keys (per plugins/bff-session.lua schema):
+#   valkey_host             : Valkey hostname on the Compose network.
+#   valkey_port             : Valkey port (6379).
+#   auth_service_base       : http://auth-service:8081 (internal-only).
+#   idp_token_url           : OIDC token endpoint for client_credentials.
+#                             The reference uses the internal Keycloak
+#                             service name for backchannel token calls.
+#   gateway_client_id       : oidc-reference-api-gateway
+#   gateway_client_secret   : env-supplied; gitignored.
+#   cookie_signing_key      : base64-encoded 256-bit HMAC key, SHARED
+#                             with the Auth Service (SPEC §7.3).
+#   refresh_window_seconds  : 60 (per SPEC §"Refresh and Rotation").
+#   expected_audience       : oidc-reference-auth-internal (informational;
+#                             actual aud check happens at Auth Service).
+
+upstreams:
+  - id: resource-server
+    type: roundrobin
+    # Resource Server hostname on the Compose oidc-internal network.
+    # Compose-update agent must wire the service name `resource-server`
+    # to expose port 8082 inside the network.
+    nodes:
+      "resource-server:8082": 1
+
+  - id: auth-service
+    type: roundrobin
+    # Auth Service hostname on the Compose oidc-internal network.
+    # Used for /auth/* passthrough; the bff-session plugin reaches the
+    # Auth Service /internal/refresh endpoint via its plugin config
+    # (auth_service_base), NOT via this upstream — the plugin makes its
+    # own resty.http call so it can attach the Client-Credentials bearer.
+    nodes:
+      "auth-service:8081": 1
+
+routes:
+  # ---- /api/** allowlist ----
+  # Per SPEC-0001 §"API Gateway Endpoints", default allowlist is
+  # /api/me, /api/user-data, /api/admin. One route per path so off-
+  # allowlist requests fall through to 404 without invoking the plugin.
+
+  - id: api-me
+    uri: /api/me
+    methods: [GET]
+    upstream_id: resource-server
+    plugins:
+      bff-session:
+        valkey_host: valkey
+        valkey_port: 6379
+        auth_service_base: http://auth-service:8081
+        idp_token_url: ${APISIX_IDP_TOKEN_URL}
+        gateway_client_id: oidc-reference-api-gateway
+        gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
+        cookie_signing_key: ${CSRF_SIGNING_KEY}
+        refresh_window_seconds: 60
+        expected_audience: oidc-reference-auth-internal
+
+  - id: api-user-data
+    uri: /api/user-data
+    methods: [GET]
+    upstream_id: resource-server
+    plugins:
+      bff-session:
+        valkey_host: valkey
+        valkey_port: 6379
+        auth_service_base: http://auth-service:8081
+        idp_token_url: ${APISIX_IDP_TOKEN_URL}
+        gateway_client_id: oidc-reference-api-gateway
+        gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
+        cookie_signing_key: ${CSRF_SIGNING_KEY}
+        refresh_window_seconds: 60
+        expected_audience: oidc-reference-auth-internal
+
+  - id: api-admin
+    uri: /api/admin
+    methods: [POST]
+    upstream_id: resource-server
+    plugins:
+      bff-session:
+        valkey_host: valkey
+        valkey_port: 6379
+        auth_service_base: http://auth-service:8081
+        idp_token_url: ${APISIX_IDP_TOKEN_URL}
+        gateway_client_id: oidc-reference-api-gateway
+        gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
+        cookie_signing_key: ${CSRF_SIGNING_KEY}
+        refresh_window_seconds: 60
+        expected_audience: oidc-reference-auth-internal
+
+  # Test harness only. The Resource Server endpoint exists only when the
+  # `gateway-test` Spring profile is active; default/prod profile returns
+  # 404 even for authenticated callers. This route lets the live gateway
+  # suite prove header/query shaping without exposing a raw echo surface
+  # in normal runtime.
+  - id: api-test-echo
+    uri: /api/_test/echo
+    methods: [GET]
+    upstream_id: resource-server
+    plugins:
+      bff-session:
+        valkey_host: valkey
+        valkey_port: 6379
+        auth_service_base: http://auth-service:8081
+        idp_token_url: ${APISIX_IDP_TOKEN_URL}
+        gateway_client_id: oidc-reference-api-gateway
+        gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
+        cookie_signing_key: ${CSRF_SIGNING_KEY}
+        refresh_window_seconds: 60
+        expected_audience: oidc-reference-auth-internal
+
+  # ---- /auth/* passthrough with rate-limiting on the kickoff edge ----
+  # The Auth Service owns its own auth on /auth/* (session cookie + its
+  # own signed-CSRF validation). The gateway just forwards — NO
+  # bff-session plugin here. This makes APISIX the single browser-facing
+  # ingress per SPEC §"Trust Boundaries".
+  #
+  # /auth/login and /auth/callback/idp get explicit limit-req: legitimate
+  # use is "user clicks Sign In" or "IdP 302s back once" — a forged-IP
+  # burst would otherwise exhaust tx:{state} entries (login) or burn CPU
+  # on token-exchange attempts (callback). 5 req/s sustained with burst=10
+  # absorbs the typical retry behavior while a flood gets 429s.
+  # Per-IP keying via remote_addr; for a real deployment behind a proxy
+  # change to X-Real-IP and pin the proxy's trusted-IP list.
+
+  - id: auth-login
+    uri: /auth/login
+    methods: [GET]
+    upstream_id: auth-service
+    plugins:
+      limit-req:
+        rate: 5
+        burst: 10
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+
+  - id: auth-callback
+    uri: /auth/callback/idp
+    methods: [GET]
+    upstream_id: auth-service
+    plugins:
+      limit-req:
+        rate: 5
+        burst: 10
+        rejected_code: 429
+        key_type: var
+        key: remote_addr
+
+  - id: auth-passthrough
+    uri: /auth/*
+    upstream_id: auth-service
+
+#END

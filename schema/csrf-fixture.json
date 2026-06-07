@@ -1,0 +1,20 @@
+{
+  "$comment": "Known-good signed-CSRF token per SPEC-0001 §7.3. Cross-language implementations (auth-service Java SignedCsrfSupport, api-gateway Lua bff-session, future Quarkus/Micronaut variants) must produce byte-identical output for the inputs below. Auth service's CsrfFixtureTest reads this file and asserts SignedCsrfSupport.validate accepts the signed_token; any new implementation should add an equivalent test.",
+  "spec": "docs/specs/SPEC-0001-core-oidc-flows.md#73-signed-csrf-token-contract",
+  "algorithm": {
+    "hmac": "HmacSHA256",
+    "key_encoding": "standard Base64 (java.util.Base64.getDecoder applied to signing_key_base64 yields the raw key bytes)",
+    "value_bytes": "UTF-8 bytes of token_value",
+    "hmac_encoding": "Base64 URL-safe, no padding (java.util.Base64.getUrlEncoder.withoutPadding)",
+    "signed_token_formula": "token_value + \".\" + hmac_base64url"
+  },
+  "inputs": {
+    "signing_key_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "signing_key_comment": "32 zero bytes encoded as standard Base64. Production keys MUST be cryptographically random; this fixture uses a deterministic key so any implementer can reproduce the expected output by hand.",
+    "token_value": "fixture-test-value-001"
+  },
+  "expected": {
+    "hmac_base64url": "1TxmqGRIdmTz_8QJnZi38J4q1KBBkPShqTRCaxrSQY8",
+    "signed_token": "fixture-test-value-001.1TxmqGRIdmTz_8QJnZi38J4q1KBBkPShqTRCaxrSQY8"
+  }
+}

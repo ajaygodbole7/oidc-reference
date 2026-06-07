@@ -1,0 +1,51 @@
+server:
+  port: ${SERVER_PORT:8082}
+
+spring:
+  application:
+    name: oidc-reference-resource-server
+  threads:
+    virtual:
+      enabled: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8080/realms/oidc-reference}
+
+app:
+  audience: ${OIDC_AUDIENCE:oidc-reference-api}
+  roles-claim-path: ${OIDC_ROLES_CLAIM_PATH:realm_access,roles}
+
+# Actuator is bound to localhost on a dedicated management port. The main
+# /api/** filter chain ends in anyRequest().denyAll(), so colocating actuator
+# there would also be denied; a separate port gives the management endpoints
+# their own Boot-managed security chain. Health probes feed k8s
+# liveness/readiness; detail is gated behind "when-authorized" so the
+# anonymous /actuator/health response stays a terse UP/DOWN.
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9082}
+    address: ${MANAGEMENT_ADDRESS:127.0.0.1}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      show-components: when-authorized
+      probes:
+        enabled: true
+  info:
+    env:
+      enabled: false
+
+logging:
+  # Boot 4 native structured logging. The logback-spring.xml profile blocks
+  # switch this to a human-readable pattern in `dev` and ECS JSON otherwise.
+  structured:
+    format:
+      console: ecs
+  level:
+    org.springframework.security: INFO

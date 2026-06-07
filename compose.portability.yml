@@ -1,0 +1,16 @@
+services:
+  auth-service:
+    environment:
+      OIDC_ISSUER_URI: http://localhost:8080/realms/oidc-reference-alt
+      APP_AUTHORIZATION_URI: http://localhost:8080/realms/oidc-reference-alt/protocol/openid-connect/auth
+      APP_TOKEN_URI: http://keycloak:8080/realms/oidc-reference-alt/protocol/openid-connect/token
+      APP_JWKS_URI: http://keycloak:8080/realms/oidc-reference-alt/protocol/openid-connect/certs
+      APP_END_SESSION_URI: http://localhost:8080/realms/oidc-reference-alt/protocol/openid-connect/logout
+      OIDC_ROLES_CLAIM_PATH: groups
+
+  resource-server:
+    environment:
+      OIDC_ISSUER_URI: http://localhost:8080/realms/oidc-reference-alt
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/oidc-reference-alt/protocol/openid-connect/certs
+      OIDC_AUDIENCE: oidc-reference-alt-api
+      OIDC_ROLES_CLAIM_PATH: groups

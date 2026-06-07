@@ -1,0 +1,25 @@
+-- bff-session — APISIX Lua plugin.
+--
+-- Populated in TASK-0009-api-gateway-spec-to-code. The real
+-- bff-session.lua is gitignored. This template enumerates the
+-- responsibilities the plugin owns per SPEC-0001 §API Gateway.
+--
+-- Responsibilities:
+--   1. Tolerant Valkey session read. GET sess:{sid} by the opaque cookie
+--      value. Missing or expired session → for top-level navigations,
+--      302 to /auth/login?next=<original>; for XHR/fetch, 401.
+--   2. Bearer injection. Set Authorization: Bearer <access_token> from
+--      the session record before forwarding to the Resource Server.
+--   3. Hop-by-hop strip. Remove inbound Cookie and hop-by-hop headers on
+--      the upstream request so the access token is the only authn signal
+--      the Resource Server sees.
+--   4. Signed CSRF validation. On state-changing methods, HMAC-verify the
+--      X-XSRF-TOKEN header value against the XSRF-TOKEN cookie using the
+--      shared signing key (B4).
+--   5. Refresh delegation. When access_token is within the refresh
+--      window, POST /internal/refresh on the Auth Service with a Client
+--      Credentials bearer (scope auth.internal,
+--      aud=oidc-reference-auth-internal); then re-read sess:{sid}.
+--   6. Fetch Metadata classification. Use Sec-Fetch-Mode / Sec-Fetch-Dest
+--      to distinguish top-level navigation from XHR/fetch when issuing
+--      the no-session response.

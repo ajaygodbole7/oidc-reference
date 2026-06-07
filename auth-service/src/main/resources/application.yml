@@ -1,0 +1,76 @@
+server:
+  port: ${SERVER_PORT:8081}
+  forward-headers-strategy: framework
+
+spring:
+  application:
+    name: oidc-reference-auth-service
+  threads:
+    virtual:
+      enabled: true
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+app:
+  # Public-facing origin of this Auth Service. When set, callback/login
+  # redirect_uri values are built from this verbatim and X-Forwarded-* is
+  # ignored — so a forged Host / XFH on the gateway cannot smuggle a
+  # different redirect_uri to the IdP. Leave empty for inner-loop dev
+  # where the SPA is reached directly at 127.0.0.1:5173 (the existing
+  # header-derived resolution covers that path).
+  base-url: ${APP_BASE_URL:}
+  issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8080/realms/oidc-reference}
+  client-id: ${AUTH_CLIENT_ID:oidc-reference-auth}
+  # Default matches the seeded realm secret in authorization-server/realm/
+  # oidc-reference-realm.json. The shared sentinel marker CHANGE_BEFORE_DEPLOY
+  # makes both ends greppable; SecretSentinelValidator fails boot if this
+  # value survives into a "prod" / "production" profile.
+  client-secret: ${AUTH_CLIENT_SECRET:LOCAL_DEV_AUTH_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY}
+  oauth-registration-id: idp
+  scopes: ${OIDC_SCOPES:openid,profile,email,roles,api.audience,api.read}
+  # Path through the ID-token claims to the user's roles array. Different
+  # IdPs put roles in different shapes — see docs/operations/provider-adapters.md for the
+  # matrix. Default targets Keycloak's realm_access.roles. Swapping IdPs is
+  # a one-property change with no code edit.
+  #   Keycloak: [realm_access, roles]
+  #   Okta:     [groups]
+  #   Auth0:    [https://your-app/roles]    (custom-namespaced claim)
+  roles-claim-path: ${OIDC_ROLES_CLAIM_PATH:realm_access,roles}
+  session-refresh-window: 60s
+  # The default below is a literal sentinel — 32 zero-bytes base64-encoded.
+  # SignedCsrfSupport.hmacSha256 requires standard base64, which forbids the
+  # underscores in our loud CHANGE_BEFORE_DEPLOY marker, so the cookie-key
+  # sentinel has to be base64-valid. SecretSentinelValidator recognizes this
+  # exact literal value and fails boot if it survives into a "prod" profile.
+  # The bff-session.lua plugin shares the same literal.
+  cookie-signing-key: ${APP_COOKIE_SIGNING_KEY:${CSRF_SIGNING_KEY:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}}
+  # Refresh-token rotation policy. With Keycloak (this reference's IdP)
+  # rotation + reuse detection is enabled in the realm, so the AS always
+  # returns a new refresh_token. Leave this true; a missing or unchanged
+  # refresh_token on a refresh response then surfaces as a 409 + session
+  # invalidation, exactly like Keycloak's own invalid_grant on a replayed
+  # refresh token.
+  #
+  # When swapping IdPs, see the provider matrix in
+  # docs/reference/refresh-rotation.md before changing this default.
+  refresh-require-rotation: ${APP_REFRESH_REQUIRE_ROTATION:true}
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9081}
+    # Loopback-only. Actuator currently exposes only health,info, but
+    # the moment env / metrics / threaddump are added without an
+    # address pin, internal state goes on the network. Matches the RS
+    # config in backend-resource-server/application.yml.
+    address: ${MANAGEMENT_ADDRESS:127.0.0.1}
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true

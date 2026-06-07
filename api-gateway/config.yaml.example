@@ -1,0 +1,18 @@
+# APISIX node config — standalone mode.
+#
+# Populated in TASK-0009-api-gateway-spec-to-code. The real config.yaml is
+# gitignored. Standalone mode is chosen so routes are loaded from
+# apisix.yaml on disk; no etcd is required for the local reference shape.
+#
+# deployment:
+#   role: data_plane
+#   role_data_plane:
+#     config_provider: yaml
+#
+# apisix:
+#   node_listen: 9080
+#   enable_admin: false
+#   extra_lua_path: "/opt/api-gateway/?.lua"
+#
+# plugins:
+#   - bff-session
