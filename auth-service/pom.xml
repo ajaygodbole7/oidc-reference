@@ -111,6 +111,23 @@
         <artifactId>spring-boot-maven-plugin</artifactId>
       </plugin>
 
+      <!-- Run the test JVM under the 'test' Spring profile. The boot-time
+           SecretSentinelValidator fails closed when NO profile is active
+           (SPEC-0002 D2: a copied artifact must not ship dev sentinels with
+           only a WARN); the @SpringBootTest suites carry the dev cookie-signing
+           sentinel, so an explicit local-dev profile keeps them at WARN instead
+           of aborting at @PostConstruct. The MockEnvironment unit tests in
+           SecretSentinelValidatorTest set their own profiles and are unaffected. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <spring.profiles.active>test</spring.profiles.active>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+
       <!-- Enforce build environment and dependency hygiene. Banned deps:
            Lombok (the repo intentionally avoids it) and Jackson 2's
            jackson-databind (Boot 4 runs Jackson 3, tools.jackson). -->

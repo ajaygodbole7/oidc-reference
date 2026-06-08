@@ -25,18 +25,23 @@ class SecretSentinelValidatorTest {
   private static final String REAL_KEY = "BASE64_REAL_KEY_AAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
   @Test
-  void warnsButPasses_whenSentinelInUseUnderNoExplicitProfile(CapturedOutput out) {
+  void refusesToStart_whenSentinelInUseUnderNoExplicitProfile() {
+    // No active profile is NOT a local opt-in. A copied artifact run without an
+    // explicit local/dev/test profile must FAIL CLOSED rather than ship a dev
+    // sentinel with only a WARN (the unsafe-by-omission posture, SPEC-0002 D2).
     var props = properties(SENTINEL, REAL_KEY);
     var env = new MockEnvironment();  // no active profile
-    new SecretSentinelValidator(props, env).validateOnReady();
-    assertThat(out.getOut()).contains(
-        "AUTH_CLIENT_SECRET is the local-dev sentinel");
+    assertThatThrownBy(() -> new SecretSentinelValidator(props, env).validateOnReady())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("Refusing to run with default dev secrets");
   }
 
   @Test
   void warnsForCookieKeySentinel(CapturedOutput out) {
     var props = properties("real-client-secret", COOKIE_KEY_SENTINEL);
-    new SecretSentinelValidator(props, new MockEnvironment()).validateOnReady();
+    var env = new MockEnvironment();
+    env.setActiveProfiles("local");  // explicit local opt-in downgrades to WARN
+    new SecretSentinelValidator(props, env).validateOnReady();
     assertThat(out.getOut()).contains(
         "APP_COOKIE_SIGNING_KEY is the local-dev sentinel");
   }

@@ -21,8 +21,10 @@ import org.springframework.stereotype.Component;
  * <p>The guard fails closed: a sentinel secret, or a cookie-signing key that
  * decodes to fewer than {@value #MIN_COOKIE_KEY_BYTES} bytes, aborts boot under
  * <em>any</em> profile that is not an explicit local-dev profile
- * ({@link #LOCAL_PROFILES}, or no profile at all). Only those local profiles
- * downgrade the condition to a WARN. The check runs at bean initialization
+ * ({@link #LOCAL_PROFILES}) — including when no profile is active at all, so a
+ * copied artifact that forgets to set a profile cannot ship a dev sentinel with
+ * only a WARN. Only an explicit local profile downgrades the condition to a
+ * WARN. The check runs at bean initialization
  * ({@link PostConstruct}) so it aborts before the embedded web server begins
  * accepting traffic — not after, the way an ApplicationReadyEvent listener
  * would.
@@ -88,12 +90,14 @@ class SecretSentinelValidator {
     }
   }
 
-  // Local when no profile is active (the inner-loop default) or every active
-  // profile is in the local allow-list. Any other named profile is non-local.
+  // Local ONLY when at least one profile is active and every active profile is
+  // in the local allow-list. No active profile is NOT local: a copied artifact
+  // run without an explicit local/dev/test opt-in must fail closed rather than
+  // ship a dev sentinel with only a WARN (SPEC-0002 D2 — unsafe-by-omission).
   private boolean isLocalProfile() {
     String[] active = env.getActiveProfiles();
     if (active.length == 0) {
-      return true;
+      return false;
     }
     for (String profile : active) {
       if (!LOCAL_PROFILES.contains(profile.toLowerCase())) {
