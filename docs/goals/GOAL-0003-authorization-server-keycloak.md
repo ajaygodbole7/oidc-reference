@@ -1,5 +1,9 @@
 # GOAL-0003: Authorization Server (Keycloak)
 
+> **Build packet — not the contract.** `docs/specs/SPEC-0001-core-oidc-flows.md`
+> and the shipped code are authoritative; this packet captures build intent and
+> may lag behind them.
+
 ## Directory
 
 `authorization-server/`

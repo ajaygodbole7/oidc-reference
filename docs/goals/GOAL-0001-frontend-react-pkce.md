@@ -1,5 +1,9 @@
 # GOAL-0001: Frontend React SPA (BFF Cookie Client)
 
+> **Build packet — not the contract.** `docs/specs/SPEC-0001-core-oidc-flows.md`
+> and the shipped code are authoritative; this packet captures build intent and
+> may lag behind them.
+
 > Filename retains `pkce` for historical link stability. The SPA does **not**
 > perform PKCE — the BFF does. This goal owns the cookie-authenticated SPA
 > that talks only to the BFF.

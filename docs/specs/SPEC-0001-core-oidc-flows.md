@@ -729,6 +729,11 @@ The API Gateway holds a cached service token issued by Keycloak under
   table above): invalidate the cache entry and re-fetch.
 - The cache is **not** shared across Gateway workers or instances. Each
   worker holds its own.
+- **Cache-cliff assumption.** Proactive refresh assumes client-credentials
+  tokens live well over the skew (default 60 s). If an IdP issues CC tokens with
+  `expires_in ≤ 60 s`, every refresh-window `/api` request misses the cache and
+  serializes through a single IdP token call. Cheap mitigation: make the skew a
+  fraction of `expires_in` rather than a fixed 60 s.
 
 **Timeout and circuit-breaker on `/internal/refresh`.**
 

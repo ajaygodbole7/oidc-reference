@@ -1,5 +1,9 @@
 # GOAL-0004: Auth Service (OAuth/OIDC Confidential Client)
 
+> **Build packet — not the contract.** `docs/specs/SPEC-0001-core-oidc-flows.md`
+> and the shipped code are authoritative; this packet captures build intent and
+> may lag behind them.
+
 ## Directory
 
 `auth-service/`

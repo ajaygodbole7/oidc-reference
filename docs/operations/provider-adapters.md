@@ -41,6 +41,13 @@ Keycloak emit that audience; the provider-side client/scope/audience mapper must
 move with it. The same is true for `OIDC_AUDIENCE`, `GATEWAY_CLIENT_ID`, and role
 claim mappers.
 
+Roles are read from **two** tokens and must agree: the Auth Service reads them
+from the **id_token** for `/auth/me`, while the Resource Server reads them from the
+**access_token** for `/api/**` authorization. They line up only because the realm
+maps roles into both tokens, so an IdP swap MUST configure **both** mappers (the
+alt-realm portability proof already does). The `/auth/me` roles are
+**display-only** — the access token is the sole authorization source.
+
 ## Supported Configuration Surface
 
 Set these values through Compose environment, deployment configuration, or a
