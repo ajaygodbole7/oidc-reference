@@ -25,10 +25,10 @@ function isUser(value: unknown): value is User {
 function sanitizeUser(value: User): User {
   return {
     sub: value.sub,
-    preferred_username: value.preferred_username,
-    name: value.name,
-    email: value.email,
-    roles: value.roles ? [...value.roles] : undefined
+    ...(value.preferred_username !== undefined ? { preferred_username: value.preferred_username } : {}),
+    ...(value.name !== undefined ? { name: value.name } : {}),
+    ...(value.email !== undefined ? { email: value.email } : {}),
+    ...(value.roles !== undefined ? { roles: [...value.roles] } : {})
   };
 }
 

@@ -566,6 +566,42 @@ test("9. logout response is same-origin continuation, leaks no token/IdP", async
 });
 
 // ---------------------------------------------------------------------------
+// Story 9b — Real React logout path. This drives the actual Sign out button
+// and form submit handler instead of calling fetch("/auth/logout") from the
+// test body. The protocol-level body/redirect contract remains covered by
+// story 9; this story proves the SPA wiring follows that contract.
+// ---------------------------------------------------------------------------
+test("9b. real React sign-out button clears the session, no token", async ({
+  page,
+  context
+}) => {
+  await loginAs(page, ALICE);
+
+  const logoutPost = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.origin === APP_ORIGIN
+      && url.pathname === "/auth/logout"
+      && request.method() === "POST";
+  });
+  const logoutContinue = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.origin === APP_ORIGIN
+      && url.pathname === "/auth/logout/continue";
+  });
+
+  await page.getByRole("button", { name: /sign out/i }).click();
+  await logoutPost;
+  await logoutContinue;
+
+  await page.waitForURL(`${APP_ORIGIN}/`);
+  await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+
+  const sid = (await context.cookies()).find((c) => c.name === "sid");
+  expect(sid, "sid must be cleared after UI sign-out").toBeUndefined();
+  await assertNoBrowserTokens(page, context);
+});
+
+// ---------------------------------------------------------------------------
 // Story 10 — Front-channel precision. If /auth/logout/continue redirects to the
 // IdP with id_token_hint, that is the ONLY tolerated appearance of an ID token,
 // and ONLY as a server-generated top-level redirect Location. The frontend
