@@ -74,8 +74,7 @@ class AuthorizationCodeTokenExchangeClient implements TokenExchangeClient {
         idTokenString,
         accessExpiresAt,
         Instant.now().plusSeconds(refreshExpiresIn),
-        idTokenValidator.validate(idTokenString, accessToken.getValue(), transaction),
-        CryptoSupport.randomUrlToken(32));
+        idTokenValidator.validate(idTokenString, accessToken.getValue(), transaction));
   }
 
   // Accept both Number-typed (canonical) and String-typed (some IdPs)

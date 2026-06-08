@@ -2,6 +2,7 @@ package com.example.oidcreference.authservice;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Base64;
 
 // Browser-bound OAuth transaction cookie. PKCE binds the callback to
 // the *client* (only the originator of the code_verifier can redeem),
@@ -12,24 +13,27 @@ import java.security.MessageDigest;
 // shared CI capture) could otherwise complete the callback in their
 // own browser and graft the victim's session onto themselves.
 //
-// Fix: at /auth/login we mint a random `oauth_tx` cookie, store its
-// HMAC in tx:{state}, set it HttpOnly + SameSite=Lax + Path=/auth/
-// callback/idp (tight scope so it only ever rides the callback) on the
-// 302 to the IdP. At /auth/callback/idp we re-hash the cookie value
-// and constant-time-compare with the stored hash. Cookie missing or
-// mismatch → 400. The cookie is cleared on every callback (success or
-// failure) so a single login transaction can be redeemed at most once.
-//
-// Known limitation: one in-flight login per browser. A second
-// /auth/login from the same browser overwrites the cookie, so the
-// first transaction's callback will then fail. That matches the BFF
-// pattern's "one user per browser" expectation; a stateful design
-// would be needed for concurrent logins.
+// Fix: at /auth/login we mint a random per-state `oauth_tx_<hash>`
+// cookie, store its HMAC in tx:{state}, set it HttpOnly + SameSite=Lax
+// + Path=/auth/callback/idp (tight scope so it only ever rides the
+// callback) on the 302 to the IdP. At /auth/callback/idp we compute the
+// cookie name from state, re-hash the cookie value, and
+// constant-time-compare with the stored hash. Cookie missing or
+// mismatch → 400. The transaction cookie is cleared on every callback
+// (success or failure) so a single login transaction can be redeemed at
+// most once, while concurrent login tabs do not clobber each other.
 final class OAuthTxBinding {
-  static final String COOKIE_NAME = "oauth_tx";
+  static final String COOKIE_PREFIX = "oauth_tx_";
   static final String COOKIE_PATH = "/auth/callback/idp";
 
   private OAuthTxBinding() {}
+
+  static String cookieName(String state) {
+    if (state == null || state.isBlank()) {
+      throw new IllegalArgumentException("state is required");
+    }
+    return COOKIE_PREFIX + shortHash(state);
+  }
 
   // 32 bytes from a CSPRNG — same shape as state/nonce so the audit
   // log line widths stay comparable.
@@ -66,5 +70,15 @@ final class OAuthTxBinding {
     return MessageDigest.isEqual(
         computed.getBytes(StandardCharsets.UTF_8),
         storedHash.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static String shortHash(String value) {
+    try {
+      MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      byte[] hash = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+      return Base64.getUrlEncoder().withoutPadding().encodeToString(hash).substring(0, 22);
+    } catch (Exception e) {
+      throw new IllegalStateException("SHA-256 unavailable", e);
+    }
   }
 }

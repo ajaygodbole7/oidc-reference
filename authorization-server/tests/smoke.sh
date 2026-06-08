@@ -60,6 +60,7 @@ function assert(cond, msg) {
 }
 
 assert(realm.realm === expectedRealm, `realm name mismatch: ${realm.realm}`);
+assert(realm.accessTokenLifespan === 120, "access token lifespan must be 120 seconds");
 assert(realm.revokeRefreshToken === true, "refresh token rotation must be enabled");
 assert(realm.refreshTokenMaxReuse === 0, "refresh token reuse must be zero");
 
@@ -82,6 +83,10 @@ assert(auth.implicitFlowEnabled === false, "Auth Service implicit flow must be d
 assert(auth.directAccessGrantsEnabled === false, "Auth Service direct grants must be disabled");
 assert(auth.serviceAccountsEnabled === false, "Auth Service service accounts must be disabled");
 assert(auth.attributes["pkce.code.challenge.method"] === "S256", "Auth Service PKCE must require S256");
+assert(auth.attributes["backchannel.logout.url"] === "http://auth-service:8081/backchannel-logout",
+       "Auth Service client must register internal back-channel logout URL");
+assert(auth.attributes["backchannel.logout.session.required"] === "true",
+       "Auth Service back-channel logout must require session sid");
 assert(auth.redirectUris.includes("http://127.0.0.1:5173/auth/callback/idp"),
        "Auth Service redirect URI must point to SPA origin (Vite proxies to Auth Service); registration name is the generic 'idp'");
 assert(auth.redirectUris.includes("http://127.0.0.1:9080/auth/callback/idp"),

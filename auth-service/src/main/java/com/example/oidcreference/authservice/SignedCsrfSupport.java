@@ -18,14 +18,21 @@ class SignedCsrfSupport {
   private static final Base64.Encoder BASE64_URL = Base64.getUrlEncoder().withoutPadding();
   private static final Base64.Decoder BASE64_STD = Base64.getDecoder();
 
-  static String issueToken(String signingKey) {
+  static String issueToken(String signingKey, String sid) {
     String value = CryptoSupport.randomUrlToken(16);
-    String hmac = hmacSha256(value, signingKey);
+    String hmac = hmacSha256(message(value, sid), signingKey);
     return value + "." + hmac;
   }
 
-  static boolean validate(String tokenFromCookie, String tokenFromHeader, String signingKey) {
+  static boolean validate(
+      String tokenFromCookie,
+      String tokenFromHeader,
+      String signingKey,
+      String sid) {
     if (signingKey == null || signingKey.isBlank()) {
+      return false;
+    }
+    if (sid == null || sid.isBlank()) {
       return false;
     }
     if (tokenFromCookie == null || tokenFromHeader == null) {
@@ -42,17 +49,17 @@ class SignedCsrfSupport {
     String suppliedHmac = tokenFromCookie.substring(dot + 1);
     String expectedHmac;
     try {
-      expectedHmac = hmacSha256(value, signingKey);
+      expectedHmac = hmacSha256(message(value, sid), signingKey);
     } catch (RuntimeException e) {
       return false;
     }
     return constantTimeEquals(suppliedHmac, expectedHmac);
   }
 
-  boolean hasValidCsrf(HttpServletRequest request, String signingKey) {
+  boolean hasValidCsrf(HttpServletRequest request, String signingKey, String sid) {
     String cookie = cookieValue(request, CSRF_COOKIE).orElse(null);
     String header = request.getHeader(CSRF_HEADER);
-    return validate(cookie, header, signingKey);
+    return validate(cookie, header, signingKey, sid);
   }
 
   static Optional<String> cookieValue(HttpServletRequest request, String name) {
@@ -81,6 +88,10 @@ class SignedCsrfSupport {
     } catch (java.security.GeneralSecurityException e) {
       throw new IllegalStateException("HmacSHA256 unavailable in this JDK", e);
     }
+  }
+
+  private static String message(String value, String sid) {
+    return value + ":" + sid;
   }
 
   private static boolean constantTimeEquals(String a, String b) {

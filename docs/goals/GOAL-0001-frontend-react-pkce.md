@@ -118,9 +118,8 @@ the Auth Service behind the gateway.
 - Playwright end-to-end against live stack with Keycloak login automation.
 - Playwright storage assertion: after login, `localStorage`,
   `sessionStorage`, `document.cookie`, and IndexedDB contain no tokens.
-- Saved-request replay: top-level navigation to a protected URL passes
-  through the callback landing page and ends, after OAuth, on that same URL
-  — not on `/`.
+- Saved-request replay: top-level navigation to a protected URL completes the
+  OAuth callback's direct 302 and ends on that same URL — not on `/`.
 - XHR `401`: `fetch('/api/me')` with no session yields `401`, and the SPA
   reacts by initiating a top-level navigation.
 

@@ -49,8 +49,7 @@ class AuthorizationCodeTokenRefreshClientTest {
         now.plusSeconds(1800),
         now,
         now.plusSeconds(43200),
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
   }
 
   private static AuthProperties props(boolean requireRotation) {
@@ -58,6 +57,8 @@ class AuthorizationCodeTokenRefreshClientTest {
         "idp",
         "",
         java.time.Duration.ofSeconds(60),
+        java.time.Duration.ofSeconds(1800),
+        java.time.Duration.ofSeconds(28800),
         URI.create("http://idp.example"),
         null,
         null,
@@ -129,8 +130,7 @@ class AuthorizationCodeTokenRefreshClientTest {
         now.plusSeconds(1800),
         now,
         now.plusSeconds(43200),
-        Map.of("sub", "alice", "roles", roles),
-        "xsrf-1");
+        Map.of("sub", "alice", "roles", roles));
   }
 
   // ----- require-rotation = true (default) -----

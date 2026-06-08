@@ -31,6 +31,16 @@ public record AuthProperties(
      * token that is about to be rejected as expired by the resource server.
      */
     @NotNull @DefaultValue("60s") Duration sessionRefreshWindow,
+    /**
+     * Sliding idle TTL in seconds. /auth/me and other Auth Service reads do
+     * not extend it; authenticated /api traffic through the gateway does.
+     */
+    @NotNull @DefaultValue("1800s") Duration sessionIdleTtl,
+    /**
+     * Hard upper bound for a local session. Must stay below or equal to the
+     * IdP SSO max session lifespan.
+     */
+    @NotNull @DefaultValue("28800s") Duration sessionAbsoluteTtl,
     @NotNull URI issuerUri,
     URI authorizationUri,
     URI tokenUri,

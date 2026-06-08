@@ -110,8 +110,7 @@ class AuthorizationCodeTokenRefreshClient implements TokenRefreshClient {
         Instant.now().plusSeconds(refreshExpiresIn),
         session.createdAt(),
         session.absoluteExpiresAt(),
-        newClaims,
-        session.xsrfToken());
+        newClaims);
   }
 
   // Package-private + overridable so a test subclass can stub the

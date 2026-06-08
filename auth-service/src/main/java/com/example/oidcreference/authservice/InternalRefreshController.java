@@ -148,7 +148,7 @@ class InternalRefreshController {
         return problem(502, "refresh failed at authorization server");
       }
 
-      Duration nextTtl = refreshed.nextTtl();
+      Duration nextTtl = refreshed.nextTtl(props.sessionIdleTtl());
       if (nextTtl.isZero() || nextTtl.isNegative()) {
         // The pre-refresh absoluteExpired() check at line 95 passed, but the
         // upstream refresh call (a network round-trip to Keycloak) took long

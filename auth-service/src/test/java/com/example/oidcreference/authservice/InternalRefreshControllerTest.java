@@ -172,8 +172,7 @@ class InternalRefreshControllerTest {
         "id-token-1",
         Instant.now().plusSeconds(10),
         Instant.now().plusSeconds(1800),
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     storeSession(sid, expiring);
 
     mockMvc.perform(post("/internal/refresh")
@@ -214,8 +213,7 @@ class InternalRefreshControllerTest {
         "id-token-1",
         Instant.now().plusSeconds(600),
         Instant.now().plusSeconds(1800),
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     storeSession(sid, fresh);
 
     mockMvc.perform(post("/internal/refresh")
@@ -247,8 +245,7 @@ class InternalRefreshControllerTest {
         "id-token-1",
         Instant.now().plusSeconds(10),
         Instant.now().plusSeconds(1800),
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     storeSession(sid, reused);
 
     mockMvc.perform(post("/internal/refresh")
@@ -292,8 +289,7 @@ class InternalRefreshControllerTest {
         "id-token-1",
         Instant.now().plusSeconds(10),    // inside the refresh window
         Instant.now().minusSeconds(60),   // refresh token already expired
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     storeSession(sid, expired);
 
     mockMvc.perform(post("/internal/refresh")
@@ -328,8 +324,7 @@ class InternalRefreshControllerTest {
         "id-token-1",
         Instant.now().plusSeconds(10),
         Instant.now().plusSeconds(1800),
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     storeSession(sid, expiring);
 
     mockMvc.perform(post("/internal/refresh")
@@ -371,8 +366,7 @@ class InternalRefreshControllerTest {
         Instant.now().plusSeconds(1800),
         Instant.now().minusSeconds(60),
         Instant.now().plusSeconds(60),            // valid now, but refresh returns past
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     storeSession(sid, nearlyExpired);
 
     mockMvc.perform(post("/internal/refresh")
@@ -407,8 +401,7 @@ class InternalRefreshControllerTest {
         "id-token-1",
         Instant.now().plusSeconds(10),
         Instant.now().plusSeconds(1800),
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     storeSession(sid, expiring);
 
     tokenRefreshClient.pauseNextRefresh();
@@ -607,8 +600,7 @@ class InternalRefreshControllerTest {
               Instant.now().plusSeconds(1800),
               session.createdAt(),
               Instant.now().minusSeconds(1),
-              session.claims(),
-              session.xsrfToken());
+              session.claims());
         }
         return new SessionRecord(
             "refreshed-token",
@@ -618,8 +610,7 @@ class InternalRefreshControllerTest {
             Instant.now().plusSeconds(1800),
             session.createdAt(),
             session.absoluteExpiresAt(),
-            session.claims(),
-            session.xsrfToken());
+            session.claims());
       }
     }
   }

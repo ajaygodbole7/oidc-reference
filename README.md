@@ -116,7 +116,7 @@ sequenceDiagram
     A->>K: POST /token  (code + verifier + client_secret)
     K-->>A: access_token, refresh_token, id_token
     A->>A: Validate id_token (iss, aud=oidc-reference-auth, nonce, sig, exp, at_hash when present)
-    A->>V: SET sess:{sid} = {tokens, claims, xsrf_token, absolute_expires_at}  (sliding TTL 30m, absolute ceiling 8h ≤ IdP SSO max)
+    A->>V: SET sess:{sid} = {tokens, claims, absolute_expires_at}  (sliding TTL 30m, absolute ceiling 8h ≤ IdP SSO max)
     A-->>B: 302 saved_request<br/>+ Set-Cookie __Host-sid=opaque, HttpOnly, Secure, SameSite=Lax, Path=/<br/>+ Set-Cookie XSRF-TOKEN=signed, Secure, SameSite=Strict, Path=/ (JS-readable)<br/>+ Set-Cookie oauth_tx=, Max-Age=0 (single-use, evicted even on success)
 
     Note over B,R: Saved-request replay → authenticated API call
@@ -205,7 +205,7 @@ sequenceDiagram
 | `state`, `nonce`, ID-token signature/iss/aud/exp | OIDC Core §3.1.3 | `JwtOidcIdTokenValidator` |
 | `at_hash` when present | OIDC Core §3.1.3.7 step 7 | `JwtOidcIdTokenValidator` |
 | `iss` query-param mix-up defense | [RFC 9207](https://datatracker.ietf.org/doc/rfc9207/) | `AuthController#callback` |
-| Refresh-token rotation + reuse detection → 409 + session invalidation | [RFC 9700 §4.14](https://datatracker.ietf.org/doc/rfc9700/) | `AuthorizationCodeTokenRefreshClient` + realm |
+| Refresh rejected by the AS (`invalid_grant`) → 409 + session invalidation; realm still enables rotation + reuse detection | [RFC 9700 §4.14](https://datatracker.ietf.org/doc/rfc9700/) | `AuthorizationCodeTokenRefreshClient` + realm |
 | Signed double-submit CSRF (HMAC-SHA256, base64url) | — | `SignedCsrfSupport`, `bff-session.lua` |
 | `oauth_tx` browser-binding cookie | — | `OAuthTxBinding` |
 | RP-initiated logout with `id_token_hint` | OIDC RP-Initiated Logout 1.0 | `AuthController#logout` |

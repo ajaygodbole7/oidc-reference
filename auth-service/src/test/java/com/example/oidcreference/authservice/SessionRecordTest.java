@@ -24,8 +24,7 @@ class SessionRecordTest {
         "id",
         Instant.now().plusSeconds(300),
         Instant.now().plusSeconds(1800),
-        Map.of("sub", "alice"),
-        "xsrf");
+        Map.of("sub", "alice"));
 
     Duration ceiling = Duration.between(session.createdAt(), session.absoluteExpiresAt());
 
@@ -57,7 +56,6 @@ class SessionRecordTest {
         "id",
         Instant.now().plusSeconds(300),
         refreshExpiresAt,
-        Map.of("sub", "alice"),
-        "xsrf");
+        Map.of("sub", "alice"));
   }
 }

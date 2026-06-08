@@ -112,7 +112,7 @@ class SecurityAuditTest {
     mockMvc.perform(get("/auth/callback/idp")
             .param("code", "code-1")
             .param("state", state)
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isFound());
 
     assertThat(output.getOut())
@@ -142,7 +142,7 @@ class SecurityAuditTest {
     mockMvc.perform(get("/auth/callback/idp")
             .param("code", "reject-code")
             .param("state", state)
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isUnauthorized());
 
     assertThat(output.getOut())
@@ -165,19 +165,19 @@ class SecurityAuditTest {
   @Test
   void logoutWithNoSessionEmitsAudit(CapturedOutput output) throws Exception {
     mockMvc.perform(post("/auth/logout"))
-        .andExpect(status().isUnauthorized());
+        .andExpect(status().isFound());
 
     assertThat(output.getOut())
-        .contains("event=auth_denied")
-        .contains("status=401")
-        .contains("reason=no_session")
+        .contains("event=logout_succeeded")
+        .contains("status=302")
+        .contains("reason=no_local_session")
         .contains("path=/auth/logout");
   }
 
   @Test
   void logoutWithBadCsrfEmitsAudit(CapturedOutput output) throws Exception {
     Cookie sid = createSessionCookie();
-    String forged = "tampered-value." + hmacUnderForeignKey("tampered-value");
+    String forged = "tampered-value." + hmacUnderForeignKey("tampered-value", sid.getValue());
 
     mockMvc.perform(post("/auth/logout")
             .cookie(sid, new Cookie("XSRF-TOKEN", forged))
@@ -193,7 +193,7 @@ class SecurityAuditTest {
   @Test
   void logoutSucceededEmitsAudit(CapturedOutput output) throws Exception {
     Cookie sid = createSessionCookie();
-    String csrf = signCsrfToken("audit-logout-value");
+    String csrf = signCsrfToken("audit-logout-value", sid.getValue());
 
     mockMvc.perform(post("/auth/logout")
             .cookie(sid, new Cookie("XSRF-TOKEN", csrf))
@@ -216,8 +216,10 @@ class SecurityAuditTest {
   private static final String TX_COOKIE_VALUE = "fixed-test-oauth-tx-value";
   private static final String COOKIE_SIGNING_KEY =
       "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-  static final Cookie TX_COOKIE =
-      new Cookie(OAuthTxBinding.COOKIE_NAME, TX_COOKIE_VALUE);
+
+  static Cookie txCookie(String state) {
+    return new Cookie(OAuthTxBinding.cookieName(state), TX_COOKIE_VALUE);
+  }
 
   private void storeTransaction(String state, String savedRequest) {
     String hash = OAuthTxBinding.hash(TX_COOKIE_VALUE, COOKIE_SIGNING_KEY);
@@ -241,22 +243,21 @@ class SecurityAuditTest {
         created.plusSeconds(1800),
         created,
         created.plus(Duration.ofHours(12)),
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     stateStore.put("sess:" + sidValue, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     return new Cookie("sid", sidValue);
   }
 
-  private static String signCsrfToken(String value) {
-    return value + "." + hmac(value, CSRF_KEY_BYTES);
+  private static String signCsrfToken(String value, String sid) {
+    return value + "." + hmac(value + ":" + sid, CSRF_KEY_BYTES);
   }
 
-  private static String hmacUnderForeignKey(String value) {
+  private static String hmacUnderForeignKey(String value, String sid) {
     byte[] foreign = new byte[32];
     for (int i = 0; i < foreign.length; i++) {
       foreign[i] = (byte) (i + 11);
     }
-    return hmac(value, foreign);
+    return hmac(value + ":" + sid, foreign);
   }
 
   private static String hmac(String value, byte[] key) {
@@ -314,8 +315,7 @@ class SecurityAuditTest {
             "id-token-1",
             Instant.now().plusSeconds(300),
             Instant.now().plusSeconds(1800),
-            Map.of("sub", "alice", "preferred_username", "alice"),
-            "xsrf-callback-1");
+            Map.of("sub", "alice", "preferred_username", "alice"));
       };
     }
 

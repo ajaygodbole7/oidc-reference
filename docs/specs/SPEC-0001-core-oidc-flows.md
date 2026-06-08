@@ -405,8 +405,8 @@ with a distributed lock (e.g., Valkey `SET NX EX`).
 
 ### CSRF
 
-Signed double-submit token. See §7.3 for the full token format, validation
-algorithm, and signing-key rotation contract.
+Signed, session-bound double-submit token. See §7.3 for the full token
+format, validation algorithm, and signing-key handling.
 
 - The Auth Service sets `XSRF-TOKEN` as a JS-readable cookie (not
   `HttpOnly`) with `Secure`, `SameSite=Strict`, `Path=/`. The cookie value is
@@ -415,8 +415,8 @@ algorithm, and signing-key rotation contract.
   `X-XSRF-TOKEN` header on every `POST`/`PUT`/`DELETE`/`PATCH`.
 - Validators (Auth Service for `/auth/*`; APISIX `bff-session` plugin for
   `/api/**`) compare cookie to header for exact match, then recompute the
-  HMAC over `token-value-base64` and compare in constant time. Mismatch
-  or invalid signature → 403.
+  HMAC over `token-value-base64 + ":" + sid` and compare in constant time.
+  Mismatch or invalid signature → 403.
 - The session cookie (`__Host-sid` in prod, `sid` in local) is `HttpOnly`
   and never readable by JS; it is not part of the double-submit pair.
 - **Naive double-submit is explicitly rejected.** Comparing an unsigned
@@ -502,7 +502,7 @@ algorithm, and signing-key rotation contract.
 | Token theft via JavaScript | Access/refresh tokens never reach the browser; ID tokens never reach browser JS, storage, or SPA-readable bodies (token-isolation invariant in Acceptance Criteria); cookie is `HttpOnly` |
 | XSS on SPA | No tokens to steal; CSP is recommended in production guidance |
 | Login CSRF / session swapping | `state` (server-side validated against `tx:{state}`) + PKCE code-verifier (S256, required) + ID-token `nonce` validation per RFC 9700 §4.7 |
-| CSRF on state-changing endpoints | **Signed** double-submit `XSRF-TOKEN` (HMAC-SHA256 over the token value) + `X-XSRF-TOKEN` header on POST/PUT/DELETE/PATCH. Naive double-submit explicitly rejected — see decision B4. `GET /auth/login` is intentionally cross-navigable. |
+| CSRF on state-changing endpoints | **Signed, session-bound** double-submit `XSRF-TOKEN` (HMAC-SHA256 over `token-value-base64 + ":" + sid`) + `X-XSRF-TOKEN` header on POST/PUT/DELETE/PATCH. Naive double-submit explicitly rejected — see decision B4. `GET /auth/login` is intentionally cross-navigable. |
 | Session fixation | Session id regenerated after login |
 | Cookie scoping | `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`; `Secure` + `__Host-` prefix in production |
 | Session-store compromise | Production: state-store AUTH, TLS, network isolation, encryption at rest |
@@ -511,7 +511,7 @@ algorithm, and signing-key rotation contract.
 | Access token replay | Short access-token lifetime; audience binding |
 | Audience confusion | Auth Service validates `id_token.aud = oidc-reference-auth`; Auth Service `/internal/*` validates Bearer `aud` contains the configured internal-refresh audience and `azp/client_id` equals the configured gateway client id; RS validates `access_token.aud` contains the configured API audience |
 | Internal-RPC compromise | `/internal/refresh` reachable only on the internal Compose network; Bearer-validated Client Credentials with audience binding; per-session lock prevents concurrent refresh races |
-| CSRF signing-key compromise | 256-bit env-supplied secret, gitignored; documented rotation procedure with grace-window acceptance of the prior key (§7.3) |
+| CSRF signing-key compromise | 256-bit env-supplied secret, gitignored; current implementation is single-key hard cutover. Dual-key grace-window rotation is production hardening. |
 | Overbroad scopes | Per-client default scopes are least-privilege |
 | Role mapping drift | Single mapping path tested both ends |
 | Refresh token misuse | Rotation + reuse detection |
@@ -608,10 +608,10 @@ remaining lifetime falls below 60s; serialized with a worker-local lock so
 concurrent requests do not trigger duplicate Keycloak calls. Invalidated
 on Auth Service 401 (per §7.1).
 
-**Timeouts and circuit breaker on `/internal/refresh`** per §7.1: connect
-1s, read 5s, rolling-window circuit breaker that distinguishes transport
-/ 5xx failures (count as failure) from 200 / 401 / 404 / 409 (count as
-success).
+**Timeouts on `/internal/refresh`** per §7.1: connect 1s, read 5s.
+Rolling-window circuit breaking is not implemented in the reference
+gateway; APISIX's built-in `api-breaker` plugin is the production
+primitive to add when operating beyond local reference scope.
 
 **No Java, no Spring.** The Gateway is APISIX configuration plus the
 `bff-session` Lua plugin module. The plugin's specification (state
@@ -738,14 +738,10 @@ The Gateway's call to `/internal/refresh`:
 - Read timeout: 5 s. The call may include a Keycloak round-trip inside
   Auth Service; 5 s is generous for healthy operation and tight enough
   to fail fast under contention.
-- Circuit breaker on the rolling failure rate (default: window of 10
-  requests, threshold 50% errors). Open state returns `503` to inbound
-  API requests that need refresh for 30 s; half-open admits one probe.
-- The circuit breaker MUST distinguish *transport / 5xx* failures
-  (count as failure) from *200 / 401 / 404 / 409* responses (count as
-  success — Auth Service is healthy, the answer is just not what we
-  wanted). Misclassifying 404 or 409 as failure would trip the breaker
-  on normal session-loss conditions.
+- Rolling-window circuit breaking is production hardening, not shipped
+  reference behavior. If added with APISIX `api-breaker`, it must
+  distinguish *transport / 5xx* failures from *200 / 401 / 404 / 409*
+  responses so normal session-loss conditions do not trip the breaker.
 
 ### 7.2 `sess:{sid}` Schema Contract
 
@@ -782,8 +778,7 @@ use beyond what the Gateway needs):
     "name":                   "<string>",
     "email":                  "<string>",
     "roles":                  ["<role>", ...]
-  },
-  "xsrf_token":               "<signed-csrf-token>"
+  }
 }
 ```
 
@@ -794,15 +789,19 @@ re-checks this on every `/auth/me` read and on every `/internal/refresh` —
 crossing the boundary during a refresh round-trip causes an explicit DEL +
 404 instead of relying on backend-dependent `EXPIRE k 0` semantics.
 
-`xsrf_token` is the signed CSRF token (§7.3) issued at callback time. It is
-re-served to the browser as the `XSRF-TOKEN` cookie on the same 302 that
-sets `__Host-sid`. Storing it in the session keeps validation a single
-"cookie matches header matches stored" comparison.
+The signed CSRF token (§7.3) is issued to the browser as the `XSRF-TOKEN`
+cookie on the same 302 that sets `__Host-sid`; it is not stored in
+`sess:{sid}`. Validation is stateless: cookie and header must match, and
+the HMAC must verify against `token-value-base64 + ":" + sid`. No
+session-store read is required for CSRF validation.
 
-Sliding TTL is enforced by `EXPIRE sess:{sid} 30m` on every read; there is
-no `last_touched_at` field because the Redis-compatible TTL itself is the
-source of truth. A future iteration that wants a separate watermark field
-can add one without breaking the tolerant reader.
+Sliding idle TTL is enforced by the API Gateway on authenticated `/api/**`
+traffic with `EXPIRE sess:{sid} min(SESSION_IDLE_TTL,
+remaining_absolute_ttl)`. `/auth/me` and other Auth Service read probes do
+not slide the idle window. There is no `last_touched_at` field because the
+Redis-compatible TTL itself is the source of truth. A future iteration that
+wants a separate watermark field can add one without breaking the tolerant
+reader.
 
 Schema contract rules:
 
@@ -853,7 +852,7 @@ receipt or a server-side session binding.
 
 where:
   token-value-base64 = base64url-encoded random 128-bit value
-  hmac-base64        = base64url-encoded HMAC-SHA256(signing_key, token-value-base64)
+  hmac-base64        = base64url-encoded HMAC-SHA256(signing_key, token-value-base64 + ":" + sid)
 ```
 
 **Cookie attributes for `XSRF-TOKEN`:**
@@ -881,7 +880,7 @@ where:
 2. Reject if either is missing.
 3. Reject if they do not match exactly (cheap check first).
 4. Split on the `.` separator.
-5. Recompute HMAC-SHA256(signing_key, token-value-base64).
+5. Recompute HMAC-SHA256(signing_key, token-value-base64 + ":" + sid).
 6. Reject if the recomputed HMAC does not match the supplied HMAC
    (constant-time comparison).
 7. Accept.
@@ -890,10 +889,10 @@ where:
 
 - Single shared key between Auth Service and API Gateway.
 - Supplied via env (gitignored), 256-bit random.
-- Rotated via documented procedure: both services accept the old key
-  for a grace window (e.g., 24h) after rotation to allow rolling
-  restarts; cookies issued with the old key are accepted during the
-  grace window and re-signed on the next state-changing request.
+- Current implementation accepts one active key. Rotation is a hard
+  cutover: existing CSRF cookies become invalid and the user must obtain
+  a fresh session. Dual-key grace-window acceptance is production
+  hardening, not shipped reference behavior.
 - The signing key is a secret; subject to the same handling rules as
   the Keycloak client secrets (decision E2).
 
@@ -1018,7 +1017,7 @@ cannot forge a valid signature.
 - Callback responds with a direct `302` to the validated saved-request URL
   (no intermediate landing page); response sets `__Host-sid` with
   `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` and `XSRF-TOKEN` (signed,
-  JS-readable) with `Secure`, `SameSite=Lax`, `Path=/`.
+  JS-readable) with `Secure`, `SameSite=Strict`, `Path=/`.
 - Session cookie is set only after successful callback.
 - Callback creates exactly one `sess:{sid}` key in the state store after
   ID-token validation; tests assert no framework-managed HTTP session key
@@ -1042,9 +1041,10 @@ cannot forge a valid signature.
   audit event, deletes `sess:{sid}`, and returns 409. On Keycloak transient
   failure, returns 502. Per-session lock prevents concurrent duplicate refresh.
 - **Signed CSRF tests (§7.3).** Forged signature rejected. Tampered
-  `token-value-base64` with unchanged HMAC rejected. Mismatched cookie
-  vs. header rejected. Missing cookie or missing header rejected. Valid
-  signed token accepted.
+  `token-value-base64` with unchanged HMAC rejected. Valid token from
+  another `sid` rejected. Mismatched cookie vs. header rejected. Missing
+  cookie or missing header rejected. Valid same-session signed token
+  accepted.
 
 **API Gateway (APISIX `bff-session` plugin)**
 
@@ -1071,7 +1071,8 @@ cannot forge a valid signature.
   `/internal/refresh` call, not two (Auth Service per-session lock).
 - Signed CSRF validation on state-changing `/api/**` requests:
   signature-tamper, value-tamper, missing-cookie, missing-header,
-  cookie-header mismatch all rejected with 403.
+  cookie-header mismatch, and valid-token-from-another-session all
+  rejected with 403.
 - Client Credentials service-token cache: one Keycloak round-trip per
   worker per cache window; proactive refresh under 60s remaining;
   invalidation on Auth Service 401.

@@ -55,7 +55,6 @@ class SessSchemaContractTest {
     assertThat(record.accessToken()).isEqualTo(payload.get("access_token").asString());
     assertThat(record.refreshToken()).isEqualTo(payload.get("refresh_token").asString());
     assertThat(record.idToken()).isEqualTo(payload.get("id_token").asString());
-    assertThat(record.xsrfToken()).isEqualTo(payload.get("xsrf_token").asString());
     assertThat(record.expiresAt().toString()).isEqualTo(payload.get("access_token_expires_at").asString());
     assertThat(record.refreshExpiresAt().toString()).isEqualTo(payload.get("refresh_token_expires_at").asString());
     assertThat(record.createdAt().toString()).isEqualTo(payload.get("created_at").asString());

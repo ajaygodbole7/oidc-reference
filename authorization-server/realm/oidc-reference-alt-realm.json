@@ -8,7 +8,7 @@
   "resetPasswordAllowed": false,
   "editUsernameAllowed": false,
   "bruteForceProtected": true,
-  "accessTokenLifespan": 300,
+  "accessTokenLifespan": 120,
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 36000,
   "offlineSessionIdleTimeout": 2592000,
@@ -272,7 +272,10 @@
       "webOrigins": [],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://127.0.0.1:5173/##http://127.0.0.1:9080/"
+        "post.logout.redirect.uris": "http://127.0.0.1:5173/##http://127.0.0.1:9080/",
+        "backchannel.logout.url": "http://auth-service:8081/backchannel-logout",
+        "backchannel.logout.session.required": "true",
+        "backchannel.logout.revoke.offline.tokens": "false"
       },
       "defaultClientScopes": [
         "openid",

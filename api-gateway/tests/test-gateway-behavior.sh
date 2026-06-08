@@ -138,6 +138,28 @@ test_no_cookie_navigation_returns_302_to_login() {
   esac
 }
 
+test_x_forwarded_proto_drives_secure_cookie_handling() {
+  name="x_forwarded_proto_drives_secure_cookie_handling"
+  sid="xfp-secure-1"
+  setup_session "$sid" "test-jwt-xfp" 300
+
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" \
+    -w '%{http_code}' \
+    -H 'X-Forwarded-Proto: https' \
+    -H "Cookie: __Host-sid=$sid" \
+    "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+  assert_plugin_forwarded "$name forwarded_https_accepts_host_sid" \
+    "$status" "$HEADERS_TMP" "$BODY_TMP"
+
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" \
+    -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid" \
+    "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+  assert_status "$name plaintext_rejects_host_sid" 401 "$status"
+
+  clear_session "$sid"
+}
+
 test_unknown_path_returns_404() {
   name="unknown_path_returns_404"
   status="$(curl -s -o /dev/null -w '%{http_code}' \
@@ -174,7 +196,7 @@ test_internal_path_is_not_routable_through_gateway() {
   #    routable — the absence of a route is the security control, not the
   #    presence/absence of session state.
   sid="internal-probe-1"
-  setup_session "$sid" "test-jwt-internal-probe" 300 "unused.csrf"
+  setup_session "$sid" "test-jwt-internal-probe" 300
   status="$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Cookie: __Host-sid=$sid" \
@@ -249,13 +271,13 @@ setup_echo_session() {
     FAILED=$((FAILED + 1))
     return 1
   fi
-  setup_session "$sid" "$access_token" 300 "unused.csrf"
+  setup_session "$sid" "$access_token" 300
 }
 
 test_valid_session_returns_200_with_bearer_injected() {
   name="valid_session_returns_200_with_bearer_injected"
   sid="valid-1"
-  setup_session "$sid" "test-jwt-1" 300 "unused.csrf"
+  setup_session "$sid" "test-jwt-1" 300
   status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
     -H "Cookie: __Host-sid=$sid" \
     "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
@@ -292,7 +314,7 @@ test_canonical_fixture_payload_parses_through_plugin() {
 test_session_with_extra_fields_is_tolerated() {
   name="session_with_extra_fields_is_tolerated"
   sid="valid-extra-1"
-  setup_session_with_extra "$sid" "test-jwt-extra" 300 "unused.csrf" \
+  setup_session_with_extra "$sid" "test-jwt-extra" 300 \
     '"future_field":"some_value","another":42'
   status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
     -H "Cookie: __Host-sid=$sid" \
@@ -365,10 +387,10 @@ test_state_changing_method_requires_signed_csrf() {
   fi
 
   sid="csrf-1"
-  # The session-stored xsrf_token is informational; the gateway validates
-  # cookie ↔ header ↔ HMAC, not session-stored value. Still set something.
-  valid_token="$(make_valid_csrf)"
-  setup_session "$sid" "test-jwt-csrf" 300 "$valid_token"
+  # CSRF is stateless to validate: the gateway checks cookie ↔ header ↔
+  # HMAC(value:sid), not a session-stored value.
+  valid_token="$(make_valid_csrf "$sid")"
+  setup_session "$sid" "test-jwt-csrf" 300
 
   # ---- 1. No CSRF cookie/header -> 403 problem+json
   status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
@@ -383,8 +405,17 @@ test_state_changing_method_requires_signed_csrf() {
     | awk -F';' '{print $1}')"
   assert_status "$name no_csrf_content_type" "application/problem+json" "$ct"
 
-  # ---- 2. Mismatched cookie vs header values -> 403
-  other_valid="$(make_valid_csrf)"
+  # ---- 2. Plain unsigned token (cookie == header, no HMAC) -> 403
+  plain="plain-csrf-token"
+  status="$(curl -s -o /dev/null -w '%{http_code}' \
+    -X POST \
+    -H "Cookie: __Host-sid=$sid; XSRF-TOKEN=$plain" \
+    -H "X-XSRF-TOKEN: $plain" \
+    "$GATEWAY_BASE/api/admin" 2>/dev/null || true)"
+  assert_status "$name unsigned_plain_status" 403 "$status"
+
+  # ---- 3. Mismatched cookie vs header values -> 403
+  other_valid="$(make_valid_csrf "other-sid")"
   status="$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Cookie: __Host-sid=$sid; XSRF-TOKEN=$valid_token" \
@@ -392,9 +423,9 @@ test_state_changing_method_requires_signed_csrf() {
     "$GATEWAY_BASE/api/admin" 2>/dev/null || true)"
   assert_status "$name mismatched_status" 403 "$status"
 
-  # ---- 3. Forged HMAC (cookie value == header value but HMAC tampered)
+  # ---- 4. Forged HMAC (cookie value == header value but HMAC tampered)
   # Take a valid token, flip its last char to create an invalid hmac.
-  good="$(make_valid_csrf)"
+  good="$(make_valid_csrf "$sid")"
   bad="${good%?}X"  # replace last char with X
   status="$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST \
@@ -403,8 +434,18 @@ test_state_changing_method_requires_signed_csrf() {
     "$GATEWAY_BASE/api/admin" 2>/dev/null || true)"
   assert_status "$name forged_hmac_status" 403 "$status"
 
-  # ---- 4. Valid signed CSRF -> 200 (or 401 from RS — gateway forwarded)
-  good2="$(make_valid_csrf)"
+  # ---- 5. Validly signed for a different sid -> 403 even when
+  # cookie/header match. This is the session-binding guard.
+  other_sid_token="$(make_valid_csrf "sid-that-is-not-$sid")"
+  status="$(curl -s -o /dev/null -w '%{http_code}' \
+    -X POST \
+    -H "Cookie: __Host-sid=$sid; XSRF-TOKEN=$other_sid_token" \
+    -H "X-XSRF-TOKEN: $other_sid_token" \
+    "$GATEWAY_BASE/api/admin" 2>/dev/null || true)"
+  assert_status "$name cross_session_status" 403 "$status"
+
+  # ---- 6. Valid signed CSRF -> 200 (or 401 from RS — gateway forwarded)
+  good2="$(make_valid_csrf "$sid")"
   status="$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Cookie: __Host-sid=$sid; XSRF-TOKEN=$good2" \
@@ -426,6 +467,30 @@ test_state_changing_method_requires_signed_csrf() {
       ;;
   esac
 
+  clear_session "$sid"
+}
+
+test_api_activity_slides_session_ttl() {
+  name="api_activity_slides_session_ttl"
+  sid="ttl-slide-1"
+  setup_session "$sid" "test-jwt-ttl-slide" 300
+  valkey_exec EXPIRE "sess:$sid" 5 >/dev/null
+
+  before="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid" \
+    "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+  assert_plugin_forwarded "$name" "$status" "$HEADERS_TMP" "$BODY_TMP"
+  after="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"
+
+  if [ "$after" -gt "$before" ] && [ "$after" -gt 60 ]; then
+    printf '[PASS] %s ttl_extended before=%s after=%s\n' "$name" "$before" "$after"
+    PASSED=$((PASSED + 1))
+  else
+    printf '[FAIL] %s expected API activity to extend TTL above %s, got %s\n' \
+      "$name" "$before" "$after"
+    FAILED=$((FAILED + 1))
+  fi
   clear_session "$sid"
 }
 
@@ -493,6 +558,7 @@ test_hop_by_hop_headers_stripped() {
 printf -- '---- gateway integration tests ----\n'
 test_no_cookie_xhr_returns_401_no_redirect          || true
 test_no_cookie_navigation_returns_302_to_login      || true
+test_x_forwarded_proto_drives_secure_cookie_handling || true
 test_unknown_path_returns_404                       || true
 test_internal_path_is_not_routable_through_gateway  || true
 test_valid_session_returns_200_with_bearer_injected || true
@@ -500,6 +566,7 @@ test_canonical_fixture_payload_parses_through_plugin || true
 test_session_with_extra_fields_is_tolerated         || true
 test_expiring_session_triggers_refresh_delegation   || true
 test_state_changing_method_requires_signed_csrf     || true
+test_api_activity_slides_session_ttl                || true
 test_cookie_strip_does_not_leak_to_upstream         || true
 test_query_string_preserved                         || true
 test_hop_by_hop_headers_stripped                    || true

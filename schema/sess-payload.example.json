@@ -9,8 +9,7 @@
     "refresh_token_expires_at",
     "created_at",
     "absolute_expires_at",
-    "claims",
-    "xsrf_token"
+    "claims"
   ],
   "required_fields_reader": [
     "access_token",
@@ -30,7 +29,6 @@
       "name": "Alice Example",
       "email": "alice@example.test",
       "roles": ["user"]
-    },
-    "xsrf_token": "fixture-xsrf.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
   }
 }

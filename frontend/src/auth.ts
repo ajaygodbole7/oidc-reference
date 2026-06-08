@@ -22,6 +22,16 @@ function isUser(value: unknown): value is User {
   return true;
 }
 
+function sanitizeUser(value: User): User {
+  return {
+    sub: value.sub,
+    preferred_username: value.preferred_username,
+    name: value.name,
+    email: value.email,
+    roles: value.roles ? [...value.roles] : undefined
+  };
+}
+
 type Navigate = (path: string) => void;
 
 const browserNavigate: Navigate = (path) => window.location.assign(path);
@@ -59,7 +69,7 @@ export async function fetchMe(signal?: AbortSignal): Promise<User | null> {
   if (!res.ok) throw new Error(`/auth/me failed: ${res.status}`);
   const body = (await res.json()) as unknown;
   if (!isUser(body)) throw new Error("/auth/me returned an unrecognized shape");
-  return body;
+  return sanitizeUser(body);
 }
 
 export async function callApi(path: string, navigate: Navigate = browserNavigate): Promise<Response> {

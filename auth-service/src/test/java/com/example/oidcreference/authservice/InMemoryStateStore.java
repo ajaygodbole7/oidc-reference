@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 class InMemoryStateStore implements StateStore {
   private final Map<String, String> values = new ConcurrentHashMap<>();
   private final AtomicInteger putCallsWithZeroTtl = new AtomicInteger();
+  private final AtomicInteger expireCalls = new AtomicInteger();
 
   @Override
   public void put(String key, String value, Duration ttl) {
@@ -55,11 +56,15 @@ class InMemoryStateStore implements StateStore {
 
   @Override
   public void expire(String key, Duration ttl) {
-    // no-op for in-memory; sliding-TTL behavior isn't exercised here
+    expireCalls.incrementAndGet();
   }
 
   int putCallsWithZeroTtl() {
     return putCallsWithZeroTtl.get();
+  }
+
+  int expireCalls() {
+    return expireCalls.get();
   }
 
   Set<String> keys() {
@@ -69,5 +74,6 @@ class InMemoryStateStore implements StateStore {
   void clear() {
     values.clear();
     putCallsWithZeroTtl.set(0);
+    expireCalls.set(0);
   }
 }

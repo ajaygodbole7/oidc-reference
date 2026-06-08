@@ -44,19 +44,29 @@ class SignedCsrfSupportTest {
   }
 
   private String signingKey;
+  private String sid;
 
   @BeforeEach
   void setUp() {
     signingKey = BASE64_STD.encodeToString(KEY_BYTES);
+    sid = "sid-test";
   }
 
   @Test
   void validateAcceptsTokenThatMatchesItsSignature() {
     String value = "random-128bit-value";
-    String hmac = hmac(value, KEY_BYTES);
+    String hmac = hmac(value + ":" + sid, KEY_BYTES);
     String token = value + "." + hmac;
 
-    assertThat(SignedCsrfSupport.validate(token, token, signingKey)).isTrue();
+    assertThat(SignedCsrfSupport.validate(token, token, signingKey, sid)).isTrue();
+  }
+
+  @Test
+  void validateRejectsTokenFromDifferentSession() {
+    String value = "random-128bit-value";
+    String token = value + "." + hmac(value + ":" + sid, KEY_BYTES);
+
+    assertThat(SignedCsrfSupport.validate(token, token, signingKey, "sid-other")).isFalse();
   }
 
   @Test
@@ -66,10 +76,10 @@ class SignedCsrfSupportTest {
     // fail. A naive cookie==header check would *pass* here — this asserts
     // the SUT recomputes the HMAC.
     String value = "random-128bit-value";
-    String hmac = hmac(value, KEY_BYTES);
+    String hmac = hmac(value + ":" + sid, KEY_BYTES);
     String tampered = "random-128bit-VALUE" + "." + hmac;
 
-    assertThat(SignedCsrfSupport.validate(tampered, tampered, signingKey)).isFalse();
+    assertThat(SignedCsrfSupport.validate(tampered, tampered, signingKey, sid)).isFalse();
   }
 
   @Test
@@ -78,10 +88,10 @@ class SignedCsrfSupportTest {
     // supplied HMAC differs from what the SUT recomputes under the real
     // key. Load-bearing for the entire signed-double-submit threat model.
     String value = "random-128bit-value";
-    String forged = hmac(value, OTHER_KEY_BYTES);
+    String forged = hmac(value + ":" + sid, OTHER_KEY_BYTES);
     String token = value + "." + forged;
 
-    assertThat(SignedCsrfSupport.validate(token, token, signingKey)).isFalse();
+    assertThat(SignedCsrfSupport.validate(token, token, signingKey, sid)).isFalse();
   }
 
   @Test
@@ -89,7 +99,7 @@ class SignedCsrfSupportTest {
     // No `.` means no separable value/hmac halves — must reject before
     // attempting HMAC recomputation. A naive split-on-dot implementation
     // could blow up with IndexOutOfBounds; the SUT must defend.
-    assertThat(SignedCsrfSupport.validate("not-a-signed-token", "not-a-signed-token", signingKey))
+    assertThat(SignedCsrfSupport.validate("not-a-signed-token", "not-a-signed-token", signingKey, sid))
         .isFalse();
   }
 
@@ -100,21 +110,22 @@ class SignedCsrfSupportTest {
     // can never be legitimate and because the cheap check shrinks the
     // attack surface for timing oracles on the HMAC step.
     String value = "random-128bit-value";
-    String hmac = hmac(value, KEY_BYTES);
+    String hmac = hmac(value + ":" + sid, KEY_BYTES);
     String token = value + "." + hmac;
     String otherValue = "different-128bit-value";
-    String otherToken = otherValue + "." + hmac(otherValue, KEY_BYTES);
+    String otherToken = otherValue + "." + hmac(otherValue + ":" + sid, KEY_BYTES);
 
-    assertThat(SignedCsrfSupport.validate(token, otherToken, signingKey)).isFalse();
+    assertThat(SignedCsrfSupport.validate(token, otherToken, signingKey, sid)).isFalse();
   }
 
   @Test
   void validateRejectsBothNullCookieAndHeader() {
     // Defensive null handling: neither half present means the request is
     // unauthenticated as CSRF goes; the SUT must not throw NPE.
-    assertThat(SignedCsrfSupport.validate(null, null, signingKey)).isFalse();
-    assertThat(SignedCsrfSupport.validate("anything", null, signingKey)).isFalse();
-    assertThat(SignedCsrfSupport.validate(null, "anything", signingKey)).isFalse();
+    assertThat(SignedCsrfSupport.validate(null, null, signingKey, sid)).isFalse();
+    assertThat(SignedCsrfSupport.validate("anything", null, signingKey, sid)).isFalse();
+    assertThat(SignedCsrfSupport.validate(null, "anything", signingKey, sid)).isFalse();
+    assertThat(SignedCsrfSupport.validate("anything", "anything", signingKey, null)).isFalse();
   }
 
   // -- helpers --------------------------------------------------------------

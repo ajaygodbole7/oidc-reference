@@ -121,6 +121,8 @@ class SecretSentinelValidatorTest {
         "idp",
         "",                                       // base-url
         Duration.ofSeconds(60),
+        Duration.ofSeconds(1800),
+        Duration.ofSeconds(28800),
         URI.create("http://idp.example"),
         null,
         null,

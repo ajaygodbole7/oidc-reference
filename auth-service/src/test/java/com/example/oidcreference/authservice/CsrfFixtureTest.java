@@ -32,8 +32,9 @@ class CsrfFixtureTest {
 
     String keyB64 = extract(json, "signing_key_base64");
     String signedToken = extract(json, "signed_token");
+    String sid = extract(json, "sid");
 
-    assertThat(SignedCsrfSupport.validate(signedToken, signedToken, keyB64))
+    assertThat(SignedCsrfSupport.validate(signedToken, signedToken, keyB64, sid))
         .as("SignedCsrfSupport must accept the fixture's signed token — "
             + "the schema/csrf-fixture.json contract has drifted from "
             + "SignedCsrfSupport's HMAC algorithm or encoding")

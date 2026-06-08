@@ -4,17 +4,18 @@
   "algorithm": {
     "hmac": "HmacSHA256",
     "key_encoding": "standard Base64 (java.util.Base64.getDecoder applied to signing_key_base64 yields the raw key bytes)",
-    "value_bytes": "UTF-8 bytes of token_value",
+    "message_bytes": "UTF-8 bytes of token_value + \":\" + sid",
     "hmac_encoding": "Base64 URL-safe, no padding (java.util.Base64.getUrlEncoder.withoutPadding)",
     "signed_token_formula": "token_value + \".\" + hmac_base64url"
   },
   "inputs": {
     "signing_key_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "signing_key_comment": "32 zero bytes encoded as standard Base64. Production keys MUST be cryptographically random; this fixture uses a deterministic key so any implementer can reproduce the expected output by hand.",
-    "token_value": "fixture-test-value-001"
+    "token_value": "fixture-test-value-001",
+    "sid": "fixture-sid-001"
   },
   "expected": {
-    "hmac_base64url": "1TxmqGRIdmTz_8QJnZi38J4q1KBBkPShqTRCaxrSQY8",
-    "signed_token": "fixture-test-value-001.1TxmqGRIdmTz_8QJnZi38J4q1KBBkPShqTRCaxrSQY8"
+    "hmac_base64url": "7CifcNwDcUnUH-jLx5CJMPyOhkT7f2zNMUTm89Z1iPU",
+    "signed_token": "fixture-test-value-001.7CifcNwDcUnUH-jLx5CJMPyOhkT7f2zNMUTm89Z1iPU"
   }
 }

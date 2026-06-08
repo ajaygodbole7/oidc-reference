@@ -41,8 +41,11 @@ export APISIX_IDP_TOKEN_URL
 GATEWAY_CLIENT_ID="${GATEWAY_CLIENT_ID:-oidc-reference-api-gateway}"
 export GATEWAY_CLIENT_ID
 
+SESSION_IDLE_TTL="${SESSION_IDLE_TTL:-1800}"
+export SESSION_IDLE_TTL
+
 missing=
-for var in GATEWAY_CLIENT_SECRET CSRF_SIGNING_KEY APISIX_IDP_TOKEN_URL GATEWAY_CLIENT_ID; do
+for var in GATEWAY_CLIENT_SECRET CSRF_SIGNING_KEY APISIX_IDP_TOKEN_URL GATEWAY_CLIENT_ID SESSION_IDLE_TTL; do
   eval "value=\${$var:-}"
   if [ -z "$value" ]; then
     missing="$missing $var"
@@ -66,7 +69,7 @@ if ! command -v envsubst >/dev/null 2>&1; then
 fi
 
 # shellcheck disable=SC2016
-envsubst '${GATEWAY_CLIENT_SECRET} ${CSRF_SIGNING_KEY} ${APISIX_IDP_TOKEN_URL} ${GATEWAY_CLIENT_ID}' \
+envsubst '${GATEWAY_CLIENT_SECRET} ${CSRF_SIGNING_KEY} ${APISIX_IDP_TOKEN_URL} ${GATEWAY_CLIENT_ID} ${SESSION_IDLE_TTL}' \
   < "$TEMPLATE" > "$RENDERED"
 
 # Startup guard: a REPLACE_ME_ in the rendered file means an unsubstituted
@@ -84,7 +87,7 @@ fi
 
 # Also refuse empty values that envsubst may have collapsed into nothing
 # for keys we know must be non-empty.
-for key in gateway_client_secret cookie_signing_key idp_token_url gateway_client_id; do
+for key in gateway_client_secret cookie_signing_key idp_token_url gateway_client_id idle_ttl_seconds; do
   # YAML key followed by zero-or-more spaces and then end-of-line is
   # the empty-string footgun. Real values are non-empty.
   if grep -E "^[[:space:]]+${key}:[[:space:]]*$" "$RENDERED" >/dev/null 2>&1; then

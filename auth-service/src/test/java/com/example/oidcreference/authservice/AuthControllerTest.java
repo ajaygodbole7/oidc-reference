@@ -50,7 +50,7 @@ import org.springframework.test.web.servlet.MvcResult;
  *       cross-site from the IdP; a Strict sid would not be sent on the
  *       final hop to the protected URL).
  *   <li><strong>Browser binding (oauth_tx):</strong> login mints a short-
- *       lived HttpOnly {@code oauth_tx} cookie scoped to
+ *       lived HttpOnly {@code oauth_tx_<state-hash>} cookie scoped to
  *       {@code /auth/callback/idp} and stores its HMAC in
  *       {@code tx:{state}}. The callback rejects when the cookie is
  *       missing or its hash doesn't match the transaction. PKCE +
@@ -64,7 +64,7 @@ import org.springframework.test.web.servlet.MvcResult;
  * </ul>
  *
  * <p>The signing key in {@code @SpringBootTest} properties is a known
- * Base64-encoded 32-zero-byte value so {@link #signCsrfToken(String)} can
+ * Base64-encoded 32-zero-byte value so {@link #signCsrfToken(String, String)} can
  * compute a valid token in-test. The Auth Service cookie name is {@code
  * sid} (not {@code __Host-sid}) on plain-HTTP test requests because the
  * production prefix requires {@code Secure}, which MockMvc cannot emit.
@@ -112,10 +112,6 @@ class AuthControllerTest {
   void loginRequiresReturnTo() throws Exception {
     // Happy-path login with an explicit return_to=/. /auth/login without
     // return_to is no longer valid (see loginRejectsMissingReturnTo).
-    // Browser binding: login MUST set the oauth_tx cookie, scoped to
-    // /auth/callback/idp, and the transaction record MUST carry its
-    // HMAC (see OAuthTxBinding). The sid cookie still only appears on
-    // callback success.
     MvcResult result = mockMvc.perform(get("/auth/login")
             .param("return_to", "/")
             .header("Host", "127.0.0.1:5173")
@@ -125,16 +121,16 @@ class AuthControllerTest {
         .andExpect(header().string(HttpHeaders.LOCATION,
             org.hamcrest.Matchers.containsString("code_challenge_method=S256")))
         .andExpect(cookie().doesNotExist("sid"))
-        .andExpect(cookie().exists("oauth_tx"))
-        .andExpect(cookie().httpOnly("oauth_tx", true))
-        .andExpect(cookie().path("oauth_tx", "/auth/callback/idp"))
         .andReturn();
 
-    // oauth_tx is the only cookie set at login. sid + XSRF-TOKEN appear
-    // on callback success, not here.
+    String location = result.getResponse().getHeader(HttpHeaders.LOCATION);
+    String txCookieName = OAuthTxBinding.cookieName(queryParam(location, "state"));
+    // Browser binding: login MUST set a per-state oauth_tx_<hash> cookie,
+    // scoped to /auth/callback/idp, and the transaction record MUST carry
+    // its HMAC. sid + XSRF-TOKEN appear on callback success, not here.
     assertThat(result.getResponse().getHeaders(HttpHeaders.SET_COOKIE))
         .hasSize(1)
-        .first().asString().contains("oauth_tx=").contains("HttpOnly")
+        .first().asString().contains(txCookieName + "=").contains("HttpOnly")
         .contains("Path=/auth/callback/idp").contains("SameSite=Lax");
 
     assertThat(stateStore.keys()).hasSize(1);
@@ -146,7 +142,7 @@ class AuthControllerTest {
     // The HMAC of the cookie value is in tx:{state}; the raw cookie
     // value is NOT (we'd lose the browser-binding security property).
     assertThat(txJson).contains("\"tx_cookie_hash\":\"");
-    assertThat(result.getResponse().getHeader(HttpHeaders.LOCATION))
+    assertThat(location)
         .contains("redirect_uri=http://127.0.0.1:5173/auth/callback/idp");
   }
 
@@ -342,7 +338,7 @@ class AuthControllerTest {
     MvcResult result = mockMvc.perform(get("/auth/callback/idp")
             .param("code", "code-1")
             .param("state", state)
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isFound())
         .andExpect(header().string(HttpHeaders.LOCATION, "/api/user-data"))
         .andExpect(header().string(HttpHeaders.CACHE_CONTROL,
@@ -388,7 +384,7 @@ class AuthControllerTest {
     MvcResult callback = mockMvc.perform(get("/auth/callback/idp")
             .param("code", "code-1")
             .param("state", state)
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isFound())
         .andExpect(header().string(HttpHeaders.LOCATION, "/"))
         .andReturn();
@@ -407,7 +403,7 @@ class AuthControllerTest {
     mockMvc.perform(get("/auth/callback/idp")
             .param("code", "reject-code")
             .param("state", state)
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isUnauthorized())
         .andExpect(header().string(HttpHeaders.CACHE_CONTROL,
             org.hamcrest.Matchers.containsString("no-store")))
@@ -432,7 +428,7 @@ class AuthControllerTest {
     MvcResult callback = mockMvc.perform(get("/auth/callback/idp")
             .param("code", "code-1")
             .param("state", state)
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isFound())
         .andReturn();
 
@@ -460,7 +456,7 @@ class AuthControllerTest {
     MvcResult httpsResult = mockMvc.perform(get("/auth/callback/idp")
             .param("code", "code-1")
             .param("state", state)
-            .cookie(TX_COOKIE)
+            .cookie(txCookie(state))
             .header("Host", "app.example.com")
             .header("X-Forwarded-Proto", "https")
             .header("X-Forwarded-Host", "app.example.com"))
@@ -481,7 +477,7 @@ class AuthControllerTest {
     MvcResult httpResult = mockMvc.perform(get("/auth/callback/idp")
             .param("code", "code-1")
             .param("state", state2)
-            .cookie(TX_COOKIE)
+            .cookie(txCookie(state2))
             .header("Host", "127.0.0.1:5173")
             .header("X-Forwarded-Proto", "http")
             .header("X-Forwarded-Host", "127.0.0.1:5173"))
@@ -514,11 +510,11 @@ class AuthControllerTest {
             .param("code", "code-1")
             .param("state", state)
             .param("iss", "http://attacker.example")
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isBadRequest())
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
-        .andExpect(cookie().exists("oauth_tx"))
-        .andExpect(cookie().maxAge("oauth_tx", 0));
+        .andExpect(cookie().exists(OAuthTxBinding.cookieName(state)))
+        .andExpect(cookie().maxAge(OAuthTxBinding.cookieName(state), 0));
 
     assertThat(output.getOut())
         .contains("event=callback_failed")
@@ -540,7 +536,7 @@ class AuthControllerTest {
             .param("code", "code-1")
             .param("state", state)
             .param("iss", "http://idp.example")
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isFound())
         .andExpect(cookie().exists("sid"));
   }
@@ -557,7 +553,7 @@ class AuthControllerTest {
     mockMvc.perform(get("/auth/callback/idp")
             .param("code", "code-1")
             .param("state", state)
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isFound())
         .andExpect(cookie().exists("sid"));
   }
@@ -575,10 +571,10 @@ class AuthControllerTest {
     mockMvc.perform(get("/auth/callback/idp")
             .param("error", "access_denied")
             .param("state", state)
-            .cookie(TX_COOKIE))
+            .cookie(txCookie(state)))
         .andExpect(status().isFound())
         .andExpect(header().string(HttpHeaders.LOCATION, "/"))
-        .andExpect(cookie().maxAge("oauth_tx", 0));
+        .andExpect(cookie().maxAge(OAuthTxBinding.cookieName(state), 0));
 
     assertThat(output.getOut())
         .contains("event=callback_failed")
@@ -602,13 +598,46 @@ class AuthControllerTest {
     mockMvc.perform(get("/auth/callback/idp")
             .param("code", "code-1")
             .param("state", state)
-            .cookie(new Cookie(OAuthTxBinding.COOKIE_NAME, cookieValue)))
+            .cookie(new Cookie(OAuthTxBinding.cookieName(state), cookieValue)))
         .andExpect(status().isFound())
         .andExpect(cookie().exists("sid"))
         // Callback evicts the oauth_tx cookie even on success — the
         // transaction is single-use.
-        .andExpect(cookie().maxAge("oauth_tx", 0));
+        .andExpect(cookie().maxAge(OAuthTxBinding.cookieName(state), 0));
     assertThat(stateStore.get("tx:" + state)).isEmpty();
+  }
+
+  @Test
+  void concurrentLoginCallbacksUseIndependentTransactionCookies() throws Exception {
+    String stateA = "state-tab-a";
+    String stateB = "state-tab-b";
+    String cookieValueA = OAuthTxBinding.issueCookieValue();
+    String cookieValueB = OAuthTxBinding.issueCookieValue();
+    storeBoundTransaction(
+        stateA, "/api/a", OAuthTxBinding.hash(cookieValueA, COOKIE_SIGNING_KEY));
+    storeBoundTransaction(
+        stateB, "/api/b", OAuthTxBinding.hash(cookieValueB, COOKIE_SIGNING_KEY));
+
+    mockMvc.perform(get("/auth/callback/idp")
+            .param("code", "code-1")
+            .param("state", stateA)
+            .cookie(new Cookie(OAuthTxBinding.cookieName(stateA), cookieValueA))
+            .cookie(new Cookie(OAuthTxBinding.cookieName(stateB), cookieValueB)))
+        .andExpect(status().isFound())
+        .andExpect(header().string(HttpHeaders.LOCATION, "/api/a"))
+        .andExpect(cookie().maxAge(OAuthTxBinding.cookieName(stateA), 0))
+        .andExpect(cookie().doesNotExist(OAuthTxBinding.cookieName(stateB)));
+
+    mockMvc.perform(get("/auth/callback/idp")
+            .param("code", "code-1")
+            .param("state", stateB)
+            .cookie(new Cookie(OAuthTxBinding.cookieName(stateB), cookieValueB)))
+        .andExpect(status().isFound())
+        .andExpect(header().string(HttpHeaders.LOCATION, "/api/b"))
+        .andExpect(cookie().maxAge(OAuthTxBinding.cookieName(stateB), 0));
+
+    assertThat(stateStore.get("tx:" + stateA)).isEmpty();
+    assertThat(stateStore.get("tx:" + stateB)).isEmpty();
   }
 
   @Test
@@ -623,8 +652,8 @@ class AuthControllerTest {
             .param("state", state))
         .andExpect(status().isBadRequest())
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
-        .andExpect(cookie().exists("oauth_tx"))
-        .andExpect(cookie().maxAge("oauth_tx", 0));
+        .andExpect(cookie().exists(OAuthTxBinding.cookieName(state)))
+        .andExpect(cookie().maxAge(OAuthTxBinding.cookieName(state), 0));
 
     assertThat(output.getOut())
         .contains("event=callback_failed")
@@ -649,10 +678,10 @@ class AuthControllerTest {
     mockMvc.perform(get("/auth/callback/idp")
             .param("code", "code-1")
             .param("state", state)
-            .cookie(new Cookie(OAuthTxBinding.COOKIE_NAME, attackerCookieValue)))
+            .cookie(new Cookie(OAuthTxBinding.cookieName(state), attackerCookieValue)))
         .andExpect(status().isBadRequest())
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
-        .andExpect(cookie().maxAge("oauth_tx", 0));
+        .andExpect(cookie().maxAge(OAuthTxBinding.cookieName(state), 0));
 
     assertThat(output.getOut())
         .contains("event=callback_failed")
@@ -693,12 +722,24 @@ class AuthControllerTest {
     assertThat(stateStore.get("sess:" + sid.getValue())).isEmpty();
   }
 
+  @Test
+  void authMeDoesNotSlideIdleTtl() throws Exception {
+    Cookie sid = createSessionCookie();
+
+    mockMvc.perform(get("/auth/me").cookie(sid))
+        .andExpect(status().isOk());
+
+    assertThat(stateStore.expireCalls())
+        .as("/auth/me is a liveness/read probe and must not extend idle TTL")
+        .isZero();
+  }
+
   // -- logout (signed CSRF) ------------------------------------------------
 
   @Test
   void logoutDeletesSessionAndClearsCookie() throws Exception {
     Cookie sid = createSessionCookie();
-    String csrf = signCsrfToken("logout-value");
+    String csrf = signCsrfToken("logout-value", sid.getValue());
 
     mockMvc.perform(post("/auth/logout")
             .cookie(sid, new Cookie("XSRF-TOKEN", csrf))
@@ -715,15 +756,13 @@ class AuthControllerTest {
             org.hamcrest.Matchers.startsWith("/auth/logout/continue?lc="),
             org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("id_token_hint")),
             org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("idp.example")))))
-        // sid + XSRF + oauth_tx all evicted (the last covers the case
-        // where the user aborted a login and only later logged out from
-        // a stale session — the oauth_tx cookie can otherwise linger
-        // up to TX_TTL).
+        // sid + XSRF evicted. Per-transaction oauth_tx_<hash> cookies
+        // are cleared by their matching callback and otherwise expire
+        // naturally at TX_TTL.
         .andExpect(header().stringValues(HttpHeaders.SET_COOKIE,
             org.hamcrest.Matchers.hasItems(
                 org.hamcrest.Matchers.containsString("sid=;"),
-                org.hamcrest.Matchers.containsString("XSRF-TOKEN=;"),
-                org.hamcrest.Matchers.containsString("oauth_tx=;"))));
+                org.hamcrest.Matchers.containsString("XSRF-TOKEN=;"))));
 
     assertThat(stateStore.get("sess:" + sid.getValue())).isEmpty();
   }
@@ -731,7 +770,7 @@ class AuthControllerTest {
   @Test
   void logoutCanReturnJsonRedirectForSpaFetch() throws Exception {
     Cookie sid = createSessionCookie();
-    String csrf = signCsrfToken("spa-logout-value");
+    String csrf = signCsrfToken("spa-logout-value", sid.getValue());
 
     MvcResult result = mockMvc.perform(post("/auth/logout")
             .accept(MediaType.APPLICATION_JSON)
@@ -766,7 +805,7 @@ class AuthControllerTest {
     // redirect, with id_token_hint + no-referrer, so the id_token never reaches
     // JS as readable data. The handle is single-use.
     Cookie sid = createSessionCookie();
-    String csrf = signCsrfToken("continue-value");
+    String csrf = signCsrfToken("continue-value", sid.getValue());
 
     MvcResult logout = mockMvc.perform(post("/auth/logout")
             .accept(MediaType.APPLICATION_JSON)
@@ -824,7 +863,7 @@ class AuthControllerTest {
     //    passes; the HMAC recompute under the real key disagrees. This is
     //    the cookie-injection attack signed double-submit defends against.
     String value = "tampered-value";
-    String forgedHmac = hmacUnderForeignKey(value);
+    String forgedHmac = hmacUnderForeignKey(value, sid.getValue());
     String forged = value + "." + forgedHmac;
     mockMvc.perform(post("/auth/logout")
             .cookie(sid, new Cookie("XSRF-TOKEN", forged))
@@ -837,7 +876,7 @@ class AuthControllerTest {
     // 3. tampered value half with original HMAC — same cookie==header, but
     //    HMAC recompute under the real key fails on the new value.
     String legitValue = "legit-value";
-    String legitHmac = computeHmac(legitValue);
+    String legitHmac = computeHmac(legitValue, sid.getValue());
     String tamperedToken = "TAMPERED-value" + "." + legitHmac;
     mockMvc.perform(post("/auth/logout")
             .cookie(sid, new Cookie("XSRF-TOKEN", tamperedToken))
@@ -858,14 +897,53 @@ class AuthControllerTest {
   }
 
   @Test
-  void logoutRequiresKnownSession() throws Exception {
-    String csrf = signCsrfToken("any-value");
+  void logoutRejectsCsrfTokenIssuedForDifferentSession() throws Exception {
+    Cookie sid = createSessionCookie("sid-a", "access-token-1", Instant.now().plusSeconds(300));
+    String csrfForOtherSession = signCsrfToken("cross-session-value", "sid-b");
+
     mockMvc.perform(post("/auth/logout")
+            .cookie(sid, new Cookie("XSRF-TOKEN", csrfForOtherSession))
+            .header("X-XSRF-TOKEN", csrfForOtherSession))
+        .andExpect(status().isForbidden());
+
+    assertThat(stateStore.get("sess:" + sid.getValue()))
+        .as("CSRF token from another sid must not terminate this session")
+        .isPresent();
+  }
+
+  @Test
+  void logoutWithoutKnownSessionStillDrivesIdpLogout() throws Exception {
+    String csrf = signCsrfToken("any-value", "missing");
+    MvcResult logout = mockMvc.perform(post("/auth/logout")
+            .accept(MediaType.APPLICATION_JSON)
             .cookie(new Cookie("sid", "missing"), new Cookie("XSRF-TOKEN", csrf))
-            .header("X-XSRF-TOKEN", csrf))
-        .andExpect(status().isUnauthorized())
+            .header("X-XSRF-TOKEN", csrf)
+            .header("Host", "127.0.0.1:5173")
+            .header("X-Forwarded-Proto", "http")
+            .header("X-Forwarded-Host", "127.0.0.1:5173"))
+        .andExpect(status().isOk())
         .andExpect(header().string(HttpHeaders.CACHE_CONTROL,
-            org.hamcrest.Matchers.containsString("no-store")));
+            org.hamcrest.Matchers.containsString("no-store")))
+        .andReturn();
+
+    String body = logout.getResponse().getContentAsString();
+    assertThat(body)
+        .contains("\"logoutUrl\":\"/auth/logout/continue?lc=")
+        .doesNotContain("id_token_hint")
+        .doesNotContain("id-token-1")
+        .doesNotContain("idp.example");
+
+    java.util.regex.Matcher m = java.util.regex.Pattern
+        .compile("/auth/logout/continue\\?lc=([^\"\\\\]+)")
+        .matcher(body);
+    assertThat(m.find()).isTrue();
+
+    mockMvc.perform(get("/auth/logout/continue").param("lc", m.group(1)))
+        .andExpect(status().isFound())
+        .andExpect(header().string(HttpHeaders.LOCATION, org.hamcrest.Matchers.allOf(
+            org.hamcrest.Matchers.startsWith("http://idp.example/logout?"),
+            org.hamcrest.Matchers.containsString("client_id=oidc-reference-auth"),
+            org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("id_token_hint")))));
   }
 
   @Test
@@ -888,16 +966,18 @@ class AuthControllerTest {
 
   // -- helpers --------------------------------------------------------------
 
-  // Fixed oauth_tx cookie/hash pair used by the happy-path callback
+  // Fixed oauth_tx cookie/hash value used by the happy-path callback
   // tests so the controller's browser-binding check (mandatory since
   // commit f66... follow-up) actually runs end-to-end on every
   // positive callback test rather than being bypassed by a null hash.
-  // Tests that present TX_COOKIE on the callback request will pass
-  // the verify; tests exercising the binding-failure paths use
-  // storeBoundTransaction with a hash whose cookie value they
-  // withhold, mismatch, or replace.
+  // Tests present txCookie(state) on the callback request; tests
+  // exercising the binding-failure paths use storeBoundTransaction
+  // with a hash whose cookie value they withhold, mismatch, or replace.
   private static final String TX_COOKIE_VALUE = "fixed-test-oauth-tx-value";
-  private static final Cookie TX_COOKIE = new Cookie(OAuthTxBinding.COOKIE_NAME, TX_COOKIE_VALUE);
+
+  private static Cookie txCookie(String state) {
+    return new Cookie(OAuthTxBinding.cookieName(state), TX_COOKIE_VALUE);
+  }
 
   private void storeTransaction(String state, String savedRequest) {
     String hash = OAuthTxBinding.hash(TX_COOKIE_VALUE, COOKIE_SIGNING_KEY);
@@ -908,6 +988,16 @@ class AuthControllerTest {
         Instant.now(),
         hash);
     stateStore.put("tx:" + state, TestBeans.JSON.encode(transaction), Duration.ofMinutes(5));
+  }
+
+  private static String queryParam(String url, String name) {
+    URI uri = URI.create(url);
+    return java.util.Arrays.stream(Optional.ofNullable(uri.getRawQuery()).orElse("").split("&"))
+        .map(pair -> pair.split("=", 2))
+        .filter(parts -> parts.length == 2 && parts[0].equals(name))
+        .findFirst()
+        .map(parts -> java.net.URLDecoder.decode(parts[1], StandardCharsets.UTF_8))
+        .orElseThrow();
   }
 
   // Persist a transaction with a tx_cookie_hash, so the callback's
@@ -938,8 +1028,7 @@ class AuthControllerTest {
         Instant.now().plusSeconds(1800),
         createdAt,
         createdAt.plus(Duration.ofHours(12)),
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     stateStore.put("sess:" + sid, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     return new Cookie("sid", sid);
   }
@@ -954,27 +1043,26 @@ class AuthControllerTest {
         Instant.now().plusSeconds(1800),
         Instant.now().minus(Duration.ofHours(13)),
         Instant.now().minusSeconds(1),
-        Map.of("sub", "alice"),
-        "xsrf-1");
+        Map.of("sub", "alice"));
     stateStore.put("sess:" + sid, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     return new Cookie("sid", sid);
   }
 
   /** Compute a valid signed CSRF token using the key wired in @SpringBootTest properties. */
-  private static String signCsrfToken(String value) {
-    return value + "." + computeHmac(value);
+  private static String signCsrfToken(String value, String sid) {
+    return value + "." + computeHmac(value, sid);
   }
 
-  private static String computeHmac(String value) {
-    return hmac(value, CSRF_KEY_BYTES);
+  private static String computeHmac(String value, String sid) {
+    return hmac(value + ":" + sid, CSRF_KEY_BYTES);
   }
 
-  private static String hmacUnderForeignKey(String value) {
+  private static String hmacUnderForeignKey(String value, String sid) {
     byte[] foreign = new byte[32];
     for (int i = 0; i < foreign.length; i++) {
       foreign[i] = (byte) (i + 7);  // deliberately not the wired key
     }
-    return hmac(value, foreign);
+    return hmac(value + ":" + sid, foreign);
   }
 
   private static String hmac(String value, byte[] key) {
@@ -1016,8 +1104,7 @@ class AuthControllerTest {
             "id-token-1",
             Instant.now().plusSeconds(300),
             Instant.now().plusSeconds(1800),
-            Map.of("sub", "alice", "preferred_username", "alice"),
-            "xsrf-callback-1");
+            Map.of("sub", "alice", "preferred_username", "alice"));
       };
     }
 

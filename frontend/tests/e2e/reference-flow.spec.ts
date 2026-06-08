@@ -10,7 +10,7 @@
  * relies on a previous story leaving a session behind. The suite runs under a
  * single worker (--workers=1), so stories still execute sequentially on one
  * worker, but they do NOT run under Playwright "serial" mode — a single
- * story's failure must NOT skip the remaining stories, so all 12 always
+ * story's failure must NOT skip the remaining stories, so all stories always
  * report. The one story that mutates shared server-side state (story 12's
  * deterministic session DELETE) creates and deletes its own session.
  *
@@ -219,6 +219,47 @@ function valkey(args: string[]): string {
     cwd: REPO_ROOT,
     encoding: "utf8"
   }).trim();
+}
+
+async function keycloakAdminToken(): Promise<string> {
+  const body = new URLSearchParams({
+    grant_type: "password",
+    client_id: "admin-cli",
+    username: "admin",
+    password: "admin"
+  });
+  const res = await fetch("http://localhost:8080/realms/master/protocol/openid-connect/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body
+  });
+  expect(res.status, "admin token request").toBe(200);
+  const json = (await res.json()) as { access_token?: string };
+  expect(json.access_token, "admin access token").toBeTruthy();
+  return json.access_token!;
+}
+
+async function keycloakUserId(username: string): Promise<string> {
+  const token = await keycloakAdminToken();
+  const res = await fetch(
+    `http://localhost:8080/admin/realms/${REALM_NAME}/users?username=${encodeURIComponent(username)}&exact=true`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  expect(res.status, "admin user lookup").toBe(200);
+  const users = (await res.json()) as Array<{ id?: string }>;
+  expect(users.length, `Keycloak user lookup for ${username}`).toBe(1);
+  expect(users[0]?.id).toBeTruthy();
+  return users[0]!.id!;
+}
+
+async function keycloakLogoutUser(username: string): Promise<void> {
+  const token = await keycloakAdminToken();
+  const userId = await keycloakUserId(username);
+  const res = await fetch(
+    `http://localhost:8080/admin/realms/${REALM_NAME}/users/${userId}/logout`,
+    { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+  );
+  expect([204, 200].includes(res.status), "admin user logout").toBe(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -578,7 +619,7 @@ test("10. id_token_hint appears only in a server-generated top-level redirect", 
 
 // ---------------------------------------------------------------------------
 // Story 11 — Callback error. Driving /auth/callback/idp?error=access_denied with
-// a state establishes NO session: no __Host-sid/sid cookie, the oauth_tx cookie
+// a state establishes NO session: no __Host-sid/sid cookie, the oauth_tx_* cookie
 // is cleared/unusable, /auth/me stays 401, and the user lands on a controlled
 // path (/).
 // ---------------------------------------------------------------------------
@@ -600,8 +641,8 @@ test("11. callback error establishes no session and lands on a controlled path",
   const cookies = await context.cookies();
   expect(cookies.find((c) => c.name === "sid")).toBeUndefined();
   expect(cookies.find((c) => c.name === "__Host-sid")).toBeUndefined();
-  const tx = cookies.find((c) => c.name === "oauth_tx");
-  // oauth_tx must be cleared or at least no longer usable to mint a session.
+  const tx = cookies.find((c) => c.name.startsWith("oauth_tx_"));
+  // oauth_tx_* must be cleared or at least no longer usable to mint a session.
   if (tx) expect(tx.value === "" || tx.expires === 0).toBeTruthy();
 
   const meStatus = await page.evaluate(async () => {
@@ -657,4 +698,141 @@ test("12. server-side session invalidation returns the SPA to anonymous, no toke
 
   // No token-shaped material survives in any browser-readable surface.
   await assertNoBrowserTokens(page, context);
+});
+
+// ---------------------------------------------------------------------------
+// Story 13 — Real SPA 401 path. This drives the actual React button handler
+// after server-side session invalidation. callApi() must see 401 and perform a
+// top-level navigation to /auth/login?return_to=..., not just render Denied.
+// ---------------------------------------------------------------------------
+test("13. real React callApi 401 path navigates to BFF login", async ({
+  page,
+  context
+}) => {
+  await loginAs(page, ALICE);
+  const sid = sidFrom(await context.cookies());
+  expect(valkey(["DEL", `sess:${sid}`])).toBe("1");
+
+  await page.getByRole("button", { name: /Call \/api\/user-data/i }).click();
+  await page.waitForURL(KEYCLOAK_AUTH_RE);
+  const url = new URL(page.url());
+  expect(url.searchParams.get("client_id")).toBeTruthy();
+  expect(url.search).not.toContain("return_to");
+  await assertNoBrowserTokens(page, context);
+});
+
+// ---------------------------------------------------------------------------
+// Story 14 — User-initiated logout still terminates IdP SSO when the local
+// session is already gone. Delete sess:{sid}, POST /auth/logout, follow the
+// continuation, then a new login attempt must prompt for credentials.
+// ---------------------------------------------------------------------------
+test("14. no-local-session logout still terminates Keycloak SSO", async ({
+  page,
+  context
+}) => {
+  await loginAs(page, ALICE);
+  const sid = sidFrom(await context.cookies());
+  expect(valkey(["DEL", `sess:${sid}`])).toBe("1");
+
+  const logoutUrl = await page.evaluate(async () => {
+    const res = await fetch("/auth/logout", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json" }
+    });
+    const body = (await res.json()) as { logoutUrl?: string };
+    return body.logoutUrl ?? "";
+  });
+  expect(logoutUrl.startsWith("/auth/logout/continue")).toBe(true);
+  await page.goto(logoutUrl);
+
+  await page.goto(`/auth/login?return_to=${encodeURIComponent("/")}`);
+  await page.waitForURL(KEYCLOAK_AUTH_RE);
+  await expect(page.locator("#username")).toBeVisible();
+  await assertNoBrowserTokens(page, context);
+});
+
+// ---------------------------------------------------------------------------
+// Story 15 — IdP-driven back-channel logout. Keycloak admin logout sends a
+// signed logout_token to /backchannel-logout; deleting sess:{sid} must make both
+// /auth/me and /api/** return 401 on the next request.
+// ---------------------------------------------------------------------------
+test("15. Keycloak back-channel logout revokes local session", async ({
+  page,
+  context
+}) => {
+  await loginAs(page, ALICE);
+  const sid = sidFrom(await context.cookies());
+  expect(valkey(["EXISTS", `sess:${sid}`])).toBe("1");
+
+  await keycloakLogoutUser(ALICE.username);
+
+  await expect
+    .poll(() => valkey(["EXISTS", `sess:${sid}`]), {
+      timeout: 10_000,
+      message: "back-channel logout should delete sess:{sid}"
+    })
+    .toBe("0");
+
+  const statuses = await page.evaluate(async () => {
+    const me = await fetch("/auth/me", { credentials: "include" });
+    const api = await fetch("/api/user-data", {
+      credentials: "include",
+      headers: { Accept: "application/json" }
+    });
+    return { me: me.status, api: api.status };
+  });
+  expect(statuses.me).toBe(401);
+  expect(statuses.api).toBe(401);
+  await assertNoBrowserTokens(page, context);
+});
+
+// ---------------------------------------------------------------------------
+// Story 16 — Multi-tab login robustness. Starting two login flows in the same
+// browser context must not clobber the first transaction's browser-binding
+// cookie; both callbacks complete.
+// ---------------------------------------------------------------------------
+test("16. concurrent login tabs complete independently", async ({ browser }) => {
+  const context = await browser.newContext();
+  try {
+    const first = await context.newPage();
+    const second = await context.newPage();
+
+    await first.goto(`/auth/login?return_to=${encodeURIComponent("/api/user-data")}`);
+    await first.waitForURL(KEYCLOAK_AUTH_RE);
+    const firstState = new URL(first.url()).searchParams.get("state");
+    expect(firstState).toBeTruthy();
+
+    await second.goto(`/auth/login?return_to=${encodeURIComponent("/")}`);
+    await second.waitForURL(KEYCLOAK_AUTH_RE);
+    const secondState = new URL(second.url()).searchParams.get("state");
+    expect(secondState).toBeTruthy();
+    expect(secondState).not.toBe(firstState);
+
+    const txCookiesBefore = (await context.cookies())
+      .filter((c) => c.name.startsWith("oauth_tx_"));
+    expect(txCookiesBefore.length).toBeGreaterThanOrEqual(2);
+
+    await second.fill("#username", ALICE.username);
+    await second.fill("#password", ALICE.password);
+    await Promise.all([
+      second.waitForURL(`${APP_ORIGIN}/`),
+      second.click("#kc-login")
+    ]);
+
+    await first.fill("#username", ALICE.username);
+    await first.fill("#password", ALICE.password);
+    await Promise.all([
+      first.waitForURL(`${APP_ORIGIN}/api/user-data`),
+      first.click("#kc-login")
+    ]);
+
+    await expect(second.getByText(/signed in as/i)).toBeVisible();
+    await expect(first.locator("body")).toContainText("user-data");
+    const txCookiesAfter = (await context.cookies())
+      .filter((c) => c.name.startsWith("oauth_tx_"));
+    expect(txCookiesAfter.length).toBe(0);
+  } finally {
+    await context.close();
+  }
 });

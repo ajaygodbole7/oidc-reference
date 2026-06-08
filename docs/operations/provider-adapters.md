@@ -34,6 +34,13 @@ What stays Keycloak-specific is provisioning *format*, not identity values: the
 realm seed JSON and the Keycloak smoke script are replaced wholesale by the
 target IdP's own provisioning (Terraform, Management API, etc.).
 
+These knobs are the relying party's half of the contract. The IdP must also be
+configured to issue matching values. For example, setting
+`INTERNAL_REFRESH_AUDIENCE` on the Auth Service does not make Okta, Entra, or
+Keycloak emit that audience; the provider-side client/scope/audience mapper must
+move with it. The same is true for `OIDC_AUDIENCE`, `GATEWAY_CLIENT_ID`, and role
+claim mappers.
+
 ## Supported Configuration Surface
 
 Set these values through Compose environment, deployment configuration, or a

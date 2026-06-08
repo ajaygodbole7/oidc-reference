@@ -73,7 +73,8 @@ spa_app="frontend/src/App.tsx"
 # Cookie names emitted by the Auth Service.
 require_present 'sessionCookieName' "$auth_controller"
 require_present '"XSRF-TOKEN"' "$auth_controller"
-require_present 'OAuthTxBinding.COOKIE_NAME' "$auth_controller"
+require_present 'OAuthTxBinding.cookieName\(state\)' "$auth_controller"
+require_present 'COOKIE_PREFIX = "oauth_tx_"' auth-service/src/main/java/com/example/oidcreference/authservice/OAuthTxBinding.java
 
 # Signed CSRF cookie + header on both ends.
 require_present "XSRF-TOKEN" "$spa_auth_client"

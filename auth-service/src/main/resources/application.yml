@@ -45,6 +45,11 @@ app:
   gateway-client-id: ${GATEWAY_CLIENT_ID:oidc-reference-api-gateway}
   internal-audience: ${INTERNAL_REFRESH_AUDIENCE:oidc-reference-auth-internal}
   session-refresh-window: 60s
+  # Integer seconds at the environment boundary so the Java Auth Service
+  # and Lua APISIX plugin consume the same idle number. /auth/me does not
+  # slide this value; authenticated /api traffic does.
+  session-idle-ttl: ${SESSION_IDLE_TTL:1800}s
+  session-absolute-ttl: ${SESSION_MAX_TTL:28800}s
   # The default below is a literal sentinel — 32 zero-bytes base64-encoded.
   # SignedCsrfSupport.hmacSha256 requires standard base64, which forbids the
   # underscores in our loud CHANGE_BEFORE_DEPLOY marker, so the cookie-key

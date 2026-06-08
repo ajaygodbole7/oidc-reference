@@ -66,6 +66,7 @@ local schema = {
     gateway_client_secret   = { type = "string" },
     cookie_signing_key      = { type = "string" },                   -- std-base64-encoded 256-bit key
     refresh_window_seconds  = { type = "integer", default = 60 },
+    idle_ttl_seconds        = { type = "integer", minimum = 1, default = 1800 },
   },
 }
 
@@ -142,6 +143,17 @@ local function get_session_cookie(cookies, scheme)
     return cookies["sid"]
   end
   return nil
+end
+
+local function effective_scheme(ctx)
+  local forwarded = core.request.header(ctx, "X-Forwarded-Proto")
+  if forwarded then
+    forwarded = forwarded:lower()
+    if forwarded == "https" or forwarded == "http" then
+      return forwarded
+    end
+  end
+  return ngx_var.scheme or "http"
 end
 
 -- ---------------------------------------------------------------------
@@ -277,40 +289,44 @@ local function valkey_discard(red)
   red:close()
 end
 
--- Returns: access_token, expires_at_iso, err_string
+-- Returns: access_token, expires_at_iso, absolute_expires_at_iso, err_string
 -- err_string nil => success. Any non-nil err_string MUST be treated as
 -- "no session" by the caller per SPEC §7.2 rule 4.
 local function read_session(conf, sid)
   local red, err = valkey_connect(conf)
   if not red then
-    return nil, nil, "valkey_connect: " .. tostring(err)
+    return nil, nil, nil, "valkey_connect: " .. tostring(err)
   end
 
   local res, get_err = red:get("sess:" .. sid)
   if get_err then
     -- Close (do not pool) a connection whose read failed — see valkey_discard.
     valkey_discard(red)
-    return nil, nil, "valkey_get: " .. tostring(get_err)
+    return nil, nil, nil, "valkey_get: " .. tostring(get_err)
   end
   valkey_release(red)
   if res == ngx.null or res == nil then
-    return nil, nil, "missing"
+    return nil, nil, nil, "missing"
   end
 
   local payload, parse_err = cjson.decode(res)
   if not payload then
-    return nil, nil, "json_decode: " .. tostring(parse_err)
+    return nil, nil, nil, "json_decode: " .. tostring(parse_err)
   end
   -- Tolerant reader: consume only what we need. Anything else is
   -- ignored — including unknown fields the Auth Service may add later
   -- under §7.2 rule 2.
   local access_token = payload.access_token
   local expires_at   = payload.access_token_expires_at
+  local absolute_expires_at = payload.absolute_expires_at
   if type(access_token) ~= "string" or access_token == ""
      or type(expires_at) ~= "string" or expires_at == "" then
-    return nil, nil, "missing_required_field"
+    return nil, nil, nil, "missing_required_field"
   end
-  return access_token, expires_at, nil
+  if absolute_expires_at ~= nil and type(absolute_expires_at) ~= "string" then
+    return nil, nil, nil, "malformed_absolute_expires_at"
+  end
+  return access_token, expires_at, absolute_expires_at, nil
 end
 
 -- ---------------------------------------------------------------------
@@ -342,6 +358,39 @@ local function parse_iso8601_utc(s)
   local local_now = os.time(os.date("*t", utc_now))
   local offset    = local_now - utc_now
   return t - offset
+end
+
+local function slide_session_ttl(conf, sid, absolute_expires_at_iso)
+  if not absolute_expires_at_iso then
+    return true
+  end
+  local absolute_expires_at = parse_iso8601_utc(absolute_expires_at_iso)
+  if not absolute_expires_at then
+    return nil, "malformed_absolute_expires_at"
+  end
+  local remaining = absolute_expires_at - ngx_time()
+  if remaining <= 0 then
+    return nil, "absolute_expired"
+  end
+  local ttl = math.min(conf.idle_ttl_seconds, remaining)
+  if ttl <= 0 then
+    return nil, "absolute_expired"
+  end
+
+  local red, err = valkey_connect(conf)
+  if not red then
+    return nil, "valkey_connect: " .. tostring(err)
+  end
+  local ok, expire_err = red:expire("sess:" .. sid, ttl)
+  if expire_err then
+    valkey_discard(red)
+    return nil, "valkey_expire: " .. tostring(expire_err)
+  end
+  valkey_release(red)
+  if ok ~= 1 then
+    return nil, "missing"
+  end
+  return true
 end
 
 -- ---------------------------------------------------------------------
@@ -387,10 +436,13 @@ end
 --   3. Split on the LAST dot — value contains no dot but defense in
 --      depth uses lastIndexOf to match the Java code.
 --   4. Recompute HMAC, constant-time compare.
-local function csrf_ok(ctx, conf, method, cookies)
+local function csrf_ok(ctx, conf, method, cookies, sid)
   if method ~= "POST" and method ~= "PUT"
      and method ~= "DELETE" and method ~= "PATCH" then
     return true
+  end
+  if not sid or sid == "" then
+    return false, "csrf_missing_sid"
   end
   local cookie_token = cookies["XSRF-TOKEN"]
   local header_token = core.request.header(ctx, "X-XSRF-TOKEN")
@@ -420,7 +472,7 @@ local function csrf_ok(ctx, conf, method, cookies)
     core.log.error("bff-session: ", key_err)
     return false, "csrf_misconfigured"
   end
-  local expected_hmac, hmac_err = hmac_b64url(key, value)
+  local expected_hmac, hmac_err = hmac_b64url(key, value .. ":" .. sid)
   if not expected_hmac then
     core.log.error("bff-session: hmac compute failed: ", hmac_err)
     return false, "csrf_hmac_failed"
@@ -690,7 +742,7 @@ end
 
 function _M.access(conf, ctx)
   local method = core.request.get_method() or "GET"
-  local scheme = ngx_var.scheme or "http"
+  local scheme = effective_scheme(ctx)
   local host   = ngx_var.host or ""
   local uri    = ngx_var.request_uri or "/"   -- full path + query
 
@@ -704,7 +756,7 @@ function _M.access(conf, ctx)
   end
 
   -- Step 3: tolerant Valkey read.
-  local access_token, expires_at_iso, read_err = read_session(conf, sid)
+  local access_token, expires_at_iso, absolute_expires_at_iso, read_err = read_session(conf, sid)
   if read_err then
     -- "missing" = no sess record (logged-out / expired); other err
     -- strings are infra-level. Log only the err class; the sid is not
@@ -722,7 +774,7 @@ function _M.access(conf, ctx)
 
   -- Step 4: signed CSRF on state-changing methods. Done before refresh
   -- so we don't burn a refresh slot on a forged request.
-  local csrf_pass, csrf_reason = csrf_ok(ctx, conf, method, cookies)
+  local csrf_pass, csrf_reason = csrf_ok(ctx, conf, method, cookies, sid)
   if not csrf_pass then
     core.log.warn("bff-session: csrf reject reason=", tostring(csrf_reason))
     return problem_json(403, "Forbidden", "invalid CSRF token")
@@ -736,6 +788,17 @@ function _M.access(conf, ctx)
     expire_session_cookie(scheme)
     return no_session_response(ctx, conf, scheme, host, uri)
   end
+  local slide_ok, slide_err = slide_session_ttl(conf, sid, absolute_expires_at_iso)
+  if not slide_ok then
+    if slide_err == "absolute_expired" or slide_err == "missing"
+       or slide_err == "malformed_absolute_expires_at" then
+      core.log.info("bff-session: session ttl slide rejected (reason=", tostring(slide_err), ")")
+      expire_session_cookie(scheme)
+      return no_session_response(ctx, conf, scheme, host, uri)
+    end
+    core.log.error("bff-session: valkey ttl slide failure: ", tostring(slide_err))
+    return problem_json(502, "Bad Gateway", "session store unavailable")
+  end
   if expires_at - ngx_time() <= conf.refresh_window_seconds then
     local action = refresh_session(conf, sid)
     if action == "401_clear" then
@@ -748,7 +811,7 @@ function _M.access(conf, ctx)
       return problem_json(502, "Bad Gateway", "refresh failed")
     end
     -- action == "ok" -> re-read sess:{sid} to pick up rotated token.
-    local new_token, _, re_err = read_session(conf, sid)
+    local new_token, _, _, re_err = read_session(conf, sid)
     if re_err or not new_token then
       core.log.error("bff-session: re-read after refresh failed: ", tostring(re_err))
       return problem_json(502, "Bad Gateway", "session re-read failed")

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { callApi, signOut } from "./auth";
+import { callApi, fetchMe, signOut } from "./auth";
 
 describe("BFF auth client", () => {
   beforeEach(() => {
@@ -36,7 +36,6 @@ describe("BFF auth client", () => {
     // the Sign in button (which already produces /auth/login?return_to=).
     // fetchMe no longer accepts a `navigate` callback — its absence is
     // the type-level guarantee that this path cannot auto-redirect.
-    const { fetchMe } = await import("./auth");
     const fetchSpy = vi.spyOn(global, "fetch")
       .mockResolvedValue(new Response(null, { status: 401 }));
 
@@ -46,6 +45,26 @@ describe("BFF auth client", () => {
     expect(fetchSpy).toHaveBeenCalledWith("/auth/me", expect.objectContaining({
       credentials: "include",
     }));
+  });
+
+  it("sanitizes /auth/me to the allowlisted User DTO", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(Response.json({
+      sub: "alice",
+      preferred_username: "alice",
+      roles: ["user"],
+      access_token: "must-not-enter-spa-state"
+    }));
+
+    const user = await fetchMe();
+
+    expect(user).toEqual({
+      sub: "alice",
+      preferred_username: "alice",
+      name: undefined,
+      email: undefined,
+      roles: ["user"]
+    });
+    expect(user).not.toHaveProperty("access_token");
   });
 
   it("posts logout with the double-submit CSRF header and performs top-level navigation", async () => {

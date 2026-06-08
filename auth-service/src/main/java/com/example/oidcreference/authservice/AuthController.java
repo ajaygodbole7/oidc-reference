@@ -49,6 +49,7 @@ class AuthController {
   private final TokenExchangeClient tokenExchangeClient;
   private final AuthProperties props;
   private final SignedCsrfSupport csrf;
+  private final SessionIndexes sessionIndexes;
 
   AuthController(
       StateStore stateStore,
@@ -56,13 +57,15 @@ class AuthController {
       OidcProviderMetadata md,
       TokenExchangeClient tokenExchangeClient,
       AuthProperties props,
-      SignedCsrfSupport csrf) {
+      SignedCsrfSupport csrf,
+      SessionIndexes sessionIndexes) {
     this.stateStore = stateStore;
     this.json = json;
     this.md = md;
     this.tokenExchangeClient = tokenExchangeClient;
     this.props = props;
     this.csrf = csrf;
+    this.sessionIndexes = sessionIndexes;
   }
 
   @GetMapping("/login")
@@ -113,7 +116,8 @@ class AuthController {
         .toUriString();
 
     boolean secure = isSecureRequest(request);
-    var txCookie = oauthTxCookie(txCookieValue, TX_TTL, secure);
+    var txCookieName = OAuthTxBinding.cookieName(state);
+    var txCookie = oauthTxCookie(txCookieName, txCookieValue, TX_TTL, secure);
 
     SecurityAudit.event(request, 302, "login_started", "ok");
     return ResponseEntity.status(HttpStatus.FOUND)
@@ -128,9 +132,9 @@ class AuthController {
       @RequestParam(name = "error", required = false) String error,
       @RequestParam String state,
       @RequestParam(name = "iss", required = false) String iss,
-      HttpServletRequest request) {
+    HttpServletRequest request) {
     boolean secure = isSecureRequest(request);
-    var clearTxCookie = clearOauthTxCookie(secure);
+    var clearTxCookie = clearOauthTxCookie(state, secure);
 
     // OAuth error redirect: the IdP returns ?error=...&state=... (e.g. the
     // user clicked "Deny") and omits `code`. Consume the transaction so it
@@ -188,7 +192,7 @@ class AuthController {
           clearTxCookie);
     }
     var suppliedCookie = SignedCsrfSupport
-        .cookieValue(request, OAuthTxBinding.COOKIE_NAME)
+        .cookieValue(request, OAuthTxBinding.cookieName(state))
         .orElse(null);
     if (!OAuthTxBinding.verify(
         suppliedCookie, transaction.txCookieHash(), props.cookieSigningKey())) {
@@ -208,30 +212,29 @@ class AuthController {
       SecurityAudit.event(request, 401, "callback_failed", "token_exchange_failed");
       return callbackError(HttpStatus.UNAUTHORIZED, "oauth callback rejected", clearTxCookie);
     }
-    // Replace the token-exchange's random xsrfToken with a signed
-    // CSRF token. The signed shape `<value>.<hmac>` is what every
+    var sid = CryptoSupport.randomUrlToken(32);
+    // Issue a signed, session-bound CSRF token. The signed shape `<value>.<hmac>` is what every
     // subsequent state-changing request (logout, gateway-routed POSTs)
-    // will validate against. Storing the signed token in the session
-    // record keeps the validator's "cookie matches header matches
-    // stored" check straightforward.
-    var signedCsrf = SignedCsrfSupport.issueToken(props.cookieSigningKey());
+    // will validate against, with the HMAC computed over `value + ":" + sid`.
+    var signedCsrf = SignedCsrfSupport.issueToken(props.cookieSigningKey(), sid);
+    Instant createdAt = Instant.now();
     session = new SessionRecord(
         session.accessToken(),
         session.refreshToken(),
         session.idToken(),
         session.expiresAt(),
         session.refreshExpiresAt(),
-        session.createdAt(),
-        session.absoluteExpiresAt(),
-        session.claims(),
-        signedCsrf);
+        createdAt,
+        createdAt.plus(props.sessionAbsoluteTtl()),
+        session.claims());
 
-    var sid = CryptoSupport.randomUrlToken(32);
-    stateStore.put("sess:" + sid, json.encode(session), session.nextTtl());
+    Duration sessionTtl = session.nextTtl(props.sessionIdleTtl());
+    stateStore.put("sess:" + sid, json.encode(session), sessionTtl);
+    sessionIndexes.index(sid, session, sessionTtl);
     var savedRequest = normalizeSavedRequest(transaction.savedRequest());
 
-    var sidCookie = sidCookie(sid, session.nextTtl(), secure);
-    var xsrfCookie = xsrfCookie(session.xsrfToken(), session.nextTtl(), secure);
+    var sidCookie = sidCookie(sid, sessionTtl, secure);
+    var xsrfCookie = xsrfCookie(signedCsrf, sessionTtl, secure);
 
     SecurityAudit.event(request, 302, "callback_succeeded", "ok", subjectClaim(session));
     return ResponseEntity.status(HttpStatus.FOUND)
@@ -272,12 +275,27 @@ class AuthController {
     Optional<String> sid = sessionId(request);
     Optional<SessionRecord> session = sid.flatMap(this::session);
     if (session.isEmpty()) {
-      SecurityAudit.event(request, 401, "auth_denied", "no_session");
-      return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+      String continuation = logoutContinuation(request, Optional.empty());
+      boolean secure = isSecureRequest(request);
+      var clearSid = clearCookie(sessionCookieName(request), "/", secure);
+      var clearXsrf = clearCookie(XSRF_COOKIE_NAME, "/", secure);
+      SecurityAudit.event(request, acceptsJson(request) ? 200 : 302,
+          "logout_succeeded", "no_local_session");
+      if (acceptsJson(request)) {
+        return ResponseEntity.ok()
+            .cacheControl(CacheControl.noStore())
+            .header(HttpHeaders.SET_COOKIE, clearSid.toString())
+            .header(HttpHeaders.SET_COOKIE, clearXsrf.toString())
+            .body(Map.of("logoutUrl", continuation));
+      }
+      return ResponseEntity.status(HttpStatus.FOUND)
           .cacheControl(CacheControl.noStore())
+          .header(HttpHeaders.LOCATION, continuation)
+          .header(HttpHeaders.SET_COOKIE, clearSid.toString())
+          .header(HttpHeaders.SET_COOKIE, clearXsrf.toString())
           .build();
     }
-    if (!csrf.hasValidCsrf(request, props.cookieSigningKey())) {
+    if (!csrf.hasValidCsrf(request, props.cookieSigningKey(), sid.get())) {
       SecurityAudit.event(request, 403, "auth_denied", "csrf_invalid");
       return ResponseEntity.status(HttpStatus.FORBIDDEN)
           .cacheControl(CacheControl.noStore())
@@ -293,12 +311,6 @@ class AuthController {
     boolean secure = isSecureRequest(request);
     var clearSid = clearCookie(sessionCookieName(request), "/", secure);
     var clearXsrf = clearCookie(XSRF_COOKIE_NAME, "/", secure);
-    // Evict any lingering oauth_tx cookie. A user who aborted a login
-    // mid-flow (closed the IdP tab without completing) leaves an
-    // oauth_tx cookie that the callback would normally evict. Logout
-    // is the safety-net: by the time we get here the user is clearly
-    // not in the middle of that flow.
-    var clearOauthTx = clearOauthTxCookie(secure);
     SecurityAudit.event(request, acceptsJson(request) ? 200 : 302,
         "logout_succeeded", "ok", subjectClaim(session.get()));
     if (acceptsJson(request)) {
@@ -306,7 +318,6 @@ class AuthController {
           .cacheControl(CacheControl.noStore())
           .header(HttpHeaders.SET_COOKIE, clearSid.toString())
           .header(HttpHeaders.SET_COOKIE, clearXsrf.toString())
-          .header(HttpHeaders.SET_COOKIE, clearOauthTx.toString())
           .body(Map.of("logoutUrl", continuation));
     }
     return ResponseEntity.status(HttpStatus.FOUND)
@@ -314,7 +325,6 @@ class AuthController {
         .header(HttpHeaders.LOCATION, continuation)
         .header(HttpHeaders.SET_COOKIE, clearSid.toString())
         .header(HttpHeaders.SET_COOKIE, clearXsrf.toString())
-        .header(HttpHeaders.SET_COOKIE, clearOauthTx.toString())
         .build();
   }
 
@@ -378,24 +388,11 @@ class AuthController {
       deleteSession(sid);
       return Optional.empty();
     }
-    // Defensive: between absoluteExpired() and the EXPIRE call below, system
-    // time can advance past absoluteExpiresAt (microseconds in practice, but
-    // the asymmetry exists). nextTtl() then returns Duration.ZERO and Redis
-    // semantics for EXPIRE k 0 are "delete" — which is the right effect, but
-    // we should NOT depend on backend semantics. Be explicit.
-    Duration nextTtl = session.get().nextTtl();
-    if (nextTtl.isZero() || nextTtl.isNegative()) {
-      deleteSession(sid);
-      return Optional.empty();
-    }
-    // Slide the idle TTL with EXPIRE so a concurrent token refresh's rewrite
-    // is not clobbered by a stale read-then-rewrite from the read path.
-    stateStore.expire("sess:" + sid, nextTtl);
     return session;
   }
 
   void deleteSession(String sid) {
-    stateStore.delete("sess:" + sid);
+    sessionIndexes.deleteLocalSession(sid);
   }
 
   /**
@@ -495,17 +492,18 @@ class AuthController {
   }
 
   private String logoutRedirect(HttpServletRequest request, Optional<SessionRecord> session) {
-    if (session.isEmpty() || md.endSessionEndpoint() == null) {
+    if (md.endSessionEndpoint() == null) {
       return "/";
     }
-    return UriComponentsBuilder
+    UriComponentsBuilder builder = UriComponentsBuilder
         .fromUri(md.endSessionEndpoint())
-        .queryParam("id_token_hint", session.get().idToken())
         .queryParam("post_logout_redirect_uri", baseUrl(request) + "/")
         .queryParam("client_id", md.clientId())
-        .queryParam("state", CryptoSupport.randomUrlToken(32))
-        .encode()
-        .toUriString();
+        .queryParam("state", CryptoSupport.randomUrlToken(32));
+    session.map(SessionRecord::idToken)
+        .filter(idToken -> !idToken.isBlank())
+        .ifPresent(idToken -> builder.queryParam("id_token_hint", idToken));
+    return builder.encode().toUriString();
   }
 
   // Every callback error path returns RFC 7807 problem+json, no-store,
@@ -608,13 +606,14 @@ class AuthController {
     return builder.build();
   }
 
-  private static ResponseCookie oauthTxCookie(String value, Duration maxAge, boolean secure) {
+  private static ResponseCookie oauthTxCookie(
+      String name, String value, Duration maxAge, boolean secure) {
     // Path=/auth/callback/idp scopes the cookie tightly: the browser
     // only sends it on the callback hop, never on /api/** or /auth/me.
     // SameSite=Lax is required so the cross-site IdP redirect carries
     // it back. HttpOnly + Secure (when behind HTTPS) keeps JS out and
     // forces a TLS channel for production.
-    var builder = ResponseCookie.from(OAuthTxBinding.COOKIE_NAME, value)
+    var builder = ResponseCookie.from(name, value)
         .httpOnly(true)
         .sameSite("Lax")
         .path(OAuthTxBinding.COOKIE_PATH)
@@ -625,10 +624,10 @@ class AuthController {
     return builder.build();
   }
 
-  private static ResponseCookie clearOauthTxCookie(boolean secure) {
+  private static ResponseCookie clearOauthTxCookie(String state, boolean secure) {
     // Path and SameSite MUST match the issued cookie or some browsers
     // refuse the deletion. Max-Age=0 is the eviction signal.
-    var builder = ResponseCookie.from(OAuthTxBinding.COOKIE_NAME, "")
+    var builder = ResponseCookie.from(OAuthTxBinding.cookieName(state), "")
         .httpOnly(true)
         .sameSite("Lax")
         .path(OAuthTxBinding.COOKIE_PATH)

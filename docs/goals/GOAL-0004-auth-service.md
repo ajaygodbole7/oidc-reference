@@ -122,7 +122,8 @@ SPEC-0001 §"Authorization Server Portability".
   exchange). The Tier A staff-review trail reinstates `oauth_tx` after
   the B3 reversal — see OAuthTxBinding for the implementation.
 - The signing key for `XSRF-TOKEN` is supplied via env (gitignored),
-  256-bit random, rotated through the documented grace-window procedure.
+  256-bit random. The reference accepts one active key; rotation is a hard
+  cutover that requires users to obtain fresh CSRF cookies/sessions.
 - Logging never includes tokens, codes, cookies, or secrets.
 - Custom `OAuth2AuthorizationRequestRepository` writing to Valkey directly.
   Spring's default `HttpSessionOAuth2AuthorizationRequestRepository` would

@@ -19,20 +19,8 @@ record SessionRecord(
     @JsonProperty("refresh_token_expires_at") Instant refreshExpiresAt,
     @JsonProperty("created_at") Instant createdAt,
     @JsonProperty("absolute_expires_at") Instant absoluteExpiresAt,
-    @JsonProperty("claims") Map<String, Object> claims,
-    @JsonProperty("xsrf_token") String xsrfToken) {
-  // 8h, deliberately BELOW Keycloak's ssoSessionMaxLifespan (10h in
-  // oidc-reference-realm.json). The BFF owns session lifetime, but only
-  // within the IdP's SSO bound: a ceiling above the IdP max means Keycloak
-  // kills the SSO session first, the next refresh returns invalid_grant, and
-  // an active user is ejected early. When swapping IdPs, keep this <= the new
-  // provider's SSO max session lifespan (see the provider-swap checklist).
+    @JsonProperty("claims") Map<String, Object> claims) {
   private static final Duration ABSOLUTE_TTL = Duration.ofHours(8);
-  // Sliding TTL applied to sess:{sid} on every read. Capped by
-  // absoluteExpiresAt so the hard ceiling can't be extended past
-  // its construction-time value via repeated access. This used to live
-  // in both AuthController and InternalRefreshController; consolidating
-  // here so a future TTL change happens once.
   static final Duration SESSION_IDLE_TTL = Duration.ofMinutes(30);
 
   SessionRecord(
@@ -41,8 +29,7 @@ record SessionRecord(
       String idToken,
       Instant expiresAt,
       Instant refreshExpiresAt,
-      Map<String, Object> claims,
-      String xsrfToken) {
+      Map<String, Object> claims) {
     this(
         accessToken,
         refreshToken,
@@ -51,8 +38,7 @@ record SessionRecord(
         refreshExpiresAt,
         Instant.now(),
         Instant.now().plus(ABSOLUTE_TTL),
-        claims,
-        xsrfToken);
+        claims);
   }
 
   /**
@@ -87,12 +73,16 @@ record SessionRecord(
    * the key, never extend it).
    */
   Duration nextTtl() {
+    return nextTtl(SESSION_IDLE_TTL);
+  }
+
+  Duration nextTtl(Duration idleTtl) {
     var remainingAbsolute = Duration.between(Instant.now(), absoluteExpiresAt);
     if (remainingAbsolute.isNegative() || remainingAbsolute.isZero()) {
       return Duration.ZERO;
     }
-    return remainingAbsolute.compareTo(SESSION_IDLE_TTL) < 0
+    return remainingAbsolute.compareTo(idleTtl) < 0
         ? remainingAbsolute
-        : SESSION_IDLE_TTL;
+        : idleTtl;
   }
 }

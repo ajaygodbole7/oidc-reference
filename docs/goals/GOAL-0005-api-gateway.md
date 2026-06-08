@@ -111,15 +111,14 @@ configured gateway-client service token (local default
   cached token until expiry; fail closed afterward (`503` for inbound API
   requests that need refresh).
 
-### Timeouts and circuit breaker on `/internal/refresh`
+### Timeouts on `/internal/refresh`
 
 - Connect timeout 1s.
 - Read timeout 5s.
-- Rolling-window circuit breaker (default: 10 requests, 50% threshold)
-  that distinguishes 5xx/transport failures (count as failure) from
-  200/401/404/409 (count as success — Auth Service is healthy).
-- Open state returns `503` to inbound API requests that need refresh for
-  30s; half-open admits one probe.
+- Circuit breaking is production hardening, not shipped reference
+  behavior. APISIX `api-breaker` is the primitive to add for operated
+  deployments; it must not count normal 401/404/409 session outcomes as
+  upstream failures.
 
 ## Security Requirements
 
@@ -131,9 +130,9 @@ configured gateway-client service token (local default
 - The Gateway is itself a confidential client; client id and secret supplied
   via env (per E2), gitignored. Local default client id:
   `oidc-reference-api-gateway`.
-- The CSRF signing key is shared with the Auth Service via env; key
-  rotation must accept the old key during a grace window so rolling
-  restarts of either service do not break in-flight sessions.
+- The CSRF signing key is shared with the Auth Service via env. The reference
+  accepts one active key; dual-key grace-window rotation is production
+  hardening, not shipped behavior.
 - Logging never includes the bearer token, the session cookie value,
   the CSRF token value, or the Client-Credentials secret.
 
