@@ -626,6 +626,14 @@ test_hop_by_hop_headers_stripped                    || true
 printf -- '---- summary ----\n'
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
 
+# Zero-run guard: a suite that asserted nothing (preflight skipped everything, a
+# rename dropped the run list, etc.) must FAIL loudly, not exit 0. A green count
+# of 0 is a harness break, never a pass.
+if [ "$((PASSED + FAILED))" -eq 0 ]; then
+  printf 'fatal: no gateway assertions executed — harness/setup error, not a pass\n' >&2
+  exit 2
+fi
+
 if [ "$FAILED" -gt 0 ]; then
   exit 1
 fi

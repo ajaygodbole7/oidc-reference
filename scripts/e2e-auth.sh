@@ -36,9 +36,16 @@ cleanup() {
   _status=$?
   trap - EXIT INT TERM
   if [ "$_status" -ne 0 ]; then
-    warn "authenticated E2E failed; recent APISIX plugin diagnostics follow"
+    # On failure, dump the diagnostics that actually localize a live e2e break:
+    # the gateway plugin (CSRF/TTL/refresh), the Auth Service (login/logout/
+    # back-channel/validator reasons), and Keycloak (issuer/back-channel-delivery
+    # errors such as the UnknownHostException that masqueraded as a validator bug).
+    warn "authenticated E2E failed; service diagnostics follow (apisix, auth-service, keycloak)"
     docker compose logs --no-color --tail=220 apisix 2>/dev/null \
       | grep 'bff-session.lua' || true
+    docker compose logs --no-color --tail=150 auth-service 2>/dev/null || true
+    docker compose logs --no-color --tail=120 keycloak 2>/dev/null \
+      | grep -iE 'error|warn|backchannel|logout|UnknownHost' || true
   fi
   sh "$SCRIPT_DIR/down.sh" >/dev/null 2>&1 || true
   rmdir "$LOCK" 2>/dev/null || rm -rf "$LOCK" 2>/dev/null || true

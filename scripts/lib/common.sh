@@ -23,6 +23,20 @@ success() { printf '%b[ok]%b %s\n'  "$C_GRN" "$C_NC" "$*"; }
 warn()    { printf '%b[warn]%b %s\n' "$C_YEL" "$C_NC" "$*" >&2; }
 die()     { printf '%b[error]%b %s\n' "$C_RED" "$C_NC" "$*" >&2; exit 1; }
 
+# warn_low_disk [min_gb] — WARN (never block) when free disk is under the
+# threshold (default 3 GB). Repeated full-stack image rebuilds can exhaust the
+# host disk, and an ENOSPC mid-run surfaces as a confusing test failure rather
+# than an infra problem. A heads-up here points at the real cause + fix.
+warn_low_disk() {
+  _min_gb="${1:-3}"
+  _avail_kb="$(df -Pk . 2>/dev/null | awk 'NR==2 {print $4}')"
+  [ -n "$_avail_kb" ] || return 0
+  _avail_gb=$(( _avail_kb / 1024 / 1024 ))
+  if [ "$_avail_gb" -lt "$_min_gb" ]; then
+    warn "low disk: ~${_avail_gb}GB free (< ${_min_gb}GB). Full-stack rebuilds may hit ENOSPC (looks like a test failure); free space with 'docker system prune -af'."
+  fi
+}
+
 # repo_root <script_dir> — echo the repo root (scripts/ lives one level down,
 # scripts/lib/ two). Callers pass their own resolved SCRIPT_DIR so this works
 # regardless of the invoking cwd.

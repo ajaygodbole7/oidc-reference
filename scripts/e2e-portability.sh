@@ -38,9 +38,12 @@ cleanup() {
   _status=$?
   trap - EXIT INT TERM
   if [ "$_status" -ne 0 ]; then
-    warn "portability E2E failed; recent APISIX plugin diagnostics follow"
+    warn "portability E2E failed; service diagnostics follow (apisix, auth-service, keycloak)"
     compose_portability logs --no-color --tail=220 apisix 2>/dev/null \
       | grep 'bff-session.lua' || true
+    compose_portability logs --no-color --tail=150 auth-service 2>/dev/null || true
+    compose_portability logs --no-color --tail=120 keycloak 2>/dev/null \
+      | grep -iE 'error|warn|backchannel|logout|UnknownHost' || true
   fi
   compose_portability down --remove-orphans >/dev/null 2>&1 || true
   rmdir "$LOCK" 2>/dev/null || rm -rf "$LOCK" 2>/dev/null || true

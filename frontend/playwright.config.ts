@@ -14,6 +14,8 @@ const config: PlaywrightTestConfig = {
   use: {
     baseURL: "http://127.0.0.1:5173",
     screenshot: "only-on-failure",
+    // trace captures DOM/network/console on failure without needing the ffmpeg
+    // binary that `video` requires — keep observability, drop the dependency.
     trace: "retain-on-failure"
   },
   webServer: {

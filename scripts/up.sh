@@ -18,6 +18,8 @@ require_cmd docker "Install Docker Desktop or Colima."
 require_cmd node   "Install Node 20+ (e.g. via nvm)."
 require_cmd curl
 
+warn_low_disk 3
+
 DEV_CSRF_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 DEV_GATEWAY_SECRET='LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY'
 APISIX_IDP_TOKEN_URL="${APISIX_IDP_TOKEN_URL:-http://keycloak:8080/realms/oidc-reference/protocol/openid-connect/token}"
