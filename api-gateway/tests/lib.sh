@@ -51,8 +51,15 @@ valkey_exec() {
 
 iso8601_in() {
   secs="$1"
-  date -u -v "+${secs}S" +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
-    || date -u -d "+${secs} seconds" +'%Y-%m-%dT%H:%M:%SZ'
+  # Build a signed offset so a negative arg (a timestamp in the PAST, used to
+  # model a session already past its absolute ceiling) is valid for both BSD
+  # `date -v` and GNU `date -d`. Positive offsets keep their explicit '+'.
+  case "$secs" in
+    -*) op="$secs" ;;
+    *)  op="+$secs" ;;
+  esac
+  date -u -v "${op}S" +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+    || date -u -d "${op} seconds" +'%Y-%m-%dT%H:%M:%SZ'
 }
 
 setup_session() {
@@ -77,6 +84,25 @@ setup_session_with_extra() {
   payload="$(printf '{"access_token":"%s","access_token_expires_at":"%s","absolute_expires_at":"%s",%s}' \
     "$access_token" "$expires_at" "$absolute_expires_at" "$extra")"
   valkey_exec SET "sess:$sid" "$payload" EX 1800 >/dev/null
+  track_sid "$sid"
+}
+
+setup_session_absolute() {
+  # Like setup_session but with explicit control over the absolute ceiling and
+  # the Valkey key TTL, so callers can prove the gateway's idle-slide is capped
+  # by `absolute_expires_at`:
+  #   $1 sid  $2 access_token  $3 access_expires_in  $4 absolute_in  $5 ttl
+  # $4 may be NEGATIVE to model a session already past its hard ceiling.
+  sid="$1"
+  access_token="$2"
+  expires_in_seconds="${3:-300}"
+  absolute_in_seconds="${4:-3600}"
+  ttl_seconds="${5:-1800}"
+  expires_at="$(iso8601_in "$expires_in_seconds")"
+  absolute_expires_at="$(iso8601_in "$absolute_in_seconds")"
+  payload="$(printf '{"access_token":"%s","access_token_expires_at":"%s","absolute_expires_at":"%s"}' \
+    "$access_token" "$expires_at" "$absolute_expires_at")"
+  valkey_exec SET "sess:$sid" "$payload" EX "$ttl_seconds" >/dev/null
   track_sid "$sid"
 }
 

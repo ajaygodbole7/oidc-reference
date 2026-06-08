@@ -494,6 +494,56 @@ test_api_activity_slides_session_ttl() {
   clear_session "$sid"
 }
 
+test_session_past_absolute_ceiling_returns_401() {
+  name="session_past_absolute_ceiling_returns_401"
+  sid="ceiling-past-1"
+  # Session whose absolute ceiling is already in the past, but whose access
+  # token is still "fresh". The gateway MUST refuse to slide it and treat it as
+  # no session (401) + evict the cookie — never EXPIRE a past-ceiling session
+  # back to life. This is the hard upper bound on session lifetime (A4/C14).
+  setup_session_absolute "$sid" "test-jwt-ceiling-past" 300 -5 1800
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid" \
+    "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+  assert_status "$name status" 401 "$status"
+  if grep -iE '^Set-Cookie:[[:space:]]*(sid|__Host-sid)=[[:space:]]*;.*Max-Age=0' \
+      "$HEADERS_TMP" >/dev/null 2>&1; then
+    printf '[PASS] %s cookie_evicted\n' "$name"
+    PASSED=$((PASSED + 1))
+  else
+    printf '[FAIL] %s expected Set-Cookie Max-Age=0 eviction on dead session\n' "$name"
+    FAILED=$((FAILED + 1))
+  fi
+  clear_session "$sid"
+}
+
+test_ttl_slide_capped_at_absolute_ceiling() {
+  name="ttl_slide_capped_at_absolute_ceiling"
+  sid="ceiling-cap-1"
+  # Absolute ceiling only ~8s away; the Valkey key currently has a much larger
+  # TTL (100s). A /api request slides the idle window, but the gateway MUST cap
+  # EXPIRE at remaining_absolute (~8s), NOT bump it to the full idle window
+  # (1800s). So the post-call TTL proves the cap: it lands near ~8, never ~1800.
+  setup_session_absolute "$sid" "test-jwt-cap" 300 8 100
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid" \
+    "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+  assert_plugin_forwarded "$name" "$status" "$HEADERS_TMP" "$BODY_TMP"
+  after="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"
+  # Capped near remaining_absolute (~8s, allow a little clock slack), and well
+  # below the idle window — proving the gateway never extends past the ceiling.
+  if [ "$after" -gt 0 ] && [ "$after" -le 12 ]; then
+    printf '[PASS] %s ttl_capped_at_ceiling after=%s (<=~remaining, not idle 1800)\n' \
+      "$name" "$after"
+    PASSED=$((PASSED + 1))
+  else
+    printf '[FAIL] %s expected TTL capped near remaining_absolute (~8s), got %s\n' \
+      "$name" "$after"
+    FAILED=$((FAILED + 1))
+  fi
+  clear_session "$sid"
+}
+
 test_cookie_strip_does_not_leak_to_upstream() {
   name="cookie_strip_does_not_leak_to_upstream"
   sid="echo-cookie-1"
@@ -567,6 +617,8 @@ test_session_with_extra_fields_is_tolerated         || true
 test_expiring_session_triggers_refresh_delegation   || true
 test_state_changing_method_requires_signed_csrf     || true
 test_api_activity_slides_session_ttl                || true
+test_session_past_absolute_ceiling_returns_401      || true
+test_ttl_slide_capped_at_absolute_ceiling           || true
 test_cookie_strip_does_not_leak_to_upstream         || true
 test_query_string_preserved                         || true
 test_hop_by_hop_headers_stripped                    || true
