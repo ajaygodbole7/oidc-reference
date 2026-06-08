@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.JWKSet;
@@ -52,6 +53,22 @@ class BackChannelLogoutTokenValidatorTest {
     assertThat(token.sub()).isEqualTo("alice");
     assertThat(token.sid()).isEqualTo("idp-sid-1");
     assertThat(token.jti()).isEqualTo("jti-1");
+  }
+
+  @Test
+  void validLogoutJwtTypeIsAccepted() throws Exception {
+    var token = sut.validate(sign(claims().build(), new JOSEObjectType("logout+jwt")));
+
+    assertThat(token.sub()).isEqualTo("alice");
+    assertThat(token.sid()).isEqualTo("idp-sid-1");
+  }
+
+  @Test
+  void missingJwtTypeIsRejected() throws Exception {
+    String token = sign(claims().build(), null);
+
+    assertThatThrownBy(() -> sut.validate(token))
+        .isInstanceOf(BadCredentialsException.class);
   }
 
   @Test
@@ -148,8 +165,16 @@ class BackChannelLogoutTokenValidatorTest {
   }
 
   private String sign(JWTClaimsSet claims) throws Exception {
+    return sign(claims, JOSEObjectType.JWT);
+  }
+
+  private String sign(JWTClaimsSet claims, JOSEObjectType type) throws Exception {
+    JWSHeader.Builder header = new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("logout-kid");
+    if (type != null) {
+      header.type(type);
+    }
     SignedJWT jwt = new SignedJWT(
-        new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("logout-kid").build(),
+        header.build(),
         claims);
     jwt.sign(new RSASSASigner(signingKey));
     return jwt.serialize();
@@ -157,6 +182,7 @@ class BackChannelLogoutTokenValidatorTest {
 
   private static DefaultJWTProcessor<SecurityContext> processorFor(RSAKey publicKey) {
     DefaultJWTProcessor<SecurityContext> processor = new DefaultJWTProcessor<>();
+    processor.setJWSTypeVerifier(BackChannelLogoutTokenValidator::verifyLogoutJwtType);
     processor.setJWSKeySelector(new JWSVerificationKeySelector<>(
         JWSAlgorithm.RS256,
         new ImmutableJWKSet<>(new JWKSet(publicKey))));

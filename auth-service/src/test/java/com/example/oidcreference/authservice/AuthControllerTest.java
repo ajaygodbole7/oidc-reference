@@ -913,10 +913,12 @@ class AuthControllerTest {
 
   @Test
   void logoutWithoutKnownSessionStillDrivesIdpLogout() throws Exception {
-    String csrf = signCsrfToken("any-value", "missing");
+    Cookie sid = createSessionCookie("stale-sid", "access-token-1", Instant.now().plusSeconds(300));
+    stateStore.delete("sess:" + sid.getValue());
+    String csrf = signCsrfToken("any-value", sid.getValue());
     MvcResult logout = mockMvc.perform(post("/auth/logout")
             .accept(MediaType.APPLICATION_JSON)
-            .cookie(new Cookie("sid", "missing"), new Cookie("XSRF-TOKEN", csrf))
+            .cookie(sid, new Cookie("XSRF-TOKEN", csrf))
             .header("X-XSRF-TOKEN", csrf)
             .header("Host", "127.0.0.1:5173")
             .header("X-Forwarded-Proto", "http")
@@ -943,7 +945,11 @@ class AuthControllerTest {
         .andExpect(header().string(HttpHeaders.LOCATION, org.hamcrest.Matchers.allOf(
             org.hamcrest.Matchers.startsWith("http://idp.example/logout?"),
             org.hamcrest.Matchers.containsString("client_id=oidc-reference-auth"),
-            org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("id_token_hint")))));
+            org.hamcrest.Matchers.containsString("id_token_hint=id-token-1"))));
+
+    assertThat(stateStore.get("logout_hint:" + sid.getValue()))
+        .as("stale-session logout hint is single-use")
+        .isEmpty();
   }
 
   @Test
@@ -1030,6 +1036,7 @@ class AuthControllerTest {
         createdAt.plus(Duration.ofHours(12)),
         Map.of("sub", "alice"));
     stateStore.put("sess:" + sid, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
+    new SessionIndexes(stateStore, TestBeans.JSON).index(sid, session, Duration.ofMinutes(30));
     return new Cookie("sid", sid);
   }
 

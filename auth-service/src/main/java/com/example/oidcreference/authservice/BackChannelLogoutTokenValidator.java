@@ -1,8 +1,10 @@
 package com.example.oidcreference.authservice;
 
+import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.jwk.source.JWKSourceBuilder;
+import com.nimbusds.jose.proc.BadJOSEException;
 import com.nimbusds.jose.proc.JWSKeySelector;
 import com.nimbusds.jose.proc.JWSVerificationKeySelector;
 import com.nimbusds.jose.proc.SecurityContext;
@@ -14,14 +16,15 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.Map;
 import java.util.Optional;
-import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.stereotype.Component;
 
 @Component
 class BackChannelLogoutTokenValidator {
   static final String LOGOUT_EVENT =
       "http://schemas.openid.net/event/backchannel-logout";
+  private static final JOSEObjectType LOGOUT_JWT_TYPE = new JOSEObjectType("logout+jwt");
   private static final Duration MAX_IAT_AGE = Duration.ofMinutes(5);
   private static final Duration CLOCK_SKEW = Duration.ofSeconds(60);
 
@@ -58,7 +61,7 @@ class BackChannelLogoutTokenValidator {
     } catch (BadCredentialsException e) {
       throw e;
     } catch (Exception e) {
-      throw new BadCredentialsException("logout_token validation failed", e);
+      throw new BadCredentialsException("logout_token validation failed: " + e.getMessage(), e);
     }
   }
 
@@ -72,6 +75,14 @@ class BackChannelLogoutTokenValidator {
     if (!claims.getAudience().contains(md.clientId())) {
       throw new BadCredentialsException("logout_token audience mismatch");
     }
+  }
+
+  static void verifyLogoutJwtType(JOSEObjectType type, SecurityContext context)
+      throws BadJOSEException {
+    if (JOSEObjectType.JWT.equals(type) || LOGOUT_JWT_TYPE.equals(type)) {
+      return;
+    }
+    throw new BadJOSEException("JOSE header typ (type) " + type + " not allowed");
   }
 
   private void requireFreshIat(JWTClaimsSet claims) {
@@ -120,6 +131,7 @@ class BackChannelLogoutTokenValidator {
       JWSKeySelector<SecurityContext> keySelector =
           new JWSVerificationKeySelector<>(JWSAlgorithm.RS256, jwks);
       DefaultJWTProcessor<SecurityContext> processor = new DefaultJWTProcessor<>();
+      processor.setJWSTypeVerifier(BackChannelLogoutTokenValidator::verifyLogoutJwtType);
       processor.setJWSKeySelector(keySelector);
       return processor;
     } catch (Exception e) {

@@ -713,11 +713,24 @@ test("13. real React callApi 401 path navigates to BFF login", async ({
   const sid = sidFrom(await context.cookies());
   expect(valkey(["DEL", `sess:${sid}`])).toBe("1");
 
+  const loginRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.origin === APP_ORIGIN
+      && url.pathname === "/auth/login"
+      && url.searchParams.has("return_to");
+  });
   await page.getByRole("button", { name: /Call \/api\/user-data/i }).click();
-  await page.waitForURL(KEYCLOAK_AUTH_RE);
-  const url = new URL(page.url());
-  expect(url.searchParams.get("client_id")).toBeTruthy();
-  expect(url.search).not.toContain("return_to");
+  const request = await loginRequest;
+  const url = new URL(request.url());
+  expect(url.searchParams.get("return_to")).toBe("/");
+  expect(url.pathname).not.toBe("/api/user-data");
+
+  // If the Keycloak SSO cookie is still alive, the IdP may immediately
+  // complete the new authorization request and land back on the app before
+  // Playwright observes the transient authorize URL. The load-bearing
+  // assertion is the real SPA path above: callApi() turned /api/** 401 into
+  // a top-level /auth/login?return_to=... navigation.
+  await expect(page.getByText(/signed in as/i)).toBeVisible();
   await assertNoBrowserTokens(page, context);
 });
 

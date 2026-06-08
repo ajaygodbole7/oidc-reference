@@ -2,6 +2,8 @@ package com.example.oidcreference.authservice;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Duration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 class BackChannelLogoutController {
+  private static final Logger log = LoggerFactory.getLogger(BackChannelLogoutController.class);
   private static final Duration JTI_TTL = Duration.ofMinutes(5);
 
   private final BackChannelLogoutTokenValidator validator;
@@ -43,6 +46,7 @@ class BackChannelLogoutController {
         throw new BadCredentialsException("logout_token replay");
       }
     } catch (BadCredentialsException e) {
+      log.warn("back-channel logout_token rejected: {}", e.getMessage());
       SecurityAudit.event(request, 400, "backchannel_logout_rejected", "invalid_logout_token");
       return ResponseEntity.status(HttpStatus.BAD_REQUEST)
           .cacheControl(CacheControl.noStore())

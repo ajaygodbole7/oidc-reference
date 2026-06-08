@@ -275,7 +275,9 @@ class AuthController {
     Optional<String> sid = sessionId(request);
     Optional<SessionRecord> session = sid.flatMap(this::session);
     if (session.isEmpty()) {
-      String continuation = logoutContinuation(request, Optional.empty());
+      String continuation = logoutContinuation(
+          request,
+          sid.flatMap(sessionIndexes::consumeLogoutHint));
       boolean secure = isSecureRequest(request);
       var clearSid = clearCookie(sessionCookieName(request), "/", secure);
       var clearXsrf = clearCookie(XSRF_COOKIE_NAME, "/", secure);
@@ -301,13 +303,13 @@ class AuthController {
           .cacheControl(CacheControl.noStore())
           .build();
     }
-    sid.ifPresent(this::deleteSession);
     // The IdP end-session URL carries id_token_hint=<full id_token> (PII).
     // Never hand it to the browser: stash it server-side under a single-use
     // opaque handle and return a SAME-ORIGIN continuation URL. The actual IdP
     // redirect is emitted by GET /auth/logout/continue, so the id_token never
     // reaches browser JS or the SPA-readable body — the headline invariant.
-    String continuation = logoutContinuation(request, session);
+    String continuation = logoutContinuation(request, Optional.ofNullable(session.get().idToken()));
+    sid.ifPresent(this::deleteSession);
     boolean secure = isSecureRequest(request);
     var clearSid = clearCookie(sessionCookieName(request), "/", secure);
     var clearXsrf = clearCookie(XSRF_COOKIE_NAME, "/", secure);
@@ -348,8 +350,8 @@ class AuthController {
         .build();
   }
 
-  private String logoutContinuation(HttpServletRequest request, Optional<SessionRecord> session) {
-    String idpLogout = logoutRedirect(request, session);
+  private String logoutContinuation(HttpServletRequest request, Optional<String> idTokenHint) {
+    String idpLogout = logoutRedirect(request, idTokenHint);
     if ("/".equals(idpLogout)) {
       return "/";
     }
@@ -491,7 +493,7 @@ class AuthController {
     return baseUrl(request) + "/auth/callback/idp";
   }
 
-  private String logoutRedirect(HttpServletRequest request, Optional<SessionRecord> session) {
+  private String logoutRedirect(HttpServletRequest request, Optional<String> idTokenHint) {
     if (md.endSessionEndpoint() == null) {
       return "/";
     }
@@ -500,7 +502,7 @@ class AuthController {
         .queryParam("post_logout_redirect_uri", baseUrl(request) + "/")
         .queryParam("client_id", md.clientId())
         .queryParam("state", CryptoSupport.randomUrlToken(32));
-    session.map(SessionRecord::idToken)
+    idTokenHint
         .filter(idToken -> !idToken.isBlank())
         .ifPresent(idToken -> builder.queryParam("id_token_hint", idToken));
     return builder.encode().toUriString();

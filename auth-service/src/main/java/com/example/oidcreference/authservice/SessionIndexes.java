@@ -12,6 +12,7 @@ class SessionIndexes {
   private static final String SESSION_PREFIX = "sess:";
   private static final String IDP_SID_PREFIX = "idp_sid:";
   private static final String SUBJECT_SESSIONS_PREFIX = "sub_sessions:";
+  private static final String LOGOUT_HINT_PREFIX = "logout_hint:";
 
   private final StateStore stateStore;
   private final JsonCodec json;
@@ -26,6 +27,13 @@ class SessionIndexes {
         stateStore.put(IDP_SID_PREFIX + idpSid, localSid, ttl));
     subject(session).ifPresent(sub ->
         addSubjectSession(sub, localSid, ttl));
+    if (session.idToken() != null && !session.idToken().isBlank()) {
+      stateStore.put(LOGOUT_HINT_PREFIX + localSid, session.idToken(), ttl);
+    }
+  }
+
+  Optional<String> consumeLogoutHint(String localSid) {
+    return stateStore.getAndDelete(LOGOUT_HINT_PREFIX + localSid);
   }
 
   boolean deleteByIdpSid(String idpSid) {
@@ -52,6 +60,7 @@ class SessionIndexes {
     Optional<SessionRecord> session = stateStore.get(SESSION_PREFIX + localSid)
         .map(value -> json.decode(value, SessionRecord.class));
     stateStore.delete(SESSION_PREFIX + localSid);
+    stateStore.delete(LOGOUT_HINT_PREFIX + localSid);
     if (session.isEmpty()) {
       return false;
     }
