@@ -16,6 +16,40 @@ class OidcProviderMetadataTest {
   }
 
   @Test
+  void discoveryFailsFastAgainstAHungIssuer() throws Exception {
+    // Discovery runs at startup; with Nimbus's default infinite timeouts a
+    // stalled issuer hangs boot indefinitely instead of failing fast. The
+    // hung socket completes the TCP handshake but never responds.
+    try (java.net.ServerSocket hung = new java.net.ServerSocket(0, 1)) {
+      var props = new AuthProperties(
+          "idp",
+          "",
+          java.time.Duration.ofSeconds(60),
+          java.time.Duration.ofSeconds(1800),
+          java.time.Duration.ofSeconds(28800),
+          java.net.URI.create("http://127.0.0.1:" + hung.getLocalPort()),
+          null,
+          null,
+          null,
+          null,
+          "oidc-reference-auth",
+          "test-secret",
+          java.util.Set.of("openid"),
+          java.util.List.of("realm_access", "roles"),
+          "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          true,
+          "oidc-reference-api-gateway",
+          "oidc-reference-auth-internal");
+
+      org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+          java.time.Duration.ofSeconds(10),
+          () -> assertThatThrownBy(() -> OidcProviderMetadata.discover(props))
+              .isInstanceOf(IllegalStateException.class)
+              .hasMessageContaining("OIDC discovery failed"));
+    }
+  }
+
+  @Test
   void requireMatchingIssuerFailsClosedOnIssuerDrift() {
     // OIDC Discovery / RFC 8414 §3.3: the issuer in the discovery document MUST
     // equal the issuer used to fetch it. A drifted issuer means the document

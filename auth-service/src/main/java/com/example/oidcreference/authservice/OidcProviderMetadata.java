@@ -58,7 +58,8 @@ public record OidcProviderMetadata(
     }
     try {
       var req = new OIDCProviderConfigurationRequest(new Issuer(props.issuerUri().toString()));
-      var m = OIDCProviderMetadata.parse(req.toHTTPRequest().send().getBodyAsJSONObject());
+      var m = OIDCProviderMetadata.parse(
+          IdpHttp.withTimeouts(req.toHTTPRequest()).send().getBodyAsJSONObject());
       return new OidcProviderMetadata(
           props.clientId(),
           props.clientSecret(),

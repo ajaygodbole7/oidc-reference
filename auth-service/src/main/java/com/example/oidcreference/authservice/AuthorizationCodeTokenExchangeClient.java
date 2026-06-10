@@ -15,8 +15,6 @@ import org.springframework.stereotype.Component;
 
 @Component
 class AuthorizationCodeTokenExchangeClient implements TokenExchangeClient {
-  private static final long DEFAULT_REFRESH_EXPIRES_IN = 1800L;
-
   private final OidcProviderMetadata md;
   private final IdTokenValidator idTokenValidator;
 
@@ -34,16 +32,7 @@ class AuthorizationCodeTokenExchangeClient implements TokenExchangeClient {
     var clientAuth = new ClientSecretBasic(new ClientID(md.clientId()), new Secret(md.clientSecret()));
     var tokenRequest = new TokenRequest(md.tokenEndpoint(), clientAuth, grant);
 
-    com.nimbusds.oauth2.sdk.TokenResponse tokenResponse;
-    try {
-      tokenResponse = OIDCTokenResponseParser.parse(tokenRequest.toHTTPRequest().send());
-    } catch (java.io.IOException | com.nimbusds.oauth2.sdk.ParseException e) {
-      // Narrow catch — mirrors AuthorizationCodeTokenRefreshClient.parse.
-      // A broad catch(Exception) hides programmer-error RuntimeExceptions
-      // from Nimbus (null state, malformed config) as if they were
-      // transport failures.
-      throw new IllegalStateException("token exchange failed", e);
-    }
+    com.nimbusds.oauth2.sdk.TokenResponse tokenResponse = parse(tokenRequest);
 
     if (!tokenResponse.indicatesSuccess()) {
       throw new IllegalStateException(
@@ -63,36 +52,56 @@ class AuthorizationCodeTokenExchangeClient implements TokenExchangeClient {
     Instant accessExpiresAt = Instant.now().plusSeconds(lifetime > 0 ? lifetime : 300);
 
     // Some IdPs emit refresh_expires_in as a JSON string ("1800") instead
-    // of a number. Tolerate both — falling back to the default silently on
-    // a string-typed value would lie about the AS's intent.
+    // of a number. Tolerate both.
     Object refreshExpiresInRaw = successResponse.getCustomParameters().get("refresh_expires_in");
-    long refreshExpiresIn = parseRefreshExpiresIn(refreshExpiresInRaw);
+    Long refreshExpiresIn = parseRefreshExpiresIn(refreshExpiresInRaw);
 
     return new SessionRecord(
         accessToken.getValue(),
         refreshToken.getValue(),
         idTokenString,
         accessExpiresAt,
-        Instant.now().plusSeconds(refreshExpiresIn),
+        refreshExpiresIn == null ? null : Instant.now().plusSeconds(refreshExpiresIn),
         idTokenValidator.validate(idTokenString, accessToken.getValue(), transaction));
   }
 
+  // Package-private + overridable so a test subclass can stub the token-
+  // endpoint response without an HTTP server, mirroring
+  // AuthorizationCodeTokenRefreshClient.parse. This is the seam that makes the
+  // exchange→id_token-validation wiring unit-testable; production callers
+  // always go through the OIDC token endpoint over real HTTP (with timeouts).
+  // Narrow catch — a broad catch(Exception) would hide programmer-error
+  // RuntimeExceptions from Nimbus (null state, malformed config) as if they
+  // were transport failures.
+  com.nimbusds.oauth2.sdk.TokenResponse parse(TokenRequest tokenRequest) {
+    try {
+      return OIDCTokenResponseParser.parse(
+          IdpHttp.withTimeouts(tokenRequest.toHTTPRequest()).send());
+    } catch (java.io.IOException | com.nimbusds.oauth2.sdk.ParseException e) {
+      throw new IllegalStateException("token exchange failed", e);
+    }
+  }
+
   // Accept both Number-typed (canonical) and String-typed (some IdPs)
-  // forms. Reject negative / zero / unparseable values by falling back
-  // to the default — those are configuration errors rather than valid
-  // signals.
-  static long parseRefreshExpiresIn(Object raw) {
+  // forms. refresh_expires_in is a Keycloak-ism — most IdPs (Okta, Auth0,
+  // Entra) never send it. Absent, zero/negative, or unparseable values all
+  // mean the refresh token's lifetime is UNKNOWN: return null so the
+  // session stores no refresh expiry and SessionRecord.refreshTokenExpired()
+  // never short-circuits on a fabricated deadline. Inventing a value here
+  // (the previous behavior hardcoded 1800s) would kill valid sessions on
+  // any IdP that simply doesn't emit the claim.
+  static Long parseRefreshExpiresIn(Object raw) {
     return switch (raw) {
       case Number n when n.longValue() > 0 -> n.longValue();
       case String s -> {
         try {
           long v = Long.parseLong(s.trim());
-          yield v > 0 ? v : DEFAULT_REFRESH_EXPIRES_IN;
+          yield v > 0 ? v : null;
         } catch (NumberFormatException e) {
-          yield DEFAULT_REFRESH_EXPIRES_IN;
+          yield null;
         }
       }
-      case null, default -> DEFAULT_REFRESH_EXPIRES_IN;
+      case null, default -> null;
     };
   }
 }

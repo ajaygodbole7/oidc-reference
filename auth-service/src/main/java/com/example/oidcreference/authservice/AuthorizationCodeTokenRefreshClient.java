@@ -18,8 +18,6 @@ import org.springframework.stereotype.Component;
 
 @Component
 class AuthorizationCodeTokenRefreshClient implements TokenRefreshClient {
-  private static final long DEFAULT_REFRESH_EXPIRES_IN = 1800L;
-
   private final OidcProviderMetadata md;
   private final AuthProperties props;
   private final IdTokenValidator idTokenValidator;
@@ -99,7 +97,7 @@ class AuthorizationCodeTokenRefreshClient implements TokenRefreshClient {
         : Instant.now().plusSeconds(300);
 
     Object refreshExpiresInRaw = success.getCustomParameters().get("refresh_expires_in");
-    long refreshExpiresIn = AuthorizationCodeTokenExchangeClient
+    Long refreshExpiresIn = AuthorizationCodeTokenExchangeClient
         .parseRefreshExpiresIn(refreshExpiresInRaw);
 
     return new SessionRecord(
@@ -107,7 +105,7 @@ class AuthorizationCodeTokenRefreshClient implements TokenRefreshClient {
         newRefresh,
         newIdToken,
         accessExpiresAt,
-        Instant.now().plusSeconds(refreshExpiresIn),
+        refreshExpiresIn == null ? null : Instant.now().plusSeconds(refreshExpiresIn),
         session.createdAt(),
         session.absoluteExpiresAt(),
         newClaims);
@@ -118,7 +116,8 @@ class AuthorizationCodeTokenRefreshClient implements TokenRefreshClient {
   // always go through the OIDC token endpoint over real HTTP.
   com.nimbusds.oauth2.sdk.TokenResponse parse(TokenRequest tokenRequest) {
     try {
-      return OIDCTokenResponseParser.parse(tokenRequest.toHTTPRequest().send());
+      return OIDCTokenResponseParser.parse(
+          IdpHttp.withTimeouts(tokenRequest.toHTTPRequest()).send());
     } catch (IOException | ParseException e) {
       throw new IllegalStateException("refresh token request failed", e);
     }

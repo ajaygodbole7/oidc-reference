@@ -181,6 +181,73 @@ class AuthorizationCodeTokenRefreshClientTest {
     assertThat(refreshed.idToken()).isEqualTo("new-id-token");
   }
 
+  // ----- refresh_expires_in handling (IdP portability) -----
+
+  @Test
+  void missingRefreshExpiresInLeavesRefreshExpiryUnknown() {
+    // Keycloak emits refresh_expires_in; Okta/Auth0/Entra do not. An absent
+    // claim means the refresh token's lifetime is UNKNOWN — fabricating a
+    // value (the old behavior hardcoded 1800s) makes refreshTokenExpired()
+    // kill perfectly valid sessions on IdPs that never sent an expiry.
+    // Unknown must be stored as null, which refreshTokenExpired() already
+    // treats as "never expired on this basis".
+    var client = clientReturning(tokensWith("brand-new-refresh-token"), true);
+
+    SessionRecord refreshed = client.refresh(oldSession());
+
+    assertThat(refreshed.refreshExpiresAt()).isNull();
+  }
+
+  @Test
+  void presentRefreshExpiresInIsHonored() {
+    var tokens = tokensWith("brand-new-refresh-token");
+    var client = new AuthorizationCodeTokenRefreshClient(
+        metadata(), props(true), validatorReturning(Map.of())) {
+      @Override
+      TokenResponse parse(TokenRequest tokenRequest) {
+        return new OIDCTokenResponse(tokens, Map.of("refresh_expires_in", 900L));
+      }
+    };
+
+    Instant before = Instant.now();
+    SessionRecord refreshed = client.refresh(oldSession());
+
+    assertThat(refreshed.refreshExpiresAt())
+        .isBetween(before.plusSeconds(900), Instant.now().plusSeconds(901));
+  }
+
+  // ----- transport timeouts -----
+
+  @Test
+  void refreshFailsFastAgainstAHungTokenEndpoint() throws Exception {
+    // A ServerSocket that is never accept()ed completes the TCP handshake
+    // (kernel backlog) and then never responds — the canonical hung IdP.
+    // Nimbus HTTPRequest defaults to connect/read timeout 0 (infinite), so
+    // without explicit timeouts this refresh blocks a servlet thread forever
+    // WHILE HOLDING the per-sid refresh lock: one hung Keycloak becomes
+    // auth-service thread-pool exhaustion. The client must surface a
+    // transport failure within its read timeout instead.
+    try (java.net.ServerSocket hung = new java.net.ServerSocket(0, 1)) {
+      var md = new OidcProviderMetadata(
+          "oidc-reference-auth",
+          "test-secret",
+          URI.create("http://idp.example/authorize"),
+          URI.create("http://127.0.0.1:" + hung.getLocalPort() + "/token"),
+          URI.create("http://idp.example/jwks"),
+          URI.create("http://idp.example/logout"),
+          "http://idp.example",
+          Set.of("openid"));
+      var client = new AuthorizationCodeTokenRefreshClient(
+          md, props(true), validatorReturning(Map.of()));
+
+      org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+          java.time.Duration.ofSeconds(10),
+          () -> assertThatThrownBy(() -> client.refresh(oldSession()))
+              .isInstanceOf(IllegalStateException.class)
+              .hasMessageContaining("refresh token request failed"));
+    }
+  }
+
   // ----- require-rotation = false (explicit escape hatch) -----
 
   @Test
