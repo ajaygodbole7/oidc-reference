@@ -72,109 +72,120 @@ For a practical IdP swap checklist, see
 For non-local hardening, see
 [`docs/operations/production-hardening.md`](docs/operations/production-hardening.md).
 
-### Browser flow — Authorization Code + PKCE
+### Login — Authorization Code + PKCE
 
-Login is triggered either by the browser hitting a protected URL while
-unauthenticated, or by an explicit navigation to `/auth/login`. The API
-Gateway detects no-session on `/api/**` and, for top-level navigations,
-bounces to `/auth/login`. The Auth Service runs the OAuth round-trip and
-returns a `302` to the originally-requested URL with the session and CSRF
-cookies attached.
+Login starts when the browser hits a protected `/api/**` URL with no session — the
+gateway bounces a top-level navigation to `/auth/login`, or returns `401` to an XHR
+so the SPA navigates itself — or from an explicit "Sign in". The Auth Service runs
+the OAuth round-trip and returns the browser to the originally requested URL with
+the session and CSRF cookies attached.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor U as User
-    participant B as Browser (React SPA)
-    participant G as API Gateway (APISIX standalone + Lua plugin)
-    participant A as Auth Service (Spring Boot, confidential OIDC client)
-    participant K as Authorization Server (Keycloak local, pluggable)
-    participant V as State Store (Valkey local)
-    participant R as Resource Server (Spring Boot)
+    participant B as Browser (SPA)
+    participant G as API Gateway
+    participant A as Auth Service (BFF)
+    participant K as IdP
 
-    Note over U,R: Login — Authorization Code + PKCE. Triggered by protected-resource request OR explicit /auth/login.
-    U->>B: Navigate to protected URL (or click "Sign in" → /auth/login)
-    B->>G: GET /api/<protected>  (no cookie)
-    G->>G: No sess:{sid} — check Fetch Metadata
-    alt Sec-Fetch-Mode: navigate AND Sec-Fetch-Dest: document
-        G-->>B: 302 /auth/login?return_to=/api/<protected>
-    else XHR / fetch
-        G-->>B: 401 (SPA performs top-level navigation)
-    end
-    B->>A: GET /auth/login?return_to=/api/<protected>
-    A->>A: Validate return_to (required, same-origin relative path, reject absolute / // / missing leading slash / overlong / encoded backslash)
-    A->>A: Generate state, nonce, PKCE verifier, oauth_tx browser-binding token
-    A->>V: SET tx:{state} = {verifier, nonce, saved_request=return_to, tx_cookie_hash=HMAC(oauth_tx)}  (TTL 5m)
-    A-->>B: 302 → Keycloak /auth?code_challenge=S256&state&nonce<br/>+ Set-Cookie oauth_tx=opaque, HttpOnly, SameSite=Lax, Path=/auth/callback/idp
-    B->>K: GET /auth
-    U->>K: Authenticate
-    K-->>B: 302 /auth/callback/idp?code&state&iss
-    B->>A: GET /auth/callback/idp?code&state&iss  (Cookie: oauth_tx)
-    A->>V: GET tx:{state} → {verifier, nonce, saved_request, tx_cookie_hash}  (then DEL — single-use)
-    A->>A: Validate iss param matches configured issuer (RFC 9207 mix-up defense)
-    A->>A: Verify HMAC(oauth_tx cookie) equals stored tx_cookie_hash (browser binding)
-    A->>K: POST /token  (code + verifier + client_secret)
-    K-->>A: access_token, refresh_token, id_token
-    A->>A: Validate id_token (iss, aud=oidc-reference-auth, nonce, sig, exp, at_hash when present)
-    A->>V: SET sess:{sid} = {tokens, claims, absolute_expires_at}  (sliding TTL 30m, absolute ceiling 8h ≤ IdP SSO max)
-    A-->>B: 302 saved_request<br/>+ Set-Cookie __Host-sid=opaque, HttpOnly, Secure, SameSite=Lax, Path=/<br/>+ Set-Cookie XSRF-TOKEN=signed, Secure, SameSite=Strict, Path=/ (JS-readable)<br/>+ Set-Cookie oauth_tx=, Max-Age=0 (single-use, evicted even on success)
-
-    Note over B,R: Saved-request replay → authenticated API call
-    B->>G: GET /api/<protected>  (Cookie: __Host-sid, XSRF-TOKEN)
-    G->>V: GET sess:{sid}
-    opt access_token within refresh window
-        G->>A: POST /internal/refresh (Authorization Bearer gateway-service-token, body sid)
-        A->>A: Acquire per-sid lock, validate Client Credentials token (configured internal audience)
-        A->>K: POST /token  (grant_type=refresh_token)
-        K-->>A: rotated access_token + refresh_token
-        A->>V: UPDATE sess:{sid}
-        A-->>G: 200 {refreshed_at, access_token_expires_at}
-        G->>V: GET sess:{sid}  (re-read for fresh access_token)
-    end
-    G->>R: GET /api/protected + Authorization Bearer access_token (strip inbound Cookie, strip hop-by-hop)
-    R->>R: Validate JWT  (iss, sig, exp, aud, scope, roles)
-    R-->>G: 200 {body}
-    G-->>B: 200 {body}
-
-    Note over B,K: Logout — RP-initiated via same-origin continuation handle
-    B->>A: POST /auth/logout (Cookie __Host-sid, header X-XSRF-TOKEN signed)
-    A->>A: Validate signed double-submit CSRF (HMAC over token value)
-    A->>V: DEL sess:{sid}
-    A->>V: SET logout:{handle} = {end_session URL with id_token_hint}  (single-use, TTL 2m)
-    A-->>B: 200 {"logoutUrl":"/auth/logout/continue?lc=<handle>"}  (same-origin)<br/>+ Set-Cookie __Host-sid=, Max-Age=0<br/>+ Set-Cookie XSRF-TOKEN=, Max-Age=0<br/>+ Set-Cookie oauth_tx=, Max-Age=0 (safety-net for aborted login mid-flow)
-    B->>A: GET /auth/logout/continue?lc=<handle>  (top-level navigation)
-    A->>V: GET logout:{handle} → end_session URL  (then DEL — single-use)
-    A-->>B: 302 → Keycloak /logout?id_token_hint<br/>+ Referrer-Policy no-referrer (id_token_hint carries PII; server-emitted, never read by SPA JS)
-    B->>K: GET /logout
-    K-->>B: 302 /  (post-logout redirect)
+    Note over B: Browser holds only an opaque __Host-sid cookie + a CSRF token —<br/>never an access, refresh, or id token.
+    U->>B: Open a protected URL
+    B->>G: GET /api/… (no session cookie)
+    G-->>B: 302 → /auth/login (navigation) · 401 (XHR)
+    B->>A: GET /auth/login?return_to=…
+    A->>A: Start OAuth transaction — state, nonce, PKCE, browser-binding
+    A-->>B: 302 → IdP /authorize (code, PKCE S256)
+    B->>K: Authenticate
+    K-->>B: 302 → /auth/callback?code
+    B->>A: GET /auth/callback (+ transaction cookie)
+    A->>K: Exchange code (+ PKCE verifier, client secret)
+    K-->>A: access + refresh + id tokens
+    Note over A,K: Tokens exist only server-side, from here on.
+    A->>A: Validate id_token · create server-side session
+    A-->>B: 302 → original URL + __Host-sid + CSRF cookie
 ```
 
-A `fetch`/XHR to `/api/*` without a session returns `401`, not a redirect
-(XHR cannot render an external login page). The SPA performs the top-level
-navigation itself. The gateway distinguishes XHR from document navigation
-via `Sec-Fetch-Mode` and `Sec-Fetch-Dest`, with `Accept: text/html` as a
-fallback.
+### Authenticated request — proxy and transparent refresh
 
-### Service flow — Client Credentials
-
-Machine-to-machine callers obtain a token directly from the Authorization
-Server and call the Resource Server with a bearer. Neither the Auth
-Service nor the API Gateway is in the path.
+Every `/api/**` call carries only the opaque session cookie. The gateway looks up
+the session, transparently refreshes the access token when it is near expiry
+(delegating to the Auth Service, which holds the refresh token), then injects a
+bearer for the Resource Server.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant SC as Service Client (confidential, machine)
-    participant K as Authorization Server (Keycloak local, pluggable)
-    participant R as Resource Server (Spring Boot)
+    participant B as Browser (SPA)
+    participant G as API Gateway
+    participant A as Auth Service (BFF)
+    participant V as Session Store
+    participant K as IdP
+    participant R as Resource Server
 
-    Note over SC,R: Service-to-service — Client Credentials grant
-    SC->>K: POST /token  (grant=client_credentials, client_id, client_secret)
-    K->>K: Authenticate client (secret)
-    K-->>SC: access_token  (aud=oidc-reference-api, scope=service.jobs)
-    SC->>R: POST /api/jobs  + Authorization: Bearer <access_token>
-    R->>R: Validate JWT  (iss, sig, exp, aud, scope)
-    R-->>SC: 200 {result}
+    B->>G: GET /api/… (Cookie: __Host-sid, CSRF)
+    G->>V: Look up session by sid
+    opt access token near expiry
+        G->>A: POST /internal/refresh (gateway service token + sid)
+        A->>K: Refresh-token grant
+        K-->>A: rotated access + refresh tokens
+        A->>V: Update session
+        A-->>G: 200 (refreshed)
+    end
+    G->>R: GET /api/… + Authorization: Bearer access_token
+    Note over G,R: Gateway strips the inbound cookie and injects the bearer.<br/>The browser never sends or sees a token.
+    R->>R: Validate JWT (iss, sig, aud, exp, scope/roles)
+    R-->>G: 200
+    G-->>B: 200
+```
+
+### Logout — RP-initiated, `id_token_hint` stays server-side
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser (SPA)
+    participant A as Auth Service (BFF)
+    participant K as IdP
+
+    B->>A: POST /auth/logout (Cookie: __Host-sid, header: CSRF)
+    A->>A: Validate CSRF · delete server-side session · stash single-use logout handle
+    A-->>B: 200 { logoutUrl: "/auth/logout/continue?lc=…" } + evict cookies
+    Note over B,A: The SPA receives only a same-origin handle —<br/>never the IdP URL or id_token_hint.
+    B->>A: GET /auth/logout/continue?lc=… (top-level navigation)
+    A->>A: Resolve single-use handle → IdP end-session URL (with id_token_hint)
+    A-->>B: 302 → IdP /logout?id_token_hint (server-emitted, Referrer-Policy: no-referrer)
+    B->>K: GET /logout
+    K-->>B: 302 → /
+```
+
+The IdP end-session URL carries `id_token_hint` (PII), so it never reaches SPA
+JavaScript: the Auth Service hands back a same-origin, single-use handle and emits
+the IdP redirect itself from `/auth/logout/continue`.
+
+Wire-level detail — exact cookie attributes, TTLs, validation rules, and the
+`/internal/refresh`, `sess:{sid}`, and signed-CSRF contracts — lives in
+[SPEC-0001](docs/specs/SPEC-0001-core-oidc-flows.md).
+
+### Service-to-service — Client Credentials
+
+Machine callers obtain a token directly from the Authorization Server and call the
+Resource Server with a bearer. Neither the Auth Service nor the API Gateway is in
+the path.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SC as Service Client (machine)
+    participant K as IdP
+    participant R as Resource Server
+
+    Note over SC,R: Machine-to-machine — neither the Browser, Gateway, nor BFF is in the path.
+    SC->>K: Client-credentials grant (client_id, client_secret)
+    K-->>SC: access_token (aud, scope)
+    SC->>R: POST /api/jobs + Authorization: Bearer access_token
+    R->>R: Validate JWT (iss, sig, aud, exp, scope)
+    R-->>SC: 200
 ```
 
 ### Session and CSRF cookies
