@@ -374,6 +374,60 @@ class AuthControllerTest {
   }
 
   @Test
+  void sessionCookiesLiveUntilTheAbsoluteCeilingNotTheIdleWindow() throws Exception {
+    // The browser cookie is a bearer handle, not the enforcement point —
+    // session lifetime is enforced server-side by the sliding sess:{sid}
+    // TTL and the absolute ceiling. A cookie Max-Age equal to the INITIAL
+    // idle TTL is never re-issued (the gateway slides only the Valkey key),
+    // so every real browser session would hard-stop 30 minutes after login
+    // and the documented sliding-idle/8h-absolute design could never take
+    // effect. The cookies must live until the absolute ceiling; an idle
+    // death server-side just means the next /api request 302s to login.
+    String state = "state-cookie-max-age";
+    storeTransaction(state, "/");
+
+    mockMvc.perform(get("/auth/callback/idp")
+            .param("code", "code-1")
+            .param("state", state)
+            .cookie(txCookie(state)))
+        .andExpect(status().isFound())
+        .andExpect(cookie().maxAge("sid", 28800))
+        .andExpect(cookie().maxAge("XSRF-TOKEN", 28800));
+  }
+
+  @Test
+  void backChannelLogoutIndexesLiveForTheRemainingAbsoluteTtl() throws Exception {
+    // The gateway slides only sess:{sid} and /internal/refresh rewrites only
+    // the session key — nothing ever re-extends the back-channel-logout
+    // index keys. If they carry the idle TTL they expire ~30 minutes after
+    // login and IdP-initiated logout silently degrades to a 200
+    // "no_matching_session" for any longer-lived session. The index keys
+    // must therefore be written with the session's remaining ABSOLUTE TTL;
+    // an index entry outliving a dead sess: key is harmless (the delete
+    // paths tolerate a missing session), the reverse is a logout bypass.
+    String state = "state-index-ttl";
+    storeTransaction(state, "/");
+
+    MvcResult result = mockMvc.perform(get("/auth/callback/idp")
+            .param("code", "code-1")
+            .param("state", state)
+            .cookie(txCookie(state)))
+        .andExpect(status().isFound())
+        .andReturn();
+
+    String sid = result.getResponse().getCookie("sid").getValue();
+    assertThat(stateStore.ttl("sess:" + sid))
+        .as("the session key itself keeps the sliding idle TTL")
+        .isEqualTo(Duration.ofSeconds(1800));
+    assertThat(stateStore.ttl("logout_hint:" + sid))
+        .as("logout-hint index must survive until the absolute ceiling")
+        .isBetween(Duration.ofSeconds(28790), Duration.ofSeconds(28800));
+    assertThat(stateStore.ttl("sub_sessions:alice"))
+        .as("subject index must survive until the absolute ceiling")
+        .isBetween(Duration.ofSeconds(28790), Duration.ofSeconds(28800));
+  }
+
+  @Test
   void callbackCollapsesProtocolRelativeSavedRequestToRoot() throws Exception {
     // Protocol-relative URLs (//host/path) are absolute under URI.create
     // and must collapse to "/". The callback 302 then targets /, not the
@@ -1036,7 +1090,7 @@ class AuthControllerTest {
         createdAt.plus(Duration.ofHours(12)),
         Map.of("sub", "alice"));
     stateStore.put("sess:" + sid, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
-    new SessionIndexes(stateStore, TestBeans.JSON).index(sid, session, Duration.ofMinutes(30));
+    new SessionIndexes(stateStore, TestBeans.JSON).index(sid, session);
     return new Cookie("sid", sid);
   }
 

@@ -230,11 +230,18 @@ class AuthController {
 
     Duration sessionTtl = session.nextTtl(props.sessionIdleTtl());
     stateStore.put("sess:" + sid, json.encode(session), sessionTtl);
-    sessionIndexes.index(sid, session, sessionTtl);
+    sessionIndexes.index(sid, session);
     var savedRequest = normalizeSavedRequest(transaction.savedRequest());
 
-    var sidCookie = sidCookie(sid, sessionTtl, secure);
-    var xsrfCookie = xsrfCookie(signedCsrf, sessionTtl, secure);
+    // Cookie Max-Age is the ABSOLUTE ceiling, not the idle TTL. The cookies
+    // are issued exactly once — the gateway slides only the Valkey sess:
+    // key and never re-issues Set-Cookie — so an idle-TTL Max-Age would
+    // hard-stop every browser session 30 minutes after login and the
+    // sliding-idle design could never take effect. Lifetime enforcement is
+    // server-side (sliding sess: TTL + absolute ceiling); a cookie that
+    // outlives its dead session just earns a 302 back to /auth/login.
+    var sidCookie = sidCookie(sid, props.sessionAbsoluteTtl(), secure);
+    var xsrfCookie = xsrfCookie(signedCsrf, props.sessionAbsoluteTtl(), secure);
 
     SecurityAudit.event(request, 302, "callback_succeeded", "ok", subjectClaim(session));
     return ResponseEntity.status(HttpStatus.FOUND)
@@ -562,6 +569,9 @@ class AuthController {
     if (host.contains(":")) {
       authority = host;
     } else if (forwardedPort != null && !forwardedPort.isBlank()) {
+      // A non-numeric X-Forwarded-Port is rejected upstream with a 400 by
+      // Spring's ForwardedHeaderFilter (server.forward-headers-strategy:
+      // framework), so this parse only ever sees a validated numeric value.
       authority = host + ":" + Integer.parseInt(forwardedPort);
     } else {
       authority = host + ":" + request.getServerPort();

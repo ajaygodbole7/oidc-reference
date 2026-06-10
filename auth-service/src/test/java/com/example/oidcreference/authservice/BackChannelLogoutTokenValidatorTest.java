@@ -106,6 +106,57 @@ class BackChannelLogoutTokenValidatorTest {
   }
 
   @Test
+  void missingJtiIsRejected() throws Exception {
+    String token = sign(new JWTClaimsSet.Builder()
+        .issuer("http://idp.example")
+        .audience("oidc-reference-auth")
+        .subject("alice")
+        .claim("sid", "idp-sid-1")
+        .issueTime(Date.from(NOW))
+        .claim("events", Map.of(BackChannelLogoutTokenValidator.LOGOUT_EVENT, Map.of()))
+        .build());
+
+    assertThatThrownBy(() -> sut.validate(token))
+        .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
+  void nonStringJtiIsRejected() throws Exception {
+    String token = sign(claims()
+        .jwtID(null)
+        .claim("jti", 12345)
+        .build());
+
+    assertThatThrownBy(() -> sut.validate(token))
+        .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
+  void nonStringSidWithoutSubjectIsRejected() throws Exception {
+    String token = sign(new JWTClaimsSet.Builder()
+        .issuer("http://idp.example")
+        .audience("oidc-reference-auth")
+        .claim("sid", 12345)
+        .issueTime(Date.from(NOW))
+        .jwtID("jti-1")
+        .claim("events", Map.of(BackChannelLogoutTokenValidator.LOGOUT_EVENT, Map.of()))
+        .build());
+
+    assertThatThrownBy(() -> sut.validate(token))
+        .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
+  void logoutEventValueMustBeObject() throws Exception {
+    String token = sign(claims()
+        .claim("events", Map.of(BackChannelLogoutTokenValidator.LOGOUT_EVENT, "not-an-object"))
+        .build());
+
+    assertThatThrownBy(() -> sut.validate(token))
+        .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
   void nonceBearingLogoutTokenIsRejected() throws Exception {
     String token = sign(claims().claim("nonce", "login-nonce").build());
 

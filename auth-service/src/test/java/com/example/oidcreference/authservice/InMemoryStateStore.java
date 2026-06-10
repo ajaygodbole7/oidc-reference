@@ -28,6 +28,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 class InMemoryStateStore implements StateStore {
   private final Map<String, String> values = new ConcurrentHashMap<>();
+  private final Map<String, Set<String>> sets = new ConcurrentHashMap<>();
+  private final Map<String, Duration> ttls = new ConcurrentHashMap<>();
   private final AtomicInteger putCallsWithZeroTtl = new AtomicInteger();
   private final AtomicInteger expireCalls = new AtomicInteger();
 
@@ -37,6 +39,26 @@ class InMemoryStateStore implements StateStore {
       putCallsWithZeroTtl.incrementAndGet();
     }
     values.put(key, value);
+    ttls.put(key, ttl == null ? Duration.ZERO : ttl);
+  }
+
+  @Override
+  public boolean putIfAbsent(String key, String value, Duration ttl) {
+    String existing = values.putIfAbsent(key, value);
+    if (existing == null) {
+      ttls.put(key, ttl == null ? Duration.ZERO : ttl);
+      return true;
+    }
+    return false;
+  }
+
+  @Override
+  public boolean putIfPresent(String key, String value, Duration ttl) {
+    // Mirror Redis SET ... XX: write (and reset TTL) only if the key exists.
+    return values.computeIfPresent(key, (k, existing) -> {
+      ttls.put(k, ttl == null ? Duration.ZERO : ttl);
+      return value;
+    }) != null;
   }
 
   @Override
@@ -46,17 +68,58 @@ class InMemoryStateStore implements StateStore {
 
   @Override
   public Optional<String> getAndDelete(String key) {
+    ttls.remove(key);
     return Optional.ofNullable(values.remove(key));
   }
 
   @Override
   public void delete(String key) {
     values.remove(key);
+    sets.remove(key);
+    ttls.remove(key);
+  }
+
+  @Override
+  public void addToSet(String key, String member, Duration ttl) {
+    // ConcurrentHashMap.compute is atomic per key — mirrors Redis SADD being
+    // atomic per member, so concurrent adds for the same subject cannot lose
+    // a member to a read-modify-write race.
+    sets.compute(key, (k, existing) -> {
+      Set<String> set = existing == null ? ConcurrentHashMap.newKeySet() : existing;
+      set.add(member);
+      return set;
+    });
+    ttls.put(key, ttl == null ? Duration.ZERO : ttl);
+  }
+
+  @Override
+  public void removeFromSet(String key, String member) {
+    sets.computeIfPresent(key, (k, set) -> {
+      set.remove(member);
+      return set.isEmpty() ? null : set;
+    });
+    if (!sets.containsKey(key)) {
+      ttls.remove(key);
+    }
+  }
+
+  @Override
+  public Set<String> members(String key) {
+    Set<String> set = sets.get(key);
+    return set == null ? Collections.emptySet() : Set.copyOf(set);
+  }
+
+  @Override
+  public Duration ttl(String key) {
+    return ttls.getOrDefault(key, Duration.ZERO);
   }
 
   @Override
   public void expire(String key, Duration ttl) {
     expireCalls.incrementAndGet();
+    if (values.containsKey(key)) {
+      ttls.put(key, ttl == null ? Duration.ZERO : ttl);
+    }
   }
 
   int putCallsWithZeroTtl() {
@@ -68,11 +131,15 @@ class InMemoryStateStore implements StateStore {
   }
 
   Set<String> keys() {
-    return Collections.unmodifiableSet(values.keySet());
+    Set<String> all = new java.util.HashSet<>(values.keySet());
+    all.addAll(sets.keySet());
+    return Collections.unmodifiableSet(all);
   }
 
   void clear() {
     values.clear();
+    sets.clear();
+    ttls.clear();
     putCallsWithZeroTtl.set(0);
     expireCalls.set(0);
   }

@@ -2,7 +2,7 @@ package com.example.oidcreference.authservice;
 
 import com.nimbusds.jwt.JWTParser;
 import java.time.Duration;
-import java.util.LinkedHashSet;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.Set;
 import org.springframework.stereotype.Component;
@@ -22,7 +22,20 @@ class SessionIndexes {
     this.json = json;
   }
 
-  void index(String localSid, SessionRecord session, Duration ttl) {
+  // Index TTL is the session's remaining ABSOLUTE lifetime, not the idle
+  // TTL. The gateway slides only sess:{sid} and /internal/refresh rewrites
+  // only the session key; nothing re-extends these index keys. An idle TTL
+  // here would expire them after the first idle window, silently turning
+  // IdP back-channel logout into a 200 "no_matching_session" for any
+  // longer-lived session — the exact stolen-cookie revocation case the
+  // indexes exist for. The asymmetry is safe in one direction only: an
+  // index entry outliving a dead sess: key is harmless (the delete paths
+  // tolerate a missing session); the reverse is a logout bypass.
+  void index(String localSid, SessionRecord session) {
+    Duration ttl = Duration.between(Instant.now(), session.absoluteExpiresAt());
+    if (ttl.isNegative() || ttl.isZero()) {
+      return;
+    }
     idpSid(session).ifPresent(idpSid ->
         stateStore.put(IDP_SID_PREFIX + idpSid, localSid, ttl));
     subject(session).ifPresent(sub ->
@@ -43,12 +56,17 @@ class SessionIndexes {
   }
 
   int deleteBySubject(String sub) {
-    Optional<String> encoded = stateStore.getAndDelete(SUBJECT_SESSIONS_PREFIX + sub);
-    if (encoded.isEmpty()) {
+    var key = SUBJECT_SESSIONS_PREFIX + sub;
+    Set<String> localSids = stateStore.members(key);
+    if (localSids.isEmpty()) {
       return 0;
     }
+    // Drop the index up front: each deleteLocalSession below also SREMs the
+    // member, but removing the key now bounds the work to the snapshot and
+    // leaves no empty index behind.
+    stateStore.delete(key);
     int deleted = 0;
-    for (String localSid : decodeSidSet(encoded.get())) {
+    for (String localSid : localSids) {
       if (deleteLocalSession(localSid)) {
         deleted++;
       }
@@ -57,8 +75,14 @@ class SessionIndexes {
   }
 
   boolean deleteLocalSession(String localSid) {
+    // Decode defensively, then delete UNCONDITIONALLY. A corrupt sess:{sid}
+    // value (truncated write, schema drift) must still be evictable — decoding
+    // before the delete would let a parse failure abort the whole logout and
+    // strand the poisoned key. We lose only the secondary-index cleanup for a
+    // record we cannot read, which is acceptable: those indexes carry their own
+    // TTL and tolerate a dangling pointer.
     Optional<SessionRecord> session = stateStore.get(SESSION_PREFIX + localSid)
-        .map(value -> json.decode(value, SessionRecord.class));
+        .flatMap(this::tryDecode);
     stateStore.delete(SESSION_PREFIX + localSid);
     stateStore.delete(LOGOUT_HINT_PREFIX + localSid);
     if (session.isEmpty()) {
@@ -71,25 +95,23 @@ class SessionIndexes {
     return true;
   }
 
+  private Optional<SessionRecord> tryDecode(String value) {
+    try {
+      return Optional.of(json.decode(value, SessionRecord.class));
+    } catch (RuntimeException e) {
+      return Optional.empty();
+    }
+  }
+
   private void addSubjectSession(String sub, String localSid, Duration ttl) {
-    var key = SUBJECT_SESSIONS_PREFIX + sub;
-    Set<String> sids = stateStore.get(key)
-        .map(SessionIndexes::decodeSidSet)
-        .orElseGet(LinkedHashSet::new);
-    sids.add(localSid);
-    stateStore.put(key, encodeSidSet(sids), ttl);
+    // SADD is atomic per member — concurrent logins for the same subject
+    // cannot lose a sid to a read-decode-modify-write race (the prior
+    // newline-encoded GET/PUT could).
+    stateStore.addToSet(SUBJECT_SESSIONS_PREFIX + sub, localSid, ttl);
   }
 
   private void removeSubjectSession(String sub, String localSid) {
-    var key = SUBJECT_SESSIONS_PREFIX + sub;
-    Optional<String> encoded = stateStore.get(key);
-    if (encoded.isEmpty()) {
-      return;
-    }
-    Set<String> sids = decodeSidSet(encoded.get());
-    if (sids.size() == 1 && sids.contains(localSid)) {
-      stateStore.delete(key);
-    }
+    stateStore.removeFromSet(SUBJECT_SESSIONS_PREFIX + sub, localSid);
   }
 
   private static Optional<String> subject(SessionRecord session) {
@@ -101,11 +123,19 @@ class SessionIndexes {
   }
 
   static Optional<String> idpSid(SessionRecord session) {
-    if (session.idToken() == null || session.idToken().isBlank()) {
+    Optional<String> fromIdToken = sidFromJwt(session.idToken());
+    if (fromIdToken.isPresent()) {
+      return fromIdToken;
+    }
+    return sidFromJwt(session.accessToken());
+  }
+
+  private static Optional<String> sidFromJwt(String token) {
+    if (token == null || token.isBlank()) {
       return Optional.empty();
     }
     try {
-      Object sid = JWTParser.parse(session.idToken()).getJWTClaimsSet().getClaim("sid");
+      Object sid = JWTParser.parse(token).getJWTClaimsSet().getClaim("sid");
       if (sid == null || sid.toString().isBlank()) {
         return Optional.empty();
       }
@@ -115,20 +145,4 @@ class SessionIndexes {
     }
   }
 
-  private static LinkedHashSet<String> decodeSidSet(String encoded) {
-    LinkedHashSet<String> result = new LinkedHashSet<>();
-    if (encoded == null || encoded.isBlank()) {
-      return result;
-    }
-    for (String line : encoded.split("\\n")) {
-      if (!line.isBlank()) {
-        result.add(line);
-      }
-    }
-    return result;
-  }
-
-  private static String encodeSidSet(Set<String> sids) {
-    return String.join("\n", sids);
-  }
 }

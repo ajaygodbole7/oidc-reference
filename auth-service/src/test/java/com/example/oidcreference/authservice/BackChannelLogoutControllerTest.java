@@ -55,7 +55,32 @@ class BackChannelLogoutControllerTest {
     SessionRecord session = session("alice", idTokenWithSid("idp-sid-1"));
     stateStore.put("sess:local-sid-1", TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     new SessionIndexes(stateStore, TestBeans.JSON)
-        .index("local-sid-1", session, Duration.ofMinutes(30));
+        .index("local-sid-1", session);
+
+    mockMvc.perform(post("/backchannel-logout")
+            .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+            .content("logout_token=valid-sid"))
+        .andExpect(status().isOk());
+
+    assertThat(stateStore.get("sess:local-sid-1")).isEmpty();
+    assertThat(stateStore.get("idp_sid:idp-sid-1")).isEmpty();
+  }
+
+  @Test
+  void validLogoutTokenByIdpSidCanMatchSidFromAccessToken() throws Exception {
+    Instant createdAt = Instant.now();
+    SessionRecord session = new SessionRecord(
+        idTokenWithSid("idp-sid-1"),
+        "refresh-token",
+        "id-token-without-sid",
+        createdAt.plusSeconds(300),
+        createdAt.plusSeconds(1800),
+        createdAt,
+        createdAt.plusSeconds(3600),
+        Map.of("sub", "alice"));
+    stateStore.put("sess:local-sid-1", TestBeans.JSON.encode(session), Duration.ofMinutes(30));
+    new SessionIndexes(stateStore, TestBeans.JSON)
+        .index("local-sid-1", session);
 
     mockMvc.perform(post("/backchannel-logout")
             .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -72,9 +97,9 @@ class BackChannelLogoutControllerTest {
     SessionRecord second = session("alice", "also-not-a-jwt");
     SessionIndexes indexes = new SessionIndexes(stateStore, TestBeans.JSON);
     stateStore.put("sess:local-sid-a", TestBeans.JSON.encode(first), Duration.ofMinutes(30));
-    indexes.index("local-sid-a", first, Duration.ofMinutes(30));
+    indexes.index("local-sid-a", first);
     stateStore.put("sess:local-sid-b", TestBeans.JSON.encode(second), Duration.ofMinutes(30));
-    indexes.index("local-sid-b", second, Duration.ofMinutes(30));
+    indexes.index("local-sid-b", second);
 
     mockMvc.perform(post("/backchannel-logout")
             .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -83,7 +108,30 @@ class BackChannelLogoutControllerTest {
 
     assertThat(stateStore.get("sess:local-sid-a")).isEmpty();
     assertThat(stateStore.get("sess:local-sid-b")).isEmpty();
-    assertThat(stateStore.get("sub_sessions:alice")).isEmpty();
+    assertThat(stateStore.members("sub_sessions:alice")).isEmpty();
+  }
+
+  @Test
+  void logoutTokenWithSidAndSubjectDeletesOnlyMatchingIdpSession() throws Exception {
+    SessionRecord first = session("alice", idTokenWithSid("idp-sid-1"));
+    SessionRecord second = session("alice", idTokenWithSid("idp-sid-2"));
+    SessionIndexes indexes = new SessionIndexes(stateStore, TestBeans.JSON);
+    stateStore.put("sess:local-sid-1", TestBeans.JSON.encode(first), Duration.ofMinutes(30));
+    indexes.index("local-sid-1", first);
+    stateStore.put("sess:local-sid-2", TestBeans.JSON.encode(second), Duration.ofMinutes(30));
+    indexes.index("local-sid-2", second);
+
+    mockMvc.perform(post("/backchannel-logout")
+            .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+            .content("logout_token=valid-sid-and-sub"))
+        .andExpect(status().isOk());
+
+    assertThat(stateStore.get("sess:local-sid-1")).isEmpty();
+    assertThat(stateStore.get("sess:local-sid-2")).isPresent();
+    assertThat(stateStore.get("idp_sid:idp-sid-1")).isEmpty();
+    assertThat(stateStore.get("idp_sid:idp-sid-2")).contains("local-sid-2");
+    assertThat(stateStore.members("sub_sessions:alice"))
+        .containsExactly("local-sid-2");
   }
 
   @Test
@@ -91,7 +139,7 @@ class BackChannelLogoutControllerTest {
     SessionRecord session = session("alice", idTokenWithSid("idp-sid-1"));
     stateStore.put("sess:local-sid-1", TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     new SessionIndexes(stateStore, TestBeans.JSON)
-        .index("local-sid-1", session, Duration.ofMinutes(30));
+        .index("local-sid-1", session);
 
     mockMvc.perform(post("/backchannel-logout")
             .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -212,6 +260,7 @@ class BackChannelLogoutControllerTest {
     LogoutToken validate(String serialized) {
       return switch (serialized) {
         case "valid-sid" -> new LogoutToken("alice", "idp-sid-1", "jti-sid");
+        case "valid-sid-and-sub" -> new LogoutToken("alice", "idp-sid-1", "jti-sid-and-sub");
         case "valid-sub" -> new LogoutToken("alice", null, "jti-sub");
         case "valid-replay" -> new LogoutToken("alice", null, "jti-replay");
         default -> throw new BadCredentialsException("invalid");

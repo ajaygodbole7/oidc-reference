@@ -52,12 +52,14 @@ class BackChannelLogoutTokenValidator {
       requireFreshIat(claims);
       requireLogoutEvent(claims);
       rejectNonce(claims);
+      String jti = stringClaim(claims, "jti")
+          .orElseThrow(() -> new BadCredentialsException("logout_token missing jti"));
       String sub = stringClaim(claims, "sub").orElse(null);
       String sid = stringClaim(claims, "sid").orElse(null);
       if ((sub == null || sub.isBlank()) && (sid == null || sid.isBlank())) {
         throw new BadCredentialsException("logout_token missing sub/sid");
       }
-      return new LogoutToken(sub, sid, stringClaim(claims, "jti").orElse(null));
+      return new LogoutToken(sub, sid, jti);
     } catch (BadCredentialsException e) {
       throw e;
     } catch (Exception e) {
@@ -99,7 +101,7 @@ class BackChannelLogoutTokenValidator {
 
   private void requireLogoutEvent(JWTClaimsSet claims) {
     Object events = claims.getClaim("events");
-    if (!(events instanceof Map<?, ?> map) || !map.containsKey(LOGOUT_EVENT)) {
+    if (!(events instanceof Map<?, ?> map) || !(map.get(LOGOUT_EVENT) instanceof Map<?, ?>)) {
       throw new BadCredentialsException("logout_token missing logout event");
     }
   }
@@ -112,10 +114,10 @@ class BackChannelLogoutTokenValidator {
 
   private static Optional<String> stringClaim(JWTClaimsSet claims, String name) {
     Object value = claims.getClaim(name);
-    if (value == null || value.toString().isBlank()) {
+    if (!(value instanceof String stringValue) || stringValue.isBlank()) {
       return Optional.empty();
     }
-    return Optional.of(value.toString());
+    return Optional.of(stringValue);
   }
 
   private static DefaultJWTProcessor<SecurityContext> jwksProcessor(OidcProviderMetadata md) {

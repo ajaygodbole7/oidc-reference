@@ -388,6 +388,44 @@ class InternalRefreshControllerTest {
   }
 
   @Test
+  void refreshDoesNotResurrectASessionDeletedDuringTheUpstreamCall(CapturedOutput output)
+      throws Exception {
+    // Resurrection race: the delete paths (POST /auth/logout, back-channel
+    // logout) do NOT take the per-sid refresh lock, so a concurrent logout can
+    // DEL sess:{sid} after this controller has read the session and entered the
+    // IdP round-trip. The post-refresh write must be conditional — if the
+    // session is gone, the refreshed tokens must be discarded, NOT used to
+    // recreate a session the user just logged out of.
+    String sid = "sid-deleted-during-refresh";
+    SessionRecord expiring = new SessionRecord(
+        "stale-access",
+        "refresh-token-1",
+        "id-token-1",
+        Instant.now().plusSeconds(10),
+        Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    storeSession(sid, expiring);
+
+    // Simulate the concurrent logout landing mid-refresh: the recording client
+    // deletes sess:{sid} from inside refresh(), i.e. during the upstream call.
+    tokenRefreshClient.runDuringRefresh(() -> stateStore.delete("sess:" + sid));
+
+    mockMvc.perform(post("/internal/refresh")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+
+    assertThat(stateStore.get("sess:" + sid))
+        .as("a session deleted by a concurrent logout must NOT be resurrected by the refresh write")
+        .isEmpty();
+    assertThat(output.getOut())
+        .contains("event=refresh_rejected")
+        .contains("reason=session_deleted_during_refresh");
+  }
+
+  @Test
   void concurrentRefreshCallsForSameSidSerializeOnLock() throws Exception {
     // Two simultaneous refresh calls on the same sid — the per-session
     // lock plus the under-lock re-read of sess:{sid} mean exactly ONE
@@ -525,6 +563,7 @@ class InternalRefreshControllerTest {
     private final AtomicInteger refreshCalls = new AtomicInteger();
     private final AtomicReference<CountDownLatch> refreshStarted = new AtomicReference<>();
     private final AtomicReference<CountDownLatch> releaseRefresh = new AtomicReference<>();
+    private final AtomicReference<Runnable> duringRefresh = new AtomicReference<>();
     private final TokenRefreshClient spy = org.mockito.Mockito.spy(new InnerDelegate());
 
     @Override
@@ -553,6 +592,13 @@ class InternalRefreshControllerTest {
       }
     }
 
+    // Run an arbitrary action from INSIDE refresh() — i.e. while the upstream
+    // IdP round-trip is notionally in flight — to model a concurrent mutation
+    // (e.g. a logout DEL of sess:{sid}) that lands during the refresh.
+    void runDuringRefresh(Runnable action) {
+      duringRefresh.set(action);
+    }
+
     int refreshCalls() {
       return refreshCalls.get();
     }
@@ -561,6 +607,7 @@ class InternalRefreshControllerTest {
       refreshCalls.set(0);
       refreshStarted.set(null);
       releaseRefresh.set(null);
+      duringRefresh.set(null);
       org.mockito.Mockito.clearInvocations(spy);
     }
 
@@ -580,6 +627,10 @@ class InternalRefreshControllerTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("interrupted waiting to release refresh", e);
           }
+        }
+        Runnable midRefresh = duringRefresh.get();
+        if (midRefresh != null) {
+          midRefresh.run();
         }
         if ("reused-refresh-token".equals(session.refreshToken())) {
           throw new InvalidRefreshTokenException("refresh token rejected by authorization server");

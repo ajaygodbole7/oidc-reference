@@ -164,7 +164,19 @@ class InternalRefreshController {
         stateStore.delete(sessKey);
         return problem(404, "session past absolute TTL");
       }
-      stateStore.put(sessKey, json.encode(refreshed), nextTtl);
+      // Conditional write: only persist the rotated tokens if sess:{sid} still
+      // exists. A concurrent logout / back-channel logout can DEL the session
+      // during the upstream refresh round-trip above — those delete paths do
+      // NOT take this per-sid lock — and an unconditional SET would resurrect a
+      // session the user just terminated. SET ... XX makes the write a no-op in
+      // that race; we then fail closed (404) and discard the orphaned tokens
+      // (the IdP session is being torn down by the logout anyway).
+      if (!stateStore.putIfPresent(sessKey, json.encode(refreshed), nextTtl)) {
+        SecurityAudit.event(
+            request, 404, "refresh_rejected", "session_deleted_during_refresh",
+            subjectClaim(refreshed));
+        return problem(404, "session ended, re-login required");
+      }
       SecurityAudit.event(
           request, 200, "refresh_succeeded", "ok", subjectClaim(refreshed));
       return ResponseEntity.ok(new RefreshResponse(Instant.now(), refreshed.expiresAt()));

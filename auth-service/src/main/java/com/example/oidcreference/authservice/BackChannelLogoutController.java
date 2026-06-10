@@ -54,10 +54,11 @@ class BackChannelLogoutController {
     }
 
     int deleted = 0;
-    if (token.sid() != null && sessionIndexes.deleteByIdpSid(token.sid())) {
-      deleted++;
-    }
-    if (token.sub() != null) {
+    if (token.sid() != null) {
+      if (sessionIndexes.deleteByIdpSid(token.sid())) {
+        deleted++;
+      }
+    } else if (token.sub() != null) {
       deleted += sessionIndexes.deleteBySubject(token.sub());
     }
 
@@ -81,14 +82,7 @@ class BackChannelLogoutController {
   }
 
   private boolean isReplay(String jti) {
-    if (jti == null || jti.isBlank()) {
-      return false;
-    }
     String key = "logout_jti:" + jti;
-    if (stateStore.get(key).isPresent()) {
-      return true;
-    }
-    stateStore.put(key, "1", JTI_TTL);
-    return false;
+    return !stateStore.putIfAbsent(key, "1", JTI_TTL);
   }
 }
