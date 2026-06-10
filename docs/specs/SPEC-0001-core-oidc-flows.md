@@ -382,6 +382,10 @@ of `sess:{sid}` on the bearer-injection path.
   directly for refresh.
 - Refresh tokens are rotated; reuse invalidates the session and emits a
   security audit log event from the Auth Service.
+- The rotation-requirement knob (`app.refresh-require-rotation`) and the
+  per-provider rotation behavior are the subject of
+  [`../reference/refresh-rotation.md`](../reference/refresh-rotation.md) — the
+  canonical reference for refresh-token rotation policy.
 
 ### Concurrency
 
@@ -650,8 +654,9 @@ Bearer-token validation requirements (Auth Service):
   - azp or client_id = configured gateway client id
               (default "oidc-reference-api-gateway")
   - alg     = RS256
-  - scope   contains "internal.refresh"  (if scope-based authorization
-            is enabled; otherwise audience binding alone is sufficient)
+  - scope   contains "internal.refresh"  (only if scope-based authorization
+            is enabled — NOT enabled in this reference; the code checks
+            audience + azp/client_id binding, which is sufficient)
 
 Success response:
   HTTP/1.1 200 OK
@@ -1183,6 +1188,7 @@ Changes required:
 | `INTERNAL_REFRESH_AUDIENCE` | Auth Service env | Audience the gateway's CC token must carry for `/internal/refresh`. Default `oidc-reference-auth-internal`; set to whatever the new IdP issues for the gateway client. |
 | `GATEWAY_CLIENT_ID` | Auth Service env + APISIX render | The gateway's confidential client id — the Auth Service requires it in the caller's `azp`/`client_id`, and APISIX authenticates as it. Real IdPs assign client ids you don't choose, so this is a config knob (default `oidc-reference-api-gateway`), set in both places. |
 | `RS_SERVICE_CLIENT_IDS` / `RS_JOBS_CLIENT_ID` | Resource Server env | Service-account allowlist (denied on `/api/me`) and the single client allowed to `POST /api/jobs`. Defaults are the local Keycloak client names. |
+| Back-Channel Logout enablement | IdP client config | Register the Auth Service `/backchannel-logout` URL as the client's `backchannel_logout_uri` and enable "Backchannel logout session required" so the IdP stamps `sid` into the id_token and the logout_token. The logout_token `aud` must equal the Auth Service client id (`app.client-id`), which the AS validates. Without this, IdP-driven session revocation silently no-ops. |
 
 What does NOT change:
 

@@ -110,7 +110,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 4.2.4 | No third-party resources on authz pages (`SHOULD NOT`) | ✅ | Keycloak login page is self-hosted. SPA loads no third-party scripts. |
-| 4.2.4 | `Referrer-Policy` header | 🟡 | `Referrer-Policy: no-referrer` set on the logout 302 (id_token_hint carries PII) and on callback error responses. Other responses use Spring's defaults. |
+| 4.2.4 | `Referrer-Policy` header | 🟡 | `Referrer-Policy: no-referrer` set on every Auth Service response via the security filter chain (`SecurityConfig`), and explicitly on the logout 302 (id_token_hint carries PII) and callback error responses. Resource Server / gateway responses use defaults. |
 | 4.2.4 | Code response type over access-token types | ✅ | Covered. |
 | 4.2.4 | Code bound to client or PKCE | ✅ | Confidential client + PKCE. |
 | 4.2.4 | Code invalidated on first use (`MUST`) | ✅ | Keycloak default. |
@@ -230,7 +230,7 @@ trigger for reconsidering.
 |---|---|---|
 | Sender-constrained access tokens (DPoP or mTLS) — §2.2.1, §4.9.3, §4.10.1 | Tokens are bearer on the API Gateway → Resource Server hop. The BFF removes the browser-leakage motivation. | RS exposed to multi-tenant or untrusted callers. |
 | Asymmetric client authentication — §2.5 | All confidential clients use `client_secret_basic`. | FAPI / PSD2 compliance regimes. |
-| Global `Referrer-Policy: no-referrer` + CSP baseline — §4.2.4 | Set explicitly on the logout 302 and callback error responses; not on every response. | Production hardening. |
+| Global CSP baseline + `Referrer-Policy` on gateway/RS responses — §4.2.4 | Auth Service sets `Referrer-Policy: no-referrer` on all its responses; the gateway and Resource Server responses, and a global CSP, are not yet set. | Production hardening. |
 | Audience as URL form — §4.10.2.2 | Using logical name `oidc-reference-api`. | Multiple Resource Servers. |
 | JAR (RFC 9101) / PAR (RFC 9126) / RAR (RFC 9396) | Exact-match redirect URI + PKCE + state + nonce + `oauth_tx` cover the demonstrated flow. | Multiple authorization servers, untrusted-network authorization request handling, or structured per-resource grants. |
 

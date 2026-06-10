@@ -324,6 +324,9 @@ same-origin `/auth/logout/continue` handle.
   OpenID Connect Core 1.0 + Discovery + RP-Initiated Logout.
 - [`RFC9700-compliance.md`](RFC9700-compliance.md) — control-by-control
   status against RFC 9700 (OAuth 2.0 Security BCP, also OAuth 2.1 baseline).
+- [`docs/reference/refresh-rotation.md`](docs/reference/refresh-rotation.md) —
+  refresh-token rotation policy, the `app.refresh-require-rotation` knob, and
+  per-provider rotation behavior.
 - [`docs/operations/provider-adapters.md`](docs/operations/provider-adapters.md) — IdP swap walkthrough
   (Keycloak / Auth0 / Okta / Entra).
 - [`AGENTS.md`](AGENTS.md) — contributor operating contract.
