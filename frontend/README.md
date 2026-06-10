@@ -3,10 +3,6 @@
 React + TypeScript + Vite SPA. **No OAuth/OIDC client library** — the BFF
 owns the flow.
 
-Primary Goal:
-
-- `../docs/goals/GOAL-0001-frontend-react-pkce.md`
-
 ## How auth works here
 
 - Sign in is a top-level navigation to `/auth/login` (a BFF endpoint).

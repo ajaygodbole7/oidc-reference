@@ -312,7 +312,6 @@ same-origin `/auth/logout/continue` handle.
   Appendix A is the vendor-swap matrix.
 - [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
   — rationale + rejected alternatives.
-- [`docs/goals/`](docs/goals/) — per-component goals.
 - [`SECURITY.md`](SECURITY.md) — threat model, crypto primitives, key
   handling, audit-logging surface, production-hardening list,
   vulnerability reporting.

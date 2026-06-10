@@ -2,10 +2,6 @@
 
 Java 25 and Spring Boot resource server for the OIDC reference project.
 
-Primary Goal:
-
-- `docs/goals/GOAL-0002-backend-resource-server.md`
-
 This directory owns API endpoints, Spring Security OAuth2 Resource Server
 configuration, JWT validation, scope/role mapping, CORS enforcement, and backend
 tests.

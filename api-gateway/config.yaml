@@ -3,7 +3,6 @@
 #
 # Source of truth: docs/specs/SPEC-0001-core-oidc-flows.md
 #                  §"API Gateway Architecture (APISIX)"
-#                  docs/goals/GOAL-0005-api-gateway.md
 #
 # Standalone mode (data_plane + yaml provider) loads routes from
 # apisix.yaml on disk. No etcd is required for the local reference shape.

@@ -12,7 +12,6 @@ Black-box `curl` checks for the gateway-side contract documented in:
 
 - `docs/specs/SPEC-0001-core-oidc-flows.md` — §"API Gateway Architecture",
   §"Login Entry Conditions", §7.1, §7.2, §7.3.
-- `docs/goals/GOAL-0005-api-gateway.md`.
 
 The harness asserts HTTP status, `Set-Cookie`/`Location` headers, and
 `Content-Type` shapes — not Resource Server business logic.

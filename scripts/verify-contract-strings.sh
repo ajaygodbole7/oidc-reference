@@ -57,7 +57,6 @@ require_absent "Spring Session Data Redis" AGENTS.md README.md RFC9700-complianc
 # form is forbidden in active docs/code.
 require_present "return_to" docs/specs/SPEC-0001-core-oidc-flows.md
 require_present "return_to" README.md
-require_present "return_to" docs/agents/return-to-login-contract.md
 require_absent "\\?next=" AGENTS.md README.md RFC9700-compliance.md docs
 
 # Auth Service ↔ SPA wire-contract pins. A rename of any cookie name,

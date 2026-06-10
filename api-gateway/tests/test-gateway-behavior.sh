@@ -8,7 +8,6 @@
 #   - docs/specs/SPEC-0001-core-oidc-flows.md §"API Gateway Architecture"
 #   - docs/specs/SPEC-0001-core-oidc-flows.md §"Login Entry Conditions"
 #   - docs/specs/SPEC-0001-core-oidc-flows.md §7.1, §7.2, §7.3
-#   - docs/goals/GOAL-0005-api-gateway.md
 #
 # Gating:
 #   RUN_LIVE_GATEWAY_TESTS=1   required; otherwise exits 0 with a skip note

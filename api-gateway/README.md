@@ -15,7 +15,6 @@ and forwards `/auth/*` to the Auth Service unchanged.
   - §"Login Entry Conditions" — Fetch-Metadata 401 vs. 302 branching.
   - §"Trust Boundaries" — Gateway is the sole non-Auth-Service reader
     of `sess:*` and never writes to it.
-- `../docs/goals/GOAL-0005-api-gateway.md` — durable goal.
 
 ## Files
 

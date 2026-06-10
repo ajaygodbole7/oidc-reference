@@ -78,7 +78,7 @@ describe("Spec conformance — frontend invariants", () => {
     it("has no in-browser OIDC library deps", () => {
       // The SPA must stay cookie-authenticated. Any in-browser OIDC client
       // would re-introduce token-in-JS storage and break the BFF contract
-      // pinned in GOAL-0001 / AGENTS.md.
+      // pinned in SPEC-0001 / AGENTS.md.
       // JSON.parse returns `any`; narrow it once so the assertions below
       // are type-safe and ESLint's no-unsafe-* rules pass.
       const pkg = JSON.parse(read("package.json")) as {

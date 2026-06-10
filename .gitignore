@@ -22,3 +22,6 @@ CLAUDE.md
 # api-gateway/apisix.yaml.template; scripts/render-apisix-config.sh
 # produces this file with real secrets substituted from the host env.
 api-gateway/apisix.yaml.local
+
+# Build-phase agent scaffolding (process docs, GOAL packets, resume state) — local only.
+/.agents/

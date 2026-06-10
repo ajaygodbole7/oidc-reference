@@ -2,10 +2,6 @@
 
 Local Keycloak authorization server for the OIDC reference project.
 
-Primary Goal:
-
-- `../docs/goals/GOAL-0003-authorization-server-keycloak.md`
-
 This directory owns Keycloak startup, realm import, clients, users, roles,
 scopes, audience mappers, local secrets, and authorization-server smoke
 tests.

@@ -16,26 +16,6 @@ The canonical end-to-end flow is in the root `README.md`.
 - `testing/red-green-workflow.md` — required implementation loop.
 - `testing/verification-gates.md` — focused and full gates.
 
-## Goals
-
-- `goals/GOAL-0001-frontend-react-pkce.md` — frontend SPA (cookie client).
-- `goals/GOAL-0002-backend-resource-server.md` — Resource Server (JWT).
-- `goals/GOAL-0003-authorization-server-keycloak.md` — Keycloak realm.
-- `goals/GOAL-0004-auth-service.md` — Auth Service (OAuth/OIDC client).
-- `goals/GOAL-0005-api-gateway.md` — API Gateway (routing + bearer
-  injection).
-
-## Agent Process
-
-- `agents/mandatory-turn-protocol.md` — per-turn control fields (enforced
-  by `scripts/check-agent-task.sh`).
-- `agents/execution-discipline.md` — assumptions, simplicity, surgical
-  changes, verification.
-- `agents/return-to-login-contract.md` — mandatory `return_to` login entry
-  and saved-request replay contract.
-- `agents/task-template.md` — task packet template.
-- `agents/review-checklist.md` — review checklist.
-
 ## Harness
 
 - `harnesses/local-verification.md` — local verification steps.

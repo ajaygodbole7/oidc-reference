@@ -7,7 +7,6 @@
 --     §7.1 /internal/refresh contract
 --     §7.2 sess:{sid} schema (tolerant reader)
 --     §7.3 signed CSRF contract
---   docs/goals/GOAL-0005-api-gateway.md
 --
 -- Pipeline executed in the APISIX `access` phase on every matched
 -- /api/** request:

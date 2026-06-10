@@ -12,7 +12,6 @@
 #
 # Source of truth:
 #   docs/specs/SPEC-0001-core-oidc-flows.md §"API Gateway Endpoints"
-#   docs/goals/GOAL-0005-api-gateway.md
 #
 # Browser-facing routes:
 #   /auth/*    -> auth-service:8081  (passthrough; no bff-session plugin)

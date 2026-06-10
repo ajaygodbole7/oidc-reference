@@ -1,8 +1,7 @@
 # AGENTS.md
 
 This is the operating contract for all agents working in this repo (Claude
-Code, Codex, or human). It also doubles as `CLAUDE.md` for Claude Code,
-which reads `AGENTS.md` as a fallback.
+Code, Codex, or human).
 
 ## Project Goal
 
@@ -15,47 +14,18 @@ live in a Redis-compatible server-side state store (Valkey locally).
 The canonical end-to-end flow is the Mermaid sequence diagram in the root
 `README.md`. The build contract is `docs/specs/SPEC-0001-core-oidc-flows.md`.
 
-Five directories, five goals, no cloud.
+Five directories, five components, no cloud.
 
-- `frontend/` — React SPA, cookie-authenticated, no OIDC library
-  (`docs/goals/GOAL-0001-frontend-react-pkce.md`).
+- `frontend/` — React SPA, cookie-authenticated, no in-browser OIDC library.
 - `auth-service/` — Spring Boot Auth Service, OAuth2 confidential client +
   custom Redis-compatible `tx:{state}` and `sess:{sid}` repositories,
-  per-session refresh lock, `/internal/refresh` as OAuth Resource Server
-  (`docs/goals/GOAL-0004-auth-service.md`).
+  per-session refresh lock, `/internal/refresh` as OAuth Resource Server.
 - `api-gateway/` — APISIX gateway, `/api/**` routing with allowlist,
   tolerant `sess:{sid}` reader, bearer injection, signed CSRF validation,
-  Client Credentials to call `/internal/refresh`
-  (`docs/goals/GOAL-0005-api-gateway.md`).
+  Client Credentials to call `/internal/refresh`.
 - `backend-resource-server/` — Spring Boot Resource Server, JWT validation
-  only (`docs/goals/GOAL-0002-backend-resource-server.md`).
-- `authorization-server/` — Keycloak realm + Compose
-  (`docs/goals/GOAL-0003-authorization-server-keycloak.md`).
-
-## Mandatory Turn Protocol
-
-For every documentation or code-changing turn:
-
-1. Read this file.
-2. Identify the active goal or task packet.
-3. Before editing, state or record: assumptions, ambiguities, owned paths,
-   success criteria, step → verify plan.
-4. Edit only task-owned paths.
-5. Use red/green TDD for behavior changes.
-6. End with evidence: files changed, checks run, result, risks or blockers.
-
-If any item cannot be satisfied, stop and report why before editing.
-
-## Required Workflow
-
-1. Start from a goal doc under `docs/goals/`.
-2. Keep changes surgical.
-3. Write or update the failing test first when behavior changes.
-4. Implement the smallest complete secure slice.
-5. Run focused checks.
-6. Run the relevant broader gate when available.
-7. Update docs only when behavior, commands, security posture, or structure
-   changes.
+  only.
+- `authorization-server/` — Keycloak realm + Compose.
 
 ## Ownership
 
@@ -75,10 +45,9 @@ the tolerant `sess:{sid}` reader. They share only the documented JSON
 schema in SPEC-0001 §"`sess:{sid}` schema contract" and the
 `/internal/refresh` contract.
 
-Coordinate before editing:
-
-- `AGENTS.md`, root build files, root `compose.yaml`, shared verification
-  scripts, Keycloak realm files once other slices depend on them.
+Coordinate before editing `AGENTS.md`, root build files, root
+`compose.yaml`, shared verification scripts, or Keycloak realm files once
+other slices depend on them.
 
 ## Security Rules
 
@@ -111,8 +80,4 @@ Ask first:
 - `docs/architecture/overview.md` — architecture orientation.
 - `docs/architecture/architecture-decisions.md` — rationale and rejected
   alternatives.
-- `docs/goals/GOAL-000{1,2,3,4,5}*.md` — durable per-component goals.
 - `docs/testing/red-green-workflow.md`, `docs/testing/verification-gates.md`.
-- `docs/agents/task-template.md`, `docs/agents/review-checklist.md`,
-  `docs/agents/mandatory-turn-protocol.md`,
-  `docs/agents/execution-discipline.md`.
