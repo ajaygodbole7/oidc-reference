@@ -55,6 +55,11 @@ app:
   gateway-client-id: ${GATEWAY_CLIENT_ID:oidc-reference-api-gateway}
   internal-audience: ${INTERNAL_REFRESH_AUDIENCE:oidc-reference-auth-internal}
   session-refresh-window: 60s
+  # Connect/read timeouts for the Nimbus HTTP calls to the IdP (token exchange,
+  # refresh, discovery). Tunable knobs — raise the read timeout for a slow/remote
+  # IdP, lower it to fail faster. Nimbus's default is infinite.
+  idp-connect-timeout: ${IDP_CONNECT_TIMEOUT:3s}
+  idp-read-timeout: ${IDP_READ_TIMEOUT:5s}
   # Integer seconds at the environment boundary so the Java Auth Service
   # and Lua APISIX plugin consume the same idle number. /auth/me does not
   # slide this value; authenticated /api traffic does.

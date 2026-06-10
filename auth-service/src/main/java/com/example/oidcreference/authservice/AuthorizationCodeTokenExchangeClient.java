@@ -17,10 +17,13 @@ import org.springframework.stereotype.Component;
 class AuthorizationCodeTokenExchangeClient implements TokenExchangeClient {
   private final OidcProviderMetadata md;
   private final IdTokenValidator idTokenValidator;
+  private final AuthProperties props;
 
-  AuthorizationCodeTokenExchangeClient(OidcProviderMetadata md, IdTokenValidator idTokenValidator) {
+  AuthorizationCodeTokenExchangeClient(
+      OidcProviderMetadata md, IdTokenValidator idTokenValidator, AuthProperties props) {
     this.md = md;
     this.idTokenValidator = idTokenValidator;
+    this.props = props;
   }
 
   @Override
@@ -76,7 +79,9 @@ class AuthorizationCodeTokenExchangeClient implements TokenExchangeClient {
   com.nimbusds.oauth2.sdk.TokenResponse parse(TokenRequest tokenRequest) {
     try {
       return OIDCTokenResponseParser.parse(
-          IdpHttp.withTimeouts(tokenRequest.toHTTPRequest()).send());
+          IdpHttp.withTimeouts(
+              tokenRequest.toHTTPRequest(),
+              props.idpConnectTimeout(), props.idpReadTimeout()).send());
     } catch (java.io.IOException | com.nimbusds.oauth2.sdk.ParseException e) {
       throw new IllegalStateException("token exchange failed", e);
     }

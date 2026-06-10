@@ -100,5 +100,14 @@ public record AuthProperties(
      * in the controller. Configurable for the same reason as
      * {@link #gatewayClientId}. Default is the local reference value.
      */
-    @NotBlank @DefaultValue("oidc-reference-auth-internal") String internalAudience) {
+    @NotBlank @DefaultValue("oidc-reference-auth-internal") String internalAudience,
+    /**
+     * Connect / read timeouts for the Nimbus HTTP calls to the IdP (token
+     * exchange, refresh, discovery). Nimbus defaults both to infinite, so a hung
+     * IdP would pin a servlet thread (the refresh path also holds the per-sid
+     * lock). Tunable knobs rather than code constants — raise the read timeout
+     * for a slow/remote IdP, lower it to fail faster.
+     */
+    @NotNull @DefaultValue("3s") Duration idpConnectTimeout,
+    @NotNull @DefaultValue("5s") Duration idpReadTimeout) {
 }

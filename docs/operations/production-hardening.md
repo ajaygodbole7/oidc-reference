@@ -30,8 +30,45 @@ architecture is intended to be copied and hardened for a specific platform.
 
 ## Scale-Out Decisions
 
-- Replace the local per-session `ReentrantLock` with a distributed lock before
-  running more than one Auth Service instance.
+### Distributed refresh lock (required before running more than one instance)
+
+`InternalRefreshController` serializes concurrent refreshes for one session with
+a **process-local** `ReentrantLock`. That is correct for a single Auth Service
+instance only. With two or more instances, two can refresh the same session at
+the same time: both present the same refresh token to the IdP, and because the
+reference realm enables refresh-token **rotation + reuse detection**, the second
+is rejected as `invalid_grant` and the session is invalidated. In other words,
+naive horizontal scaling logs active users out. The lock is deliberately
+in-process for the single-instance reference; making it cross-instance is a
+scale-out step, not a bug.
+
+Before scaling out, replace (or layer a distributed lock under) the in-process
+lock, in the shared state store:
+
+- **Acquire**: `SET refresh_lock:{sid} <token> NX PX <ttl>`, with `ttl` a few
+  seconds above the IdP read timeout. The holder refreshes; a loser waits
+  briefly, re-reads `sess:{sid}`, and returns the holder's already-rotated
+  session without calling the IdP (so callers never see a spurious error).
+- **Release**: compare-and-delete (`if GET == <token> then DEL`, atomically) so
+  an instance never deletes a lock it no longer owns after a TTL expiry.
+- **Fail closed**: never refresh if the lock cannot be acquired or the store
+  errors.
+
+(Alternatively, disable refresh-token rotation — weaker, since you lose reuse
+detection.) This concern lives entirely in the Auth Service and the state store;
+it is independent of which gateway fronts `/internal/refresh`.
+
+### Token-endpoint load
+
+- Tune the IdP **access-token lifespan** against refresh load. The reference
+  realm uses a short (~120 s) access token, so every active session refreshes
+  roughly every two minutes through the synchronous gateway → `/internal/refresh`
+  → IdP chain. At scale that is significant IdP token-endpoint traffic and added
+  request tail latency; lengthen it (5–15 min is typical) and treat the IdP
+  token endpoint as a capacity dimension.
+
+### Other
+
 - Preserve trusted `X-Forwarded-Proto` semantics end to end when TLS is
   terminated before APISIX/Auth Service.
 - Keep `sess:{sid}` as the session contract; do not let additional services

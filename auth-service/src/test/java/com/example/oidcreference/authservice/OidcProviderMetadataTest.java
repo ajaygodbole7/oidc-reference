@@ -39,7 +39,9 @@ class OidcProviderMetadataTest {
           "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
           true,
           "oidc-reference-api-gateway",
-          "oidc-reference-auth-internal");
+          "oidc-reference-auth-internal",
+        java.time.Duration.ofSeconds(3),
+        java.time.Duration.ofSeconds(5));
 
       org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
           java.time.Duration.ofSeconds(10),

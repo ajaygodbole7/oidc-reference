@@ -117,7 +117,9 @@ class AuthorizationCodeTokenRefreshClient implements TokenRefreshClient {
   com.nimbusds.oauth2.sdk.TokenResponse parse(TokenRequest tokenRequest) {
     try {
       return OIDCTokenResponseParser.parse(
-          IdpHttp.withTimeouts(tokenRequest.toHTTPRequest()).send());
+          IdpHttp.withTimeouts(
+              tokenRequest.toHTTPRequest(),
+              props.idpConnectTimeout(), props.idpReadTimeout()).send());
     } catch (IOException | ParseException e) {
       throw new IllegalStateException("refresh token request failed", e);
     }

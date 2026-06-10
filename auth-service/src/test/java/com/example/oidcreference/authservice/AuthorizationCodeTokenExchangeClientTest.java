@@ -72,12 +72,24 @@ class AuthorizationCodeTokenExchangeClientTest {
 
   private static AuthorizationCodeTokenExchangeClient clientReturning(
       OIDCTokens tokens, IdTokenValidator validator) {
-    return new AuthorizationCodeTokenExchangeClient(metadata(), validator) {
+    return new AuthorizationCodeTokenExchangeClient(metadata(), validator, props()) {
       @Override
       TokenResponse parse(TokenRequest tokenRequest) {
         return new OIDCTokenResponse(tokens);
       }
     };
+  }
+
+  private static AuthProperties props() {
+    return new AuthProperties(
+        "idp", "", java.time.Duration.ofSeconds(60),
+        java.time.Duration.ofSeconds(1800), java.time.Duration.ofSeconds(28800),
+        URI.create("http://idp.example"), null, null, null, null,
+        "oidc-reference-auth", "test-secret", Set.of("openid"),
+        List.of("realm_access", "roles"),
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        true, "oidc-reference-api-gateway", "oidc-reference-auth-internal",
+        java.time.Duration.ofSeconds(3), java.time.Duration.ofSeconds(5));
   }
 
   private static OidcProviderMetadata metadata() {
@@ -150,7 +162,7 @@ class AuthorizationCodeTokenExchangeClientTest {
           URI.create("http://idp.example/logout"),
           "http://idp.example",
           Set.of("openid"));
-      var client = new AuthorizationCodeTokenExchangeClient(md, rejectingValidator());
+      var client = new AuthorizationCodeTokenExchangeClient(md, rejectingValidator(), props());
       // Nimbus CodeVerifier requires 43-128 chars.
       var transaction = new OAuthTransaction(
           "0123456789012345678901234567890123456789012345",

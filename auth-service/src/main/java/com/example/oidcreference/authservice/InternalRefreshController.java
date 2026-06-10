@@ -31,6 +31,17 @@ class InternalRefreshController {
   private final JsonCodec json;
   private final TokenRefreshClient tokenRefreshClient;
   private final AuthProperties props;
+  // SINGLE-INSTANCE LOCK. This serializes concurrent refreshes for one sid
+  // within THIS JVM only — it is a per-process ReentrantLock map, not a
+  // distributed lock. That is correct for the single-instance reference. Run
+  // two or more Auth Service instances and two of them can refresh the same
+  // session concurrently: both send the same refresh token to the IdP, and
+  // with this realm's refresh-token rotation + reuse detection the second is
+  // rejected as invalid_grant and the session is invalidated — i.e. naive
+  // horizontal scaling logs active users out. Before scaling out, add a
+  // distributed lock (SET NX PX refresh_lock:{sid} + compare-and-delete
+  // release); see docs/operations/production-hardening.md "Distributed refresh
+  // lock". Deliberately in-process here, not a bug.
   private final ConcurrentHashMap<String, LockRef> locksPerSid = new ConcurrentHashMap<>();
 
   InternalRefreshController(

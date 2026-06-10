@@ -1,6 +1,7 @@
 package com.example.oidcreference.authservice;
 
 import com.nimbusds.oauth2.sdk.http.HTTPRequest;
+import java.time.Duration;
 
 /**
  * Transport bounds for every outbound HTTP call to the IdP made through the
@@ -11,18 +12,17 @@ import com.nimbusds.oauth2.sdk.http.HTTPRequest;
  * per-sid refresh lock, turning one stalled Keycloak into auth-service
  * thread-pool exhaustion. (The JWKS fetches are not routed through here:
  * Nimbus's {@code JWKSourceBuilder} retriever ships its own finite
- * defaults.)
+ * defaults.) The values are configuration knobs (see
+ * {@link AuthProperties#idpConnectTimeout()} / {@link AuthProperties#idpReadTimeout()}),
+ * not constants.
  */
 final class IdpHttp {
-  static final int CONNECT_TIMEOUT_MS = 3_000;
-  static final int READ_TIMEOUT_MS = 5_000;
-
   private IdpHttp() {
   }
 
-  static HTTPRequest withTimeouts(HTTPRequest request) {
-    request.setConnectTimeout(CONNECT_TIMEOUT_MS);
-    request.setReadTimeout(READ_TIMEOUT_MS);
+  static HTTPRequest withTimeouts(HTTPRequest request, Duration connect, Duration read) {
+    request.setConnectTimeout((int) connect.toMillis());
+    request.setReadTimeout((int) read.toMillis());
     return request;
   }
 }

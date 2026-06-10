@@ -71,7 +71,9 @@ class AuthorizationCodeTokenRefreshClientTest {
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         requireRotation,
         "oidc-reference-api-gateway",
-        "oidc-reference-auth-internal");
+        "oidc-reference-auth-internal",
+        java.time.Duration.ofSeconds(3),
+        java.time.Duration.ofSeconds(5));
   }
 
   // Stub HTTP-less subclass: pretends the AS returned `tokens`. The default
