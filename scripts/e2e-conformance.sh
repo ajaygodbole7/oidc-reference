@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# e2e-conformance.sh — SPEC-0002 live conformance gates (C8/C9).
+# e2e-conformance.sh — SPEC-0001 live conformance gates (C8/C9, see §Test Plan).
 #
 # These gates close the part the browser suite and the default gateway suite do
 # NOT cover: that the session-idle TTL is genuinely CONFIG-DRIVEN and reaches
@@ -81,7 +81,7 @@ restore() {
 }
 trap restore EXIT INT TERM
 
-printf -- '---- SPEC-0002 C8 internal trust-identity gate (live wire) ----\n'
+printf -- '---- SPEC-0001 C8 internal trust-identity gate (live wire) ----\n'
 # /internal/refresh is internal-only; its caller-identity + audience checks are
 # config-driven (GATEWAY_CLIENT_ID / INTERNAL_REFRESH_AUDIENCE). e2e-portability
 # proves the RS API-audience config-driven on the wire; this proves the INTERNAL
@@ -141,7 +141,7 @@ else
   esac
 fi
 
-printf -- '---- SPEC-0002 C9 session-window conformance ----\n'
+printf -- '---- SPEC-0001 C9 session-window conformance ----\n'
 
 # --- C9.1 plumbing: non-default value reaches BOTH planes --------------------
 cfg="$(SESSION_IDLE_TTL="$ALT_IDLE" SESSION_MAX_TTL="$ALT_MAX" \

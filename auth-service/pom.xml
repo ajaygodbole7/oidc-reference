@@ -113,7 +113,7 @@
 
       <!-- Run the test JVM under the 'test' Spring profile. The boot-time
            SecretSentinelValidator fails closed when NO profile is active
-           (SPEC-0002 D2: a copied artifact must not ship dev sentinels with
+           (SECURITY.md §D-1: a copied artifact must not ship dev sentinels with
            only a WARN); the @SpringBootTest suites carry the dev cookie-signing
            sentinel, so an explicit local-dev profile keeps them at WARN instead
            of aborting at @PostConstruct. The MockEnvironment unit tests in

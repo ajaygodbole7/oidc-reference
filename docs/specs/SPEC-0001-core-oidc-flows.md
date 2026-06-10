@@ -1,9 +1,5 @@
 # SPEC-0001: Core OAuth 2.1 and OIDC Flows (BFF Session Pattern, Split Implementation)
 
-## Status
-
-Draft
-
 ## Problem
 
 Developers need a local, inspectable reference for modern OAuth 2.1 / OIDC that
@@ -48,12 +44,11 @@ The canonical end-to-end flow is the Mermaid sequence diagram in the root
 - Hand-implementing OAuth/OIDC protocol primitives, cookies, or session
   encoding.
 
-### Explicitly out of scope (documented after the staff review)
+### Explicitly out of scope
 
-The following OAuth / OIDC mechanisms came up in security and conformance
-review. Each one is a defensible addition to a more ambitious reference,
-but is deliberately not built here. This section exists so a reader does
-not assume omission is oversight.
+The following OAuth / OIDC mechanisms are each a defensible addition to a
+more ambitious reference, but are deliberately not built here. This section
+exists so a reader does not assume omission is oversight.
 
 - **PAR (RFC 9126, Pushed Authorization Requests).** Recommended by
   RFC 9700 §2.1.1 to prevent authorization-request tampering. Not
@@ -309,11 +304,12 @@ protocol-relative, no leading slash, overlong, encoded backslash).
 
 | Path | Method | Auth | Purpose |
 |---|---|---|---|
-| `/auth/login` | GET | none | Explicit and implicit login entry. Requires `return_to` query parameter; validates `return_to` per §"`return_to` validation rules"; missing or invalid `return_to` → `400 application/problem+json` and no transaction is created. Persists `saved_request = return_to` plus PKCE `verifier`, `nonce`, and `created_at` in `tx:{state}` (TTL 5m). Returns `302` to the AS `/auth` endpoint with `code_challenge=S256`, `state`, and `nonce` (no `return_to` or `saved_request` forwarded to the IdP). Sets the `oauth_tx` browser-binding cookie (`HttpOnly`, `SameSite=Lax`, `Path=/auth/callback/idp`); its HMAC is stored as `tx_cookie_hash` in `tx:{state}`. No **session** cookie is set at this step. |
+| `/auth/login` | GET | none | Explicit and implicit login entry. Requires `return_to` query parameter; validates `return_to` per §"`return_to` validation rules"; missing or invalid `return_to` → `400 application/problem+json` and no transaction is created. Persists `saved_request = return_to` plus PKCE `verifier`, `nonce`, and `created_at` in `tx:{state}` (TTL 5m). Returns `302` to the AS `/auth` endpoint with `code_challenge=S256`, `state`, and `nonce` (no `return_to` or `saved_request` forwarded to the IdP). Sets a per-transaction browser-binding cookie `oauth_tx_<short-hash(state)>` (`HttpOnly`, `SameSite=Lax`, `Path=/auth/callback/idp`, `Max-Age` = the `tx:{state}` TTL); its HMAC is stored as `tx_cookie_hash` in `tx:{state}`. Per-transaction naming lets concurrent logins (multiple browser tabs) each keep their own binding cookie. No **session** cookie is set at this step. |
 | `/auth/callback/idp` | GET | none | Atomically reads and deletes `tx:{state}` from the Redis-compatible state store; exchanges code with the AS (`code` + `verifier` + configured client authentication); validates `id_token` (`iss`, `aud = oidc-reference-auth`, `nonce`, sig RS256, exp/nbf); creates a fresh `sess:{sid}` with a newly minted opaque session id; validates `saved_request` is same-origin (replaces with `/` otherwise); returns `302 {saved_request}` with `Set-Cookie __Host-sid=<opaque>; HttpOnly; Secure; SameSite=Lax; Path=/` and `Set-Cookie XSRF-TOKEN=<signed>; Secure; SameSite=Strict; Path=/` (JS-readable). No prior authenticated session existed, so session fixation is mitigated by construction. |
-| `/auth/logout` | POST | session | Requires signed double-submit CSRF (§7.3). Invalidate session, delete `sess:{sid}`, clear `__Host-sid` and `XSRF-TOKEN` cookies. Builds the IdP `end_session_endpoint` URL with `id_token_hint` **server-side**, stores it under a single-use opaque handle (`logout:{handle}`, TTL 2m), and returns a **same-origin** JSON body `{"logoutUrl":"/auth/logout/continue?lc={handle}"}`. The id_token (PII) never reaches browser JS or any SPA-readable body — only the server emits the IdP redirect (from `/auth/logout/continue`). The SPA performs a real top-level navigation to the same-origin handle. |
+| `/auth/logout` | POST | session | Requires signed double-submit CSRF (§7.3). Invalidate session, delete `sess:{sid}`, clear `__Host-sid` and `XSRF-TOKEN` cookies. Builds the IdP `end_session_endpoint` URL with `id_token_hint` **server-side**, stores it under a single-use opaque handle (`logout:{handle}`, TTL 2m), and returns a **same-origin** JSON body `{"logoutUrl":"/auth/logout/continue?lc={handle}"}`. The id_token (PII) never reaches browser JS or any SPA-readable body — only the server emits the IdP redirect (from `/auth/logout/continue`). The SPA performs a real top-level navigation to the same-origin handle. If no local `sess:{sid}` exists (idled out or already deleted), `/auth/logout` still drives IdP logout: it builds the `end_session` URL with `client_id` and the registered `post_logout_redirect_uri` (the SPA origin, never request input — no `id_token_hint` is available), returns the same `logoutUrl`, and does not require CSRF on this branch (no session to protect). The IdP SSO is terminated even when the local session is gone. |
 | `/auth/logout/continue` | GET | none | Resolves the single-use `logout:{handle}` (GET-then-DEL) and `302`s to the IdP `end_session_endpoint` URL with `id_token_hint` and `Referrer-Policy: no-referrer`. Unknown/expired/missing handle → `302` to `/`. No session required (it is already deleted); the opaque handle is the capability. |
 | `/auth/me` | GET | session | Return non-sensitive user claims (`sub`, `preferred_username`, `name`, `email`, `roles`). Never returns a token. Response `Cache-Control: no-store`. |
+| `/backchannel-logout` | POST | signed `logout_token` (no cookie) | OIDC Back-Channel Logout 1.0 — IdP-to-Auth-Service, `application/x-www-form-urlencoded` with a `logout_token` JWT. Validates the token (IdP JWKS signature, `iss`, `aud` = this client, fresh `iat`, an `events` claim carrying the back-channel-logout event, `sub` and/or `sid` present, **no `nonce`**, `jti` replay-guarded). Resolves the IdP `sid` to the local session via the `idp_sid:{idp_sid}` index and deletes `sess:{sid}`; with only `sub`, deletes every session of that subject. `200` on success, `400` on an invalid/unverifiable token. Never reveals whether a session existed. Reachable only on the internal network. |
 
 ### API Gateway Endpoints
 
@@ -352,16 +348,27 @@ of `sess:{sid}` on the bearer-injection path.
 
 - `tx:{state}` → `{verifier, nonce, saved_request, created_at, tx_cookie_hash}`.
   TTL 5m. Deleted on callback (success or failure).
-  `tx_cookie_hash` is the HMAC of the `oauth_tx` browser-binding cookie issued
-  alongside the login 302; the callback rejects when the supplied cookie's HMAC
-  does not match the stored hash. Defends against an attacker who exfiltrated
-  `(code, state)` but does not hold the originating browser's cookie.
+  `tx_cookie_hash` is the HMAC of the per-transaction `oauth_tx_<short-hash(state)>`
+  browser-binding cookie issued alongside the login 302; the callback derives the
+  cookie name from `state`, reads that specific cookie, and rejects when its HMAC
+  does not match the stored hash. The cookie is single-use, evicted on callback
+  (success or failure). Defends against an attacker who exfiltrated `(code, state)`
+  but does not hold the originating browser's cookie.
 - `sess:{sid}` → see §7.2 for the full schema and the tolerant-reader
-  contract. Sliding TTL 30m (idle), absolute cap 8h (≤ IdP SSO max). Written
+  contract. Sliding idle TTL (default 30m via `SESSION_IDLE_TTL`), absolute cap
+  (default 8h via `SESSION_MAX_TTL`, kept ≤ the IdP SSO max). Written
   by the Auth Service's custom state-store session repository after callback; not
   stored in a framework-managed HTTP session.
 - Stored in plaintext in local mode. Production guidance: encryption at
   rest, state-store AUTH, TLS, network isolation.
+- Secondary indexes, written by the Auth Service alongside `sess:{sid}` and used
+  only by the logout paths: `idp_sid:{idp_sid}` → local `sid` (maps an IdP
+  Back-Channel Logout token's `sid` to the local session), `sub_sessions:{sub}`
+  → the set of a subject's local `sid`s (subject-wide logout), and
+  `logout_hint:{sid}` → the session's `id_token`, retained so a logout can supply
+  `id_token_hint` to the IdP `end_session` endpoint. Each is TTL-bounded by the
+  session's absolute ceiling; a stale index entry outliving a dead `sess:` key is
+  harmless (the delete paths tolerate it).
 
 ### Refresh and Rotation
 
@@ -387,8 +394,8 @@ with a distributed lock (e.g., Valkey `SET NX EX`).
 ### Session Lifecycle
 
 - No pre-callback **session** cookie. The Auth Service sets only the
-  `oauth_tx` browser-binding cookie at `/auth/login` (scoped
-  `Path=/auth/callback/idp`); the only pre-auth server-side state is
+  per-transaction `oauth_tx_<short-hash(state)>` browser-binding cookie at
+  `/auth/login` (scoped `Path=/auth/callback/idp`); the only pre-auth server-side state is
   `tx:{state}` (keyed by the OAuth `state` parameter). Login-CSRF and session-swapping
   are defended by `state` + PKCE + `nonce` per RFC 9700 §4.7; see decision
   B3 and the Threat Model row below.
@@ -1111,6 +1118,35 @@ cannot forge a valid signature.
   bearer token, expects `200`. No Auth Service or API Gateway in path.
 - Secret scan against the working tree.
 - Cold-start from a clean checkout.
+
+**Live conformance gates**
+
+The live suites prove the security behaviors against real Keycloak tokens and
+real Keycloak error responses, not fabricated JWTs. Each negative is a distinct
+named assertion with its expected status code (and audit event where one
+applies), seen to fail the right way when the guard is removed.
+
+- `e2e-auth` — login → callback → `/auth/me` → `/api/**` → role enforcement →
+  RP-initiated logout, plus the token-isolation assertion (no access / refresh /
+  id token in `localStorage`, `sessionStorage`, `document.cookie`, or IndexedDB).
+- **C8** (`e2e-conformance`, `e2e-c8-altids`) — internal trust identity:
+  `GATEWAY_CLIENT_ID` and `INTERNAL_REFRESH_AUDIENCE` are config-driven on the
+  wire, and a one-sided mismatch breaks `/internal/refresh`. The non-default run
+  (`e2e-c8-altids`) threads alternate identifiers through
+  `compose.portability.yml` and the APISIX render.
+- **C9** (`e2e-conformance`) — session window: a non-default
+  `SESSION_IDLE_TTL` / `SESSION_MAX_TTL` reaches both the Auth Service and the
+  rendered gateway config; `/auth/me` does not extend the idle window, `/api`
+  activity does, and the absolute ceiling is enforced.
+- Back-Channel Logout (live) — a valid `logout_token` for an active session →
+  the user's next `/api/**` and next `/auth/me` both `401`; a forged or
+  `nonce`-bearing token → `400`, session untouched.
+- Multi-tab (live) — two `/auth/login` flows from one browser context each
+  complete their own callback; neither clobbers the other's
+  `oauth_tx_<state>` cookie.
+- `e2e-portability` — the same images against a second realm whose roles are a
+  top-level `groups` claim and whose API audience differs, proving the role and
+  audience paths are config-driven.
 
 ## Appendix A. Vendor Surface
 

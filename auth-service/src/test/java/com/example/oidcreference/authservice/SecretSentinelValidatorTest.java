@@ -28,7 +28,7 @@ class SecretSentinelValidatorTest {
   void refusesToStart_whenSentinelInUseUnderNoExplicitProfile() {
     // No active profile is NOT a local opt-in. A copied artifact run without an
     // explicit local/dev/test profile must FAIL CLOSED rather than ship a dev
-    // sentinel with only a WARN (the unsafe-by-omission posture, SPEC-0002 D2).
+    // sentinel with only a WARN (the unsafe-by-omission posture, SECURITY.md §D-1).
     var props = properties(SENTINEL, REAL_KEY);
     var env = new MockEnvironment();  // no active profile
     assertThatThrownBy(() -> new SecretSentinelValidator(props, env).validateOnReady())

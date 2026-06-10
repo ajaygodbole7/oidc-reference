@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# e2e-c8-altids.sh — SPEC-0002 C8 NON-DEFAULT trust-identity gate (end-to-end).
+# e2e-c8-altids.sh — SPEC-0001 C8 NON-DEFAULT trust-identity gate (end-to-end).
 #
 # The default-config C8 (in e2e-conformance.sh) proves /internal/refresh enforces
 # the SHIPPED trust ids. This gate proves the ENV KNOBS are genuinely read, not
@@ -76,7 +76,7 @@ wait_responding "APISIX"   "http://127.0.0.1:9080/api/me" 120
 PASSED=0
 FAILED=0
 
-printf -- '---- SPEC-0002 C8 non-default trust-id gate (end-to-end) ----\n'
+printf -- '---- SPEC-0001 C8 non-default trust-id gate (end-to-end) ----\n'
 
 # Config reaches the plane.
 cfg="$(GATEWAY_CLIENT_ID="$ALT_GATEWAY_CLIENT_ID" \

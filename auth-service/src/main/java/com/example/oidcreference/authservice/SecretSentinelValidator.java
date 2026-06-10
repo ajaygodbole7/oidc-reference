@@ -93,7 +93,7 @@ class SecretSentinelValidator {
   // Local ONLY when at least one profile is active and every active profile is
   // in the local allow-list. No active profile is NOT local: a copied artifact
   // run without an explicit local/dev/test opt-in must fail closed rather than
-  // ship a dev sentinel with only a WARN (SPEC-0002 D2 — unsafe-by-omission).
+  // ship a dev sentinel with only a WARN (SECURITY.md §D-1 — unsafe-by-omission).
   private boolean isLocalProfile() {
     String[] active = env.getActiveProfiles();
     if (active.length == 0) {
