@@ -34,9 +34,14 @@ compose_portability() {
   docker compose -f compose.yaml -f compose.portability.yml "$@"
 }
 
+VITE_PID=""
 cleanup() {
   _status=$?
   trap - EXIT INT TERM
+  if [ -n "$VITE_PID" ]; then
+    kill "$VITE_PID" 2>/dev/null || true
+  fi
+  lsof -nP -iTCP:5173 -sTCP:LISTEN -t 2>/dev/null | xargs -r kill 2>/dev/null || true
   if [ "$_status" -ne 0 ]; then
     warn "portability E2E failed; service diagnostics follow (apisix, auth-service, keycloak)"
     compose_portability logs --no-color --tail=220 apisix 2>/dev/null \
@@ -77,6 +82,19 @@ OIDC_ISSUER="$ALT_ISSUER" \
   EXPECTED_ROLES_CLAIM=groups \
   sh "$ROOT/authorization-server/tests/smoke.sh"
 
+# Persistent Vite (SPA origin :5173) for both the browser suite and the gateway
+# refresh tests' mint-real-session (login traverses :5173 because the Auth
+# Service pins redirect_uri to APP_BASE_URL=:5173). Killed in cleanup.
+info "starting persistent Vite dev server (SPA origin :5173)"
+lsof -nP -iTCP:5173 -sTCP:LISTEN -t 2>/dev/null | xargs -r kill 2>/dev/null || true
+(
+  cd "$ROOT/frontend"
+  VITE_AUTH_TARGET=http://127.0.0.1:9080 VITE_API_TARGET=http://127.0.0.1:9080 \
+    npm run dev >"$ROOT/.local/e2e-portability-vite.log" 2>&1
+) &
+VITE_PID=$!
+wait_responding "Vite SPA origin" "http://127.0.0.1:5173/" 60
+
 info "authenticated browser E2E against alt-claim realm"
 (
   cd "$ROOT/frontend"
@@ -93,6 +111,7 @@ RUN_LIVE_GATEWAY_TESTS=1 \
   CSRF_SIGNING_KEY="$DEV_CSRF_KEY" \
   OIDC_TOKEN_ENDPOINT="http://localhost:8080/realms/$ALT_REALM/protocol/openid-connect/token" \
   E2E_REALM_NAME="$ALT_REALM" \
+  E2E_APP_ORIGIN=http://127.0.0.1:5173 \
   sh "$ROOT/api-gateway/tests/test-gateway-behavior.sh"
 
 success "hermetic IdP-portability E2E passed"

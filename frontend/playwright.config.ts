@@ -21,7 +21,12 @@ const config: PlaywrightTestConfig = {
   webServer: {
     command: "npm run dev",
     url: "http://127.0.0.1:5173",
-    reuseExistingServer: !process.env.CI
+    // The full-stack gate (scripts/e2e-auth.sh, E2E_FULL_STACK=1) starts ONE
+    // persistent Vite that must survive past the Playwright run for the gateway
+    // refresh tests (mint-real-session traverses the :5173 SPA origin). Reuse it
+    // there instead of letting Playwright start/stop its own — otherwise the
+    // gateway phase has no :5173 origin and mint cannot complete login.
+    reuseExistingServer: !process.env.CI || process.env.E2E_FULL_STACK === "1"
   },
   projects: [
     {

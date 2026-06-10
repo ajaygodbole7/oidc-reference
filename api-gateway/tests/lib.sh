@@ -198,6 +198,38 @@ sys.stdout.write(json.dumps(doc, separators=(",", ":")))
   valkey_exec SET "sess:$sid" "$payload" EX 1800 >/dev/null
 }
 
+corrupt_session_refresh_token() {
+  # Rewrite the stored refresh_token to a value the IdP will reject AND pull the
+  # access token into the refresh window, so the next /api call forces the
+  # gateway to delegate a refresh that earns invalid_grant (HTTP 409) from
+  # Keycloak. Used to exercise the gateway's refresh-FAILURE path. The
+  # refresh_token_expires_at is left untouched (still in the future) so the
+  # auth-service does NOT C15-short-circuit and actually calls the IdP.
+  sid="$1"
+  expires_at="$(iso8601_in 30)"
+  raw="$(valkey_exec GET "sess:$sid" 2>/dev/null || true)"
+  if [ -z "$raw" ] || [ "$raw" = "(nil)" ]; then
+    printf 'corrupt_session_refresh_token: missing sess:%s\n' "$sid" >&2
+    return 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'corrupt_session_refresh_token: python3 required to rewrite session JSON\n' >&2
+    return 1
+  fi
+  payload="$(printf '%s' "$raw" | EXPIRES_AT="$expires_at" python3 -c '
+import json, os, sys
+doc = json.loads(sys.stdin.read())
+doc["refresh_token"] = "invalid-refresh-token-forced-by-test"
+doc["access_token_expires_at"] = os.environ["EXPIRES_AT"]
+sys.stdout.write(json.dumps(doc, separators=(",", ":")))
+')"
+  if [ -z "$payload" ]; then
+    printf 'corrupt_session_refresh_token: empty rewritten payload for sess:%s\n' "$sid" >&2
+    return 1
+  fi
+  valkey_exec SET "sess:$sid" "$payload" EX 1800 >/dev/null
+}
+
 mint_service_access_token() {
   token_endpoint="${OIDC_TOKEN_ENDPOINT:-http://localhost:8080/realms/oidc-reference/protocol/openid-connect/token}"
   service_secret="${SERVICE_CLIENT_SECRET:-LOCAL_DEV_SERVICE_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY}"

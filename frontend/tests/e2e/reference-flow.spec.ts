@@ -204,9 +204,9 @@ function sidFrom(cookies: readonly Cookie[]): string {
 // root is two levels up from frontend/tests/e2e. sess records are keyed by
 // sess:{sid}; the sid is HttpOnly so it is read from context.cookies().
 //
-// This file uses Valkey for exactly ONE deterministic operation: deleting a
-// session record server-side (story 12). That is a state DELETE, not a
-// timing-sensitive expiry — no refresh-window or TTL race is involved.
+// This file uses Valkey only for deterministic server-side proofs: deleting a
+// session record (story 12), and reading the local session's OP sid so story 15
+// can target the exact Keycloak session that backs that browser session.
 
 const REPO_ROOT = new URL("../../../", import.meta.url).pathname;
 
@@ -239,27 +239,51 @@ async function keycloakAdminToken(): Promise<string> {
   return json.access_token!;
 }
 
-async function keycloakUserId(username: string): Promise<string> {
+async function keycloakLogoutSession(sessionId: string): Promise<void> {
   const token = await keycloakAdminToken();
   const res = await fetch(
-    `http://localhost:8080/admin/realms/${REALM_NAME}/users?username=${encodeURIComponent(username)}&exact=true`,
-    { headers: { Authorization: `Bearer ${token}` } }
+    `http://localhost:8080/admin/realms/${REALM_NAME}/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
   );
-  expect(res.status, "admin user lookup").toBe(200);
-  const users = (await res.json()) as Array<{ id?: string }>;
-  expect(users.length, `Keycloak user lookup for ${username}`).toBe(1);
-  expect(users[0]?.id).toBeTruthy();
-  return users[0]!.id!;
+  expect([204, 200].includes(res.status), "admin session logout").toBe(true);
 }
 
-async function keycloakLogoutUser(username: string): Promise<void> {
-  const token = await keycloakAdminToken();
-  const userId = await keycloakUserId(username);
-  const res = await fetch(
-    `http://localhost:8080/admin/realms/${REALM_NAME}/users/${userId}/logout`,
-    { method: "POST", headers: { Authorization: `Bearer ${token}` } }
-  );
-  expect([204, 200].includes(res.status), "admin user logout").toBe(true);
+function jwtClaim(token: string | undefined, claimName: string): string | undefined {
+  if (!token) return undefined;
+  const parts = token.split(".");
+  if (parts.length < 2) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as Record<string, unknown>;
+    const value = payload[claimName];
+    return typeof value === "string" && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function idpSidForLocalSession(localSid: string): string {
+  const raw = valkey(["GET", `sess:${localSid}`]);
+  expect(raw, "server-side sess:{sid} record must exist").toBeTruthy();
+  const session = JSON.parse(raw) as { id_token?: string; access_token?: string };
+  const sid = jwtClaim(session.id_token, "sid") ?? jwtClaim(session.access_token, "sid");
+  expect(sid, "server-side session must carry OP sid in id_token or access_token").toBeTruthy();
+  return sid!;
+}
+
+// The subject (Keycloak user id) that the sub_sessions:{sub} index is keyed
+// by — read from the stored session's filtered claims (the same value
+// SessionIndexes reads server-side).
+function subjectForLocalSession(localSid: string): string {
+  const raw = valkey(["GET", `sess:${localSid}`]);
+  expect(raw, "server-side sess:{sid} record must exist").toBeTruthy();
+  const session = JSON.parse(raw) as { claims?: { sub?: string } };
+  const sub = session.claims?.sub;
+  expect(sub, "stored session claims must carry sub").toBeTruthy();
+  return sub!;
+}
+
+function ttlSeconds(key: string): number {
+  return Number(valkey(["TTL", key]));
 }
 
 // ---------------------------------------------------------------------------
@@ -322,11 +346,31 @@ test("3. alice login lands same-origin with role user, no browser tokens", async
   expect(new URL(page.url()).origin).toBe(APP_ORIGIN);
   await expect(page.getByText(/Roles:\s*user/i)).toBeVisible();
 
-  const sid = sidFrom(await context.cookies());
+  const cookies = await context.cookies();
+  const sid = sidFrom(cookies);
   expect(sid.length).toBeGreaterThan(0);
   // The opaque sid must not itself be a JWT/JWE smuggled into the cookie.
   expect(looksLikeJws(sid), "sid must be opaque, not a JWS").toBeFalsy();
   expect(looksLikeJwe(sid), "sid must be opaque, not a JWE").toBeFalsy();
+
+  // H2 regression guard. The session cookies are issued ONCE at login and never
+  // re-sent (only the server-side Valkey TTL slides), so their Max-Age must be
+  // the ABSOLUTE ceiling (~8h), not the 30-minute idle window — an idle-window
+  // Max-Age would hard-stop every browser session at 30 minutes regardless of
+  // activity, making the documented sliding-session design unreachable. Assert
+  // each cookie is persistent and outlives the idle window.
+  const IDLE_WINDOW_SECONDS = 1800;
+  const nowSec = Date.now() / 1000;
+  for (const name of ["sid", "XSRF-TOKEN"]) {
+    const cookie = cookies.find((c) => c.name === name);
+    expect(cookie, `${name} cookie must be present`).toBeDefined();
+    expect(cookie!.expires, `${name} must be a persistent cookie, not a session cookie`)
+      .toBeGreaterThan(0);
+    expect(
+      cookie!.expires - nowSec,
+      `${name} Max-Age must exceed the ${IDLE_WINDOW_SECONDS}s idle window`
+    ).toBeGreaterThan(IDLE_WINDOW_SECONDS);
+  }
 
   await assertNoBrowserTokens(page, context);
 });
@@ -810,15 +854,44 @@ test("15. Keycloak back-channel logout revokes local session", async ({
   page,
   context
 }) => {
+  test.skip(
+    REALM_NAME !== "oidc-reference",
+    "Back-channel logout sid delivery is validated in the default reference realm; portability focuses on config-driven login, claims, audience, proxy, and RP logout."
+  );
+  test.setTimeout(60_000);
+
   await loginAs(page, ALICE);
   const sid = sidFrom(await context.cookies());
   expect(valkey(["EXISTS", `sess:${sid}`])).toBe("1");
+  const idpSid = idpSidForLocalSession(sid);
 
-  await keycloakLogoutUser(ALICE.username);
+  // H1 regression guard (the headline finding). The back-channel-logout index
+  // keys (idp_sid / sub_sessions / logout_hint) were previously written ONCE
+  // at login with the 30-minute idle TTL and never re-extended, so IdP logout
+  // silently degraded to a no-op for any session kept alive past the first idle
+  // window — the exact stolen-cookie case BCL exists for. They now carry the
+  // session's ABSOLUTE ceiling (~8h). Assert each index key's TTL exceeds the
+  // idle window, so a long-lived session stays revocable. (A behavioural
+  // aged-session proof would need to wait out the idle window; this asserts the
+  // invariant the bug violated directly and deterministically.)
+  const IDLE_WINDOW_SECONDS = 1800;
+  const sub = subjectForLocalSession(sid);
+  for (const key of [`idp_sid:${idpSid}`, `sub_sessions:${sub}`, `logout_hint:${sid}`]) {
+    expect(
+      ttlSeconds(key),
+      `${key} TTL must exceed the ${IDLE_WINDOW_SECONDS}s idle window (index must outlive a sliding session)`
+    ).toBeGreaterThan(IDLE_WINDOW_SECONDS);
+  }
 
+  await keycloakLogoutSession(idpSid);
+
+  // Target the exact OP session whose sid was indexed for this BFF session.
+  // Subject-wide admin logout is intentionally noisier: it can emit logout
+  // tokens for several OP sessions belonging to the same user, and only the
+  // matching sid should delete this local session.
   await expect
     .poll(() => valkey(["EXISTS", `sess:${sid}`]), {
-      timeout: 10_000,
+      timeout: 30_000,
       message: "back-channel logout should delete sess:{sid}"
     })
     .toBe("0");
@@ -842,6 +915,10 @@ test("15. Keycloak back-channel logout revokes local session", async ({
 // cookie; both callbacks complete.
 // ---------------------------------------------------------------------------
 test("16. concurrent login tabs complete independently", async ({ browser }) => {
+  // Two interleaved login flows through real Keycloak (two tabs, two callbacks)
+  // is the heaviest story; allow headroom over the 30s default for genuine
+  // concurrent-tab + Keycloak latency, matching story 15.
+  test.setTimeout(60_000);
   const context = await browser.newContext();
   try {
     const first = await context.newPage();

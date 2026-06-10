@@ -378,6 +378,71 @@ test_expiring_session_triggers_refresh_delegation() {
   clear_session "$sid"
 }
 
+test_refresh_failure_evicts_session_and_clears_cookie() {
+  name="refresh_failure_evicts_session_and_clears_cookie"
+  if [ "${RUN_REFRESH_TESTS:-0}" != "1" ]; then
+    skip_test "$name" "set RUN_REFRESH_TESTS=1 (needs full local stack)"
+    return 0
+  fi
+
+  # The refresh-FAILURE half of the SPEC §7.1 gateway response table. The live
+  # happy-path test above covers only the 200 branch; the 404/409/401/transport
+  # branches are otherwise only the Lua decision-table unit test. Here we drive
+  # the real stack into the 409 branch: mint a real session, corrupt its stored
+  # refresh_token, and move the access token into the refresh window. The next
+  # /api call makes the gateway delegate to /internal/refresh; the auth-service
+  # sends the bad refresh token to Keycloak, earns invalid_grant, returns 409,
+  # and DELETES sess:{sid}. The gateway must surface 401 to the browser AND
+  # evict the session cookie.
+  if ! sid="$(GATEWAY_BASE="$GATEWAY_BASE" node "$script_dir/mint-real-session.mjs" 2>"$BODY_TMP")"; then
+    detail="$(cat "$BODY_TMP" 2>/dev/null || true)"
+    printf '[FAIL] %s could not mint real login session: %s\n' "$name" "$detail"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+  if [ -z "$sid" ]; then
+    printf '[FAIL] %s minted empty sid\n' "$name"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+  track_sid "$sid"
+  if ! corrupt_session_refresh_token "$sid"; then
+    printf '[FAIL] %s could not corrupt stored refresh token\n' "$name"
+    FAILED=$((FAILED + 1))
+    clear_session "$sid"
+    return 1
+  fi
+
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid" \
+    "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+
+  # 1. Browser sees 401 (refresh rejected at the IdP, session invalidated).
+  assert_status "$name status" 401 "$status"
+
+  # 2. The gateway evicted the session cookie (Set-Cookie clearing the sid with
+  #    Max-Age=0). expire_session_cookie emits "sid=; ...; Max-Age=0" on http.
+  if grep -i '^set-cookie:' "$HEADERS_TMP" | grep -qi 'sid=' \
+     && grep -i '^set-cookie:' "$HEADERS_TMP" | grep -qi 'max-age=0'; then
+    printf '[PASS] %s cookie_evicted\n' "$name"
+    PASSED=$((PASSED + 1))
+  else
+    printf '[FAIL] %s expected a Set-Cookie evicting the session cookie (Max-Age=0)\n' "$name"
+    FAILED=$((FAILED + 1))
+  fi
+
+  # 3. The auth-service deleted sess:{sid} on the 409 path (no stale session).
+  exists="$(valkey_exec EXISTS "sess:$sid" | tr -d '\r')"
+  if [ "$exists" = "0" ]; then
+    printf '[PASS] %s session_deleted\n' "$name"
+    PASSED=$((PASSED + 1))
+  else
+    printf '[FAIL] %s expected sess:%s deleted after 409 (exists=%s)\n' "$name" "$sid" "$exists"
+    FAILED=$((FAILED + 1))
+  fi
+  clear_session "$sid"
+}
+
 test_state_changing_method_requires_signed_csrf() {
   name="state_changing_method_requires_signed_csrf"
 
@@ -615,6 +680,7 @@ test_valid_session_returns_200_with_bearer_injected || true
 test_canonical_fixture_payload_parses_through_plugin || true
 test_session_with_extra_fields_is_tolerated         || true
 test_expiring_session_triggers_refresh_delegation   || true
+test_refresh_failure_evicts_session_and_clears_cookie || true
 test_state_changing_method_requires_signed_csrf     || true
 test_api_activity_slides_session_ttl                || true
 test_session_past_absolute_ceiling_returns_401      || true
