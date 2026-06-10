@@ -3,7 +3,7 @@
 This document explains why the oidc-reference project is shaped the way it
 is. It does not restate the implementation contract. Concrete values such as
 cookie names, TTLs, ports, config keys, scopes, realm settings, and version
-pins live in SPEC-0001 and the goal docs.
+pins live in SPEC-0001.
 
 This is one consolidated decision document, not an ADR per decision. The
 purpose is to keep the rationale discoverable in one read.
@@ -50,8 +50,7 @@ The cost is two extra services and server-side session state. For a reference
 whose teaching surface is the security posture and the production-shape
 operational topology, that is the right trade.
 
-Spec: SPEC-0001 Auth Service + API Gateway endpoints; GOAL-0001; GOAL-0004;
-GOAL-0005.
+Spec: SPEC-0001 Auth Service + API Gateway endpoints.
 
 ### A2. Spring Boot For Both BFF And Resource Server
 
@@ -85,7 +84,7 @@ tokens and claims and must be treated as sensitive state.
 Trade-off: the reference carries custom repository code instead of using a
 framework-managed session blob.
 
-Spec: SPEC-0001 State Store Keys; GOAL-0004 State Store Keys.
+Spec: SPEC-0001 State Store Keys.
 
 ### A4. Standard OAuth 2.1 / OIDC Interfaces, Keycloak Locally
 
@@ -118,8 +117,8 @@ work:
 
 The earlier combined `bff/` directory was retired when the split-implementation
 shape (A6) was adopted; its responsibilities were divided between
-`auth-service/` and `api-gateway/`. Shared docs, task packets, and verification
-scripts remain outside those component directories.
+`auth-service/` and `api-gateway/`. Shared docs and verification scripts
+remain outside those component directories.
 
 Spec: AGENTS.md ownership table.
 
@@ -188,14 +187,15 @@ topology, not new OIDC content.
   Vite proxy with two upstreams (`/auth/*` → Auth Service, `/api/**` →
   APISIX). Same `X-Forwarded-Host` discipline at both layers.
 
-Trade-off: six runtime services (plus Keycloak's DB). Cold-start time for
-the full Compose stack is on the order of 30–60s on a fast machine. Two
+Trade-off: five runtime services (Keycloak, Valkey, Auth Service, API
+Gateway, Resource Server; Keycloak uses embedded H2, no separate database).
+Cold-start time for the full Compose stack is on the order of 30–60s on a
+fast machine. Two
 secrets (Auth Service Keycloak secret, API Gateway Keycloak secret) plus
 the CSRF signing key are handled via env + bootstrap (E2).
 
 Spec: SPEC-0001 Auth Service + API Gateway Endpoints; SPEC-0001 API
-Gateway Architecture (APISIX); SPEC-0001 §7.1 `/internal/refresh` contract;
-GOAL-0004 (Auth Service); GOAL-0005 (API Gateway).
+Gateway Architecture (APISIX); SPEC-0001 §7.1 `/internal/refresh` contract.
 
 ### A7. Nimbus oauth2-oidc-sdk Directly, Not spring-boot-starter-oauth2-client
 
@@ -358,13 +358,9 @@ browser only sends it on the one path that needs it), one field in the
 `SignedCsrfSupport.hmacSha256` helper is reused, so no new crypto
 machinery.
 
-**Earlier rejection.** An earlier version of this document rejected
-`oauth_tx` on the framing of "no mainstream BFF ships this." That framing
-was wrong on two counts: (a) the threat it defends against is real and
-the OIDC standards do not cover it directly; (b) equivalent
-browser-binding cookies are documented in Curity's and Auth0's BFF
-reference patterns. The reinstatement decision came out of the Tier A
-staff-review pass; see `OAuthTxBinding.java` for the implementation and
+The threat is real and the OIDC standards do not cover it directly;
+equivalent browser-binding cookies are documented in Curity's and Auth0's
+BFF reference patterns. See `OAuthTxBinding.java` for the implementation and
 SPEC-0001 §"State Store Keys" for the wire shape.
 
 Spec: SPEC-0001 §"State Store Keys" + Login Entry Conditions + Callback
@@ -428,7 +424,7 @@ interception and as the posture expected by modern OAuth guidance.
 
 Trade-off: the realm configuration is stricter than the OAuth 2.0 minimum.
 
-Spec: SPEC-0001 BFF Client; authorization-server goal.
+Spec: SPEC-0001 BFF Client.
 
 ### C2. Refresh-Token Rotation, Reuse Detection, And Refresh Serialization
 
@@ -460,7 +456,7 @@ performing a top-level navigation.
 
 Trade-off: the SPA must own the unauthenticated API-response path.
 
-Spec: SPEC-0001 Login Entry Conditions; GOAL-0001 SPA behavior.
+Spec: SPEC-0001 Login Entry Conditions.
 
 ### C4. Single Chokepoint Proxy With Allowlist
 
@@ -478,7 +474,7 @@ from the browser.
 
 Trade-off: adding an RS endpoint requires updating the API Gateway allowlist.
 
-Spec: SPEC-0001 API Gateway proxy row; GOAL-0005 Security Requirements.
+Spec: SPEC-0001 API Gateway proxy row.
 
 ### C5. Explicit Resource Server Token Validation
 
@@ -564,7 +560,7 @@ noise.
 
 Trade-off: local startup needs a bootstrap step or generated `.env` file.
 
-Spec: SPEC-0001 acceptance criteria; authorization-server goal.
+Spec: SPEC-0001 acceptance criteria.
 
 ### E3. OAuth Client Registration Name Is Opaque
 
@@ -637,9 +633,6 @@ Reconsider before any non-local deployment.
 
 ## Locked Baseline
 
-The Java/Spring baseline is intentionally fixed for both Spring services
-(Auth Service and Resource Server): Java 25 and Spring Boot `4.1.0-RC1`.
-The API Gateway runs on APISIX (current stable). Implementation agents must
-use the locked baselines and move forward. If a dependency is unavailable,
-report the exact artifact failure instead of choosing a different Spring
-Boot line.
+The Java/Spring baseline is fixed for both Spring services (Auth Service
+and Resource Server): Java 25 and Spring Boot `4.1.0-RC1`. The API Gateway
+runs on APISIX (current stable).
