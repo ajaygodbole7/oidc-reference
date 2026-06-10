@@ -333,6 +333,25 @@ end
 -- ISO-8601 expiry parser
 -- ---------------------------------------------------------------------
 
+-- Days since 1970-01-01 for a proleptic-Gregorian date, via Howard
+-- Hinnant's days_from_civil algorithm. Pure integer arithmetic: NO
+-- os.time / os.date, so the result does not depend on the container's
+-- timezone. (A prior version derived a local→UTC offset with
+-- os.time(os.date(...)); the offset silently evaluated to zero, parsing
+-- every UTC timestamp in the host's local zone. compose pins TZ=UTC,
+-- which masked it — but a reference parser must be correct in any zone,
+-- so the TZ dependency is removed entirely rather than papered over.)
+local function days_from_civil(y, m, d)
+  if m <= 2 then y = y - 1 end
+  local era = math.floor((y >= 0 and y or y - 399) / 400)
+  local yoe = y - era * 400                                   -- [0, 399]
+  local mp  = (m > 2) and (m - 3) or (m + 9)
+  local doy = math.floor((153 * mp + 2) / 5) + d - 1          -- [0, 365]
+  local doe = yoe * 365 + math.floor(yoe / 4)
+              - math.floor(yoe / 100) + doy                   -- [0, 146096]
+  return era * 146097 + doe - 719468
+end
+
 -- Parse a strict ISO-8601 UTC timestamp ("2025-05-25T17:35:00Z" or with
 -- a fractional seconds component). Returns an epoch-seconds integer or
 -- nil on parse failure. Anything other than UTC is rejected — the Auth
@@ -343,22 +362,16 @@ local function parse_iso8601_utc(s)
   local y, mo, d, h, mi, se = s:match(
     "^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)%.?%d*Z$")
   if not y then return nil end
-  -- os.time treats the table as local time; the standard Lua trick to
-  -- get UTC epoch is to compute the offset between os.time(table) and
-  -- the same table interpreted in UTC. ngx.time() gives current UTC
-  -- epoch; combining ngx.time + os.date("!*t", ngx.time()) lets us
-  -- derive the offset.
-  local t = os.time({
-    year  = tonumber(y), month = tonumber(mo), day = tonumber(d),
-    hour  = tonumber(h), min   = tonumber(mi), sec = tonumber(se),
-    isdst = false,
-  })
-  if not t then return nil end
-  local utc_now   = ngx_time()
-  local local_now = os.time(os.date("*t", utc_now))
-  local offset    = local_now - utc_now
-  return t - offset
+  local days = days_from_civil(tonumber(y), tonumber(mo), tonumber(d))
+  return days * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60 + tonumber(se)
 end
+
+-- Test hook: parse_iso8601_utc is the only timezone-sensitive logic in the
+-- gateway and must hold in ANY container TZ (compose pins TZ=UTC, but the
+-- parser must not depend on that pin). Exported so
+-- tests/test-iso8601-parse.lua can exercise it under a TZ matrix without an
+-- nginx context. Not part of the APISIX plugin contract.
+_M._parse_iso8601_utc = parse_iso8601_utc
 
 local function slide_session_ttl(conf, sid, absolute_expires_at_iso)
   if not absolute_expires_at_iso then
@@ -656,14 +669,24 @@ end
 --   "401_clear" -> 401 to browser + clear cookie (404 / 409 cases)
 --   "503"       -> 503 with Retry-After: 1 (502 case; do NOT clear cookie)
 --   "502"       -> 502 to browser (after CC-token retry exhausted)
-local function refresh_session(conf, sid)
-  local cc_token, cc_err = get_cc_token(conf, false)
+--
+-- `deps` (optional) injects the two I/O helpers so the failure-branch
+-- decision table can be unit-tested deterministically — forcing a mid-flight
+-- 404/409/401/transport failure is not orchestratable against the live stack,
+-- so api-gateway/tests/test-refresh-flow.lua drives this with stubs.
+-- Production calls refresh_session(conf, sid) with deps=nil and uses the real
+-- get_cc_token / call_internal_refresh.
+local function refresh_session(conf, sid, deps)
+  local get_cc = (deps and deps.get_cc_token) or get_cc_token
+  local call_refresh = (deps and deps.call_internal_refresh) or call_internal_refresh
+
+  local cc_token, cc_err = get_cc(conf, false)
   if not cc_token then
     core.log.error("bff-session: cc token fetch failed: ", cc_err)
     return "502"
   end
 
-  local status, transport_err = call_internal_refresh(conf, sid, cc_token)
+  local status, transport_err = call_refresh(conf, sid, cc_token)
   if status == 200 then
     return "ok"
   end
@@ -678,12 +701,12 @@ local function refresh_session(conf, sid)
     -- Our own CC token failed at Auth Service. Invalidate cache, fetch
     -- a fresh one, retry exactly ONCE per §7.1 handling table.
     core.log.warn("bff-session: auth-service 401 on /internal/refresh; retrying with fresh CC token")
-    local new_token, new_err = get_cc_token(conf, true)
+    local new_token, new_err = get_cc(conf, true)
     if not new_token then
       core.log.error("bff-session: cc token re-fetch failed: ", new_err)
       return "502"
     end
-    local retry_status = call_internal_refresh(conf, sid, new_token)
+    local retry_status = call_refresh(conf, sid, new_token)
     if retry_status == 200 then return "ok" end
     if retry_status == 404 or retry_status == 409 then return "401_clear" end
     -- Second 401 (or any other terminal failure) -> 502 + audit log.
@@ -701,6 +724,13 @@ local function refresh_session(conf, sid)
   core.log.error("bff-session: unexpected /internal/refresh status: ", tostring(status))
   return "503"
 end
+
+-- Test hook: the refresh failure-branch decision table (404/409 eviction,
+-- 401 CC-token retry, transport→503) cannot be exercised against the live
+-- stack because the failures are not deterministically orchestratable.
+-- test-refresh-flow.lua drives this with stubbed I/O deps. Not part of the
+-- APISIX plugin contract.
+_M._refresh_session = refresh_session
 
 -- ---------------------------------------------------------------------
 -- Plugin lifecycle
