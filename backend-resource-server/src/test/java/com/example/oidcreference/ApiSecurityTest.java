@@ -5,6 +5,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
@@ -43,6 +44,23 @@ class ApiSecurityTest {
   }
 
   @Test
+  void actuatorHealthIsPermittedButOtherActuatorEndpointsRequireAuth() throws Exception {
+    // A user-defined SecurityFilterChain governs the management port too, so
+    // authorization for actuator is decided in SecurityConfig. /actuator/health
+    // must be reachable unauthenticated for the loopback health probe — on the
+    // main (8082) MockMvc context the endpoint isn't mapped, so a PERMITTED
+    // request surfaces as 404 (no handler), NOT 401 (denied). metrics/prometheus
+    // must NOT be blanket-permitted: they fall through to anyRequest().denyAll()
+    // and return 401, so no operational data is served unauthenticated even if
+    // the management port is ever published. (Regression guard for the
+    // healthcheck-breaking over-removal AND the over-broad /actuator/** permit.)
+    mockMvc.perform(get("/actuator/health")).andExpect(status().isNotFound());
+    mockMvc.perform(get("/actuator/health/liveness")).andExpect(status().isNotFound());
+    mockMvc.perform(get("/actuator/metrics")).andExpect(status().isUnauthorized());
+    mockMvc.perform(get("/actuator/prometheus")).andExpect(status().isUnauthorized());
+  }
+
+  @Test
   void gatewayEchoEndpointIsAbsentWithoutGatewayTestProfile() throws Exception {
     mockMvc.perform(get("/api/_test/echo").with(jwt()))
         .andExpect(status().isNotFound());
@@ -62,6 +80,40 @@ class ApiSecurityTest {
 
     assertThat(output).contains(
         "security_audit event=access_denied status=401 method=GET path=/api/me reason=authentication_required");
+  }
+
+  @Test
+  void missingTokenChallengesWithBareBearer() throws Exception {
+    // RFC 6750 §3: a 401 from a protected resource MUST carry a Bearer
+    // WWW-Authenticate challenge. §3.1: with NO credentials presented, the
+    // challenge must NOT name an error code (don't signal what was expected).
+    mockMvc.perform(get("/api/me"))
+        .andExpect(status().isUnauthorized())
+        .andExpect(header().string("WWW-Authenticate", "Bearer"));
+  }
+
+  @Test
+  void invalidTokenChallengesWithInvalidTokenError() throws Exception {
+    // RFC 6750 §3.1: a malformed/expired bearer token yields
+    // error="invalid_token" in the challenge so the caller can distinguish it
+    // from a missing token.
+    org.mockito.Mockito.when(jwtDecoder.decode("bad-token"))
+        .thenThrow(new org.springframework.security.oauth2.jwt.BadJwtException("expired"));
+
+    mockMvc.perform(get("/api/me").header("Authorization", "Bearer bad-token"))
+        .andExpect(status().isUnauthorized())
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("error=\"invalid_token\"")));
+  }
+
+  @Test
+  void insufficientScopeChallengesWithInsufficientScopeError() throws Exception {
+    // RFC 6750 §3.1: a 403 for an authenticated-but-underscoped token MUST
+    // challenge with error="insufficient_scope".
+    mockMvc.perform(get("/api/user-data").with(jwt()))
+        .andExpect(status().isForbidden())
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("error=\"insufficient_scope\"")));
   }
 
   @Test

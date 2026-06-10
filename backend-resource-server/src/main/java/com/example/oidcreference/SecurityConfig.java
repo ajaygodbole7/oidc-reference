@@ -55,7 +55,18 @@ class SecurityConfig {
         .cors(Customizer.withDefaults())
         .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
         .authorizeHttpRequests(authorize -> authorize
-            .requestMatchers("/actuator/**").permitAll()
+            // A user-defined SecurityFilterChain governs ALL ports, including
+            // the dedicated localhost management port (9082) — Boot does not
+            // give actuator its own chain once this bean exists. The container
+            // health probe (curl :9082/actuator/health) needs an unauthenticated
+            // path, so /actuator/health (+ its k8s liveness/readiness sub-probes)
+            // is permitted HERE. Scope it to health ONLY: metrics/prometheus/info
+            // fall through to anyRequest().denyAll() and require auth, so no
+            // operational data is served unauthenticated even if the
+            // loopback-only management port is ever published. health
+            // show-details=when-authorized keeps the permitted body a terse
+            // UP/DOWN.
+            .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
             .requestMatchers("/api/public").permitAll()
             .requestMatchers("/api/me").authenticated()
             .requestMatchers("/api/user-data").hasAuthority("SCOPE_api.read")
@@ -151,6 +162,19 @@ class SecurityConfig {
   AuthenticationEntryPoint authenticationEntryPoint() {
     return (request, response, ex) -> {
       logSecurityAudit(request, HttpStatus.UNAUTHORIZED, "authentication_required");
+      // RFC 6750 §3: a 401 from a protected resource MUST include a Bearer
+      // WWW-Authenticate challenge. Replacing Spring's
+      // BearerTokenAuthenticationEntryPoint with a problem+json body dropped
+      // it; restore it alongside the JSON body. §3.1: only name an error code
+      // when a (bad) token was actually presented — a request with no
+      // credentials gets the bare challenge so we don't signal what was
+      // expected. A failed bearer decode surfaces as OAuth2AuthenticationException
+      // (e.g. InvalidBearerTokenException) carrying the RFC error code.
+      String challenge = "Bearer";
+      if (ex instanceof org.springframework.security.oauth2.core.OAuth2AuthenticationException oae) {
+        challenge = "Bearer error=\"" + oae.getError().getErrorCode() + "\"";
+      }
+      response.setHeader(org.springframework.http.HttpHeaders.WWW_AUTHENTICATE, challenge);
       writeProblem(response, HttpStatus.UNAUTHORIZED, "Unauthorized",
         "Authentication is required to access this resource.");
     };
@@ -160,6 +184,10 @@ class SecurityConfig {
   AccessDeniedHandler accessDeniedHandler() {
     return (request, response, ex) -> {
       logSecurityAudit(request, HttpStatus.FORBIDDEN, "insufficient_authority");
+      // RFC 6750 §3.1: a 403 for an authenticated-but-underscoped token
+      // challenges with error="insufficient_scope".
+      response.setHeader(org.springframework.http.HttpHeaders.WWW_AUTHENTICATE,
+          "Bearer error=\"insufficient_scope\"");
       writeProblem(response, HttpStatus.FORBIDDEN, "Forbidden",
         "Access denied: the token does not include the required scope or role.");
     };

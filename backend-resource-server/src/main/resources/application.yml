@@ -24,12 +24,15 @@ app:
   service-client-ids: ${RS_SERVICE_CLIENT_IDS:oidc-reference-api-gateway,oidc-reference-service}
   jobs-client-id: ${RS_JOBS_CLIENT_ID:oidc-reference-service}
 
-# Actuator is bound to localhost on a dedicated management port. The main
-# /api/** filter chain ends in anyRequest().denyAll(), so colocating actuator
-# there would also be denied; a separate port gives the management endpoints
-# their own Boot-managed security chain. Health probes feed k8s
-# liveness/readiness; detail is gated behind "when-authorized" so the
-# anonymous /actuator/health response stays a terse UP/DOWN.
+# Actuator is bound to loopback on a dedicated management port (9082, not
+# host-published). NOTE: a user-defined SecurityFilterChain (SecurityConfig)
+# governs this port too — Boot does NOT give actuator its own chain once that
+# bean exists — so authorization for these endpoints is decided there:
+# /actuator/health (+ liveness/readiness probes) is permitted for the health
+# probe; metrics/prometheus/info require auth (anyRequest().denyAll()). Only
+# non-sensitive endpoints are exposed (no env/heapdump/loggers/threaddump/
+# beans/configprops), and health detail is gated behind "when-authorized" so
+# the anonymous /actuator/health response stays a terse UP/DOWN.
 management:
   server:
     port: ${MANAGEMENT_PORT:9082}
