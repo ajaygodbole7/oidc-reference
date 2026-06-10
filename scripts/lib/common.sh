@@ -58,6 +58,12 @@ require_cmd() {
 # health or discovery endpoint), since -f treats non-2xx as not-ready.
 wait_http() {
   _name="$1"; _url="$2"; _tries="${3:-45}"
+  # Patience floor: a slow cold start (notably APISIX on a loaded/old Docker
+  # host — sometimes well past 240s) must NOT cause a false failure. The ceiling
+  # is E2E_WAIT_TRIES * --retry-delay(2s); default 1800 ≈ 1 hour. Fast services
+  # still succeed on the first retry, so this only extends patience.
+  _floor="${E2E_WAIT_TRIES:-1800}"
+  if [ "$_tries" -lt "$_floor" ]; then _tries="$_floor"; fi
   curl -fsS --retry "$_tries" --retry-delay 2 --retry-connrefused --retry-all-errors \
     -o /dev/null "$_url" 2>/dev/null \
     || die "$_name did not become ready at $_url"
@@ -69,6 +75,10 @@ wait_http() {
 # route. Retries only on connection failure, not on HTTP status.
 wait_responding() {
   _name="$1"; _url="$2"; _tries="${3:-45}"
+  # Patience floor (see wait_http). APISIX is the usual slow cold-start culprit;
+  # never fail it early. Default ceiling E2E_WAIT_TRIES=1800 ≈ 1 hour.
+  _floor="${E2E_WAIT_TRIES:-1800}"
+  if [ "$_tries" -lt "$_floor" ]; then _tries="$_floor"; fi
   curl -sS --retry "$_tries" --retry-delay 2 --retry-connrefused --retry-all-errors \
     -o /dev/null "$_url" 2>/dev/null \
     || die "$_name not responding at $_url"
