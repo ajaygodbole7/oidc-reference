@@ -110,13 +110,17 @@ exists so a reader does not assume omission is oversight.
 
 ## Target Stack
 
-- **Frontend**: React `19.2.6`, TypeScript `6.0.3`, Vite `8.0.14`. No
+Exact version pins live in the build files (`frontend/package.json`, the
+service `pom.xml`s, `compose.yaml`); this section names the technology and
+its major line.
+
+- **Frontend**: React, TypeScript, Vite. No
   in-browser OAuth/OIDC library. Same-origin fetch with
   `credentials: "include"`. The Vite dev server proxies `/auth/*` to the
   Auth Service and `/api/**` to the APISIX gateway so the cookie is
   same-origin in dev. In the full Compose stack, APISIX is the ingress
   directly — there is no separate ingress proxy in front of it.
-- **Auth Service**: Java 25, Spring Boot `4.1.0-RC1`, Spring Security
+- **Auth Service**: Java 25, Spring Boot 4, Spring Security
   OAuth2 Client, custom Redis-compatible transaction and session
   repositories. Owns `/auth/*` and `/internal/refresh`. Acts as an OAuth
   Resource Server for `/internal/*`.
@@ -124,7 +128,7 @@ exists so a reader does not assume omission is oversight.
   declared in `config.yaml`. Custom Lua plugin `bff-session` performs
   tolerant `sess:{sid}` read from Valkey, bearer injection, signed-CSRF
   validation, and refresh delegation to the Auth Service.
-- **Resource Server**: Java 25, Spring Boot `4.1.0-RC1`, Spring Security
+- **Resource Server**: Java 25, Spring Boot 4, Spring Security
   OAuth2 Resource Server. JWT validation only.
 - **OIDC endpoint split**: `issuer-uri` remains the canonical
   browser-visible issuer (`http://localhost:8080/realms/oidc-reference`
@@ -138,7 +142,7 @@ exists so a reader does not assume omission is oversight.
 - **Authorization Server**: Keycloak.
 - **Local infra**: Docker Compose.
 - **Tests**: backend unit/integration, APISIX route + plugin tests,
-  frontend unit (Vitest `4.1.7`), browser E2E (Playwright `1.60.0`),
+  frontend unit (Vitest), browser E2E (Playwright),
   cross-service smoke.
 
 Port allocation:

@@ -28,7 +28,7 @@ denied in code; the BFF is the only browser-facing API surface.
 ## Harness Requirements
 
 - Maven wrapper exists.
-- `pom.xml` targets Java 25 and Spring Boot 4.1.
+- `pom.xml` targets Java 25 and Spring Boot 4.
 - Tests cover public endpoint access and missing-token rejection first.
 - Endpoint-to-authority mapping is documented before admin/service endpoints are
   implemented.

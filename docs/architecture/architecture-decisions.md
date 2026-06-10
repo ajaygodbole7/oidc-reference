@@ -634,5 +634,5 @@ Reconsider before any non-local deployment.
 ## Locked Baseline
 
 The Java/Spring baseline is fixed for both Spring services (Auth Service
-and Resource Server): Java 25 and Spring Boot `4.1.0-RC1`. The API Gateway
-runs on APISIX (current stable).
+and Resource Server): Java 25 and Spring Boot 4 (the exact pin lives in the
+service `pom.xml` files). The API Gateway runs on APISIX (current stable).

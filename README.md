@@ -264,11 +264,14 @@ in [`docs/architecture/architecture-decisions.md`](docs/architecture/architectur
 - Nimbus `oauth2-oidc-sdk` for OIDC discovery, JWKS, ID-token validation,
   PKCE
 - Spring Security 7 (JWT decoder, validator composition)
-- Apache APISIX 3.16 standalone + custom Lua plugin
+- Apache APISIX 3 standalone + custom Lua plugin
   (`lua-resty-http`, `lua-resty-lock`)
 - Keycloak 26 (embedded H2 via `KC_DB=dev-file`; no separate database)
 - Valkey 9 (Redis-compatible state store)
 - Docker Compose
+
+Exact versions are pinned in `frontend/package.json`, the service `pom.xml`
+files, and `compose.yaml`.
 
 ## Run locally
 
