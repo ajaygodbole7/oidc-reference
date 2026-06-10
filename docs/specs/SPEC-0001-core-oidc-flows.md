@@ -69,13 +69,10 @@ not assume omission is oversight.
   against is structurally smaller in a BFF. DPoP becomes interesting if
   the reference ever exposes tokens to mobile/native clients.
 
-- **OIDC Back-Channel Logout 1.0 and Front-Channel Logout 1.0.** A
-  Keycloak-initiated logout signal that invalidates the BFF session.
-  Requires AS-to-BFF reachability and a `/logout/backchannel` endpoint
-  with JWT logout-token validation. Documented as out of scope in
-  `docs/architecture/architecture-decisions.md`; the cookie-based BFF
-  pattern accepts that user-initiated logout (RP-Initiated) is the only
-  signal.
+- **OIDC Front-Channel Logout 1.0.** Not implemented: the cookie-based
+  BFF pattern keeps browser session state at the BFF, and RP-Initiated
+  Logout plus the implemented Back-Channel Logout endpoint cover this
+  reference's local logout contract.
 
 - **OIDC Session Management 1.0** (`check_session_iframe`,
   `session_state`). The cookie-based BFF pattern has no direct browser-AS

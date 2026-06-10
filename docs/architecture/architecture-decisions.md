@@ -577,10 +577,10 @@ Trade-off: local config is less brand-obvious.
 
 Spec: SPEC-0001 BFF Client.
 
-## F. Deliberate Non-Adoptions
+## F. Security Extensions And Triggers
 
-These items are not part of the local reference unless a reconsideration
-trigger fires.
+These items capture security extensions that are either deliberately outside the
+local reference or implemented with production deployment caveats.
 
 ### Sender-Constrained Tokens (DPoP Or mTLS)
 
@@ -611,12 +611,14 @@ authorization request handling, or structured per-resource grants.
 
 ### Back-Channel Logout
 
-Not adopted because RP-initiated logout covers user-driven logout, and
-back-channel logout requires AS-to-BFF reachability that conflicts with the
-local-only reference posture.
+Adopted for the local reference as a standard OP-initiated session termination
+signal. The Auth Service validates signed logout tokens, rejects replayed
+`jti` values, deletes by `sid` when present, and only falls back to subject-wide
+deletion when the logout token has no `sid`.
 
-Reconsider when integrating into an SSO ecosystem where central logout must
-terminate sessions across relying parties.
+Production deployments must provide a trusted route from the OP to the Auth
+Service; the browser-facing gateway still does not expose internal refresh or
+session-store surfaces.
 
 ### URL-Form Audience
 

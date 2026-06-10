@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# e2e-conformance.sh — SPEC-0002 Part C session-window conformance (C9).
+# e2e-conformance.sh — SPEC-0002 live conformance gates (C8/C9).
 #
 # These gates close the part the browser suite and the default gateway suite do
 # NOT cover: that the session-idle TTL is genuinely CONFIG-DRIVEN and reaches
@@ -15,6 +15,8 @@
 #   C9.2  the gateway BEHAVIORALLY uses the configured idle (re-render to a small
 #         value, reload APISIX, observe the post-/api TTL land there — not 1800).
 #   C9.3  /auth/me is a non-extending liveness read (it must not slide the TTL).
+#   C9.4  repeated /api activity keeps the session alive beyond one idle window.
+#   C9.5  the absolute session ceiling still wins under repeated /api activity.
 #
 # Requires a running stack (run scripts/up.sh first). Self-contained: it mutates
 # only api-gateway/apisix.yaml.local (gitignored) and bounces APISIX, restoring
@@ -43,8 +45,8 @@ HEADERS_TMP="$(mktemp)"
 
 # Non-default, compressed values so the override is unmistakably NOT the 1800/
 # 28800 defaults.
-ALT_IDLE=7
-ALT_MAX=33
+ALT_IDLE=10
+ALT_MAX=45
 
 render_idle() {
   # Render apisix.yaml.local with idle_ttl_seconds=$1, defaults otherwise.
@@ -191,9 +193,9 @@ case "$status" in
     PASSED=$((PASSED + 1)) ;;
 esac
 after="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"
-# With the configured idle=7 the slide lands at ~7; with the 1800 default it
-# would be ~1800. <=10 proves the gateway read the CONFIGURED value.
-if [ "$after" -gt 0 ] && [ "$after" -le 10 ]; then
+# With the configured idle=10 the slide lands near 10; with the 1800 default it
+# would be ~1800. <=13 proves the gateway read the configured value.
+if [ "$after" -gt 0 ] && [ "$after" -le 13 ]; then
   printf '[PASS] C9.2 gateway used configured idle: post-/api TTL=%s (~%s, not 1800)\n' \
     "$after" "$ALT_IDLE"
   PASSED=$((PASSED + 1))
@@ -229,11 +231,75 @@ if [ "$me_status" = "200" ]; then
     FAILED=$((FAILED + 1))
   fi
 else
-  # No silent cap: report rather than fake a pass.
-  printf '[SKIP] C9.3 /auth/me returned %s on the seeded session (not 200) — cannot\n' "$me_status"
-  printf '       prove no-extend via seeding; auth-service read-path no-slide is unit-covered\n'
-  printf '       (read EXPIRE removed from AuthController.session()).\n'
+  printf '[FAIL] C9.3 /auth/me returned %s on the seeded session (expected 200) — cannot prove no-extend\n' \
+    "$me_status"
+  FAILED=$((FAILED + 1))
 fi
+clear_session "$sid"
+
+# --- C9.4 repeated /api activity keeps the session alive past one idle window -
+sid="conf-steady-api-1"
+setup_session_absolute "$sid" "test-jwt-steady-api" 300 60 "$ALT_IDLE"
+status1="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+  -H "Cookie: __Host-sid=$sid" \
+  "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+case "$status1" in
+  302|403|502|000|"")
+    printf '[FAIL] C9.4 first /api did not forward (status=%s)\n' "$status1"
+    FAILED=$((FAILED + 1)) ;;
+  *)
+    sleep 6
+    status2="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+      -H "Cookie: __Host-sid=$sid" \
+      "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+    sleep 6
+    status3="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+      -H "Cookie: __Host-sid=$sid" \
+      "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+    exists="$(valkey_exec EXISTS "sess:$sid" | tr -d '\r')"
+    ttl="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"
+    case "$status2:$status3:$exists" in
+      302:*|403:*|502:*|000:*|*:302:*|*:403:*|*:502:*|*:000:*|*:0)
+        printf '[FAIL] C9.4 repeated /api did not keep session alive (status2=%s status3=%s exists=%s ttl=%s)\n' \
+          "$status2" "$status3" "$exists" "$ttl"
+        FAILED=$((FAILED + 1)) ;;
+      *)
+        printf '[PASS] C9.4 repeated /api kept session alive beyond one idle window (status2=%s status3=%s ttl=%s)\n' \
+          "$status2" "$status3" "$ttl"
+        PASSED=$((PASSED + 1)) ;;
+    esac ;;
+esac
+clear_session "$sid"
+
+# --- C9.5 absolute ceiling still wins under repeated /api activity ------------
+sid="conf-absolute-ceiling-1"
+setup_session_absolute "$sid" "test-jwt-absolute-ceiling" 300 11 "$ALT_IDLE"
+status1="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+  -H "Cookie: __Host-sid=$sid" \
+  "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+sleep 6
+status2="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+  -H "Cookie: __Host-sid=$sid" \
+  "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+sleep 6
+status3="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+  -H "Cookie: __Host-sid=$sid" \
+  "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+exists="$(valkey_exec EXISTS "sess:$sid" | tr -d '\r')"
+case "$status1:$status2:$status3:$exists" in
+  302:*|403:*|502:*|000:*|*:302:*|*:403:*|*:502:*|*:000:*)
+    printf '[FAIL] C9.5 setup activity failed before proving ceiling (status1=%s status2=%s status3=%s exists=%s)\n' \
+      "$status1" "$status2" "$status3" "$exists"
+    FAILED=$((FAILED + 1)) ;;
+  *:401:0)
+    printf '[PASS] C9.5 absolute ceiling ended session despite repeated /api activity (final status=%s)\n' \
+      "$status3"
+    PASSED=$((PASSED + 1)) ;;
+  *)
+    printf '[FAIL] C9.5 expected absolute ceiling to end session; got status1=%s status2=%s status3=%s exists=%s\n' \
+      "$status1" "$status2" "$status3" "$exists"
+    FAILED=$((FAILED + 1)) ;;
+esac
 clear_session "$sid"
 
 printf -- '---- summary ----\n'

@@ -204,7 +204,7 @@ in `docs/architecture/architecture-decisions.md` §F.
 | [OIDC Dynamic Registration 1.0](https://openid.net/specs/openid-connect-registration-1_0.html) | 🚫 | Static realm configuration. Reconsider when integrating with SaaS IdPs that mint per-tenant clients dynamically. |
 | [OIDC Session Management 1.0](https://openid.net/specs/openid-connect-session-1_0.html) | 🚫 | Requires the SPA to embed an iframe pointed at the OP; the BFF session model is the canonical state. |
 | [OIDC Front-Channel Logout 1.0](https://openid.net/specs/openid-connect-frontchannel-1_0.html) | 🚫 | Same; RP-initiated logout covers user-driven logout. |
-| [OIDC Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html) | ⏳ | Reconsider for SSO ecosystems with central session termination across relying parties; requires AS-to-BFF reachability outside the local-only posture. |
+| [OIDC Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html) | ✅ | Implemented at the Auth Service with signed logout-token validation, replay detection, and `sid`/`sub` session invalidation semantics. Production deployments still need a trusted route from the OP to the Auth Service. |
 | OIDC Form Post Response Mode | 🚫 | `query` response mode used; PKCE + short-lived code cover the threats `form_post` mitigates. |
 | OIDC CIBA, Self-Issued OP, JARM | 🚫 | Out of scope for a browser-app reference. |
 

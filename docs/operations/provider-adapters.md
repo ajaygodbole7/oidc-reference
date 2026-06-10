@@ -153,8 +153,10 @@ For a provider to pass the reference's portability bar:
   a first-class Auth Service config setting.
 - Cognito and Google need provider-specific validation before claiming full
   parity with the Keycloak reference.
-- Back-channel logout, PAR, JAR, DPoP, mTLS, and `private_key_jwt` are not part
-  of this reference. See `docs/architecture/architecture-decisions.md`.
+- Back-channel logout is implemented for providers that support the standard
+  logout-token contract and can reach the Auth Service. PAR, JAR, DPoP, mTLS,
+  and `private_key_jwt` remain out of scope for the local reference. See
+  `docs/architecture/architecture-decisions.md`.
 
 ## What Must Not Change
 

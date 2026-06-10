@@ -32,6 +32,11 @@ test:
 test-e2e:
     sh scripts/test-e2e.sh
 
+# Live conformance checks for C8 trust identities and C9 session windows.
+# Expects a running stack; `test-e2e` runs this automatically.
+e2e-conformance:
+    RUN_LIVE_CONFORMANCE=1 sh scripts/e2e-conformance.sh
+
 # Authenticated full-stack E2E: real Keycloak login -> /auth/me roles ->
 # /api/** -> refresh delegation -> logout, asserting no token reaches browser
 # JS/storage.
@@ -42,6 +47,10 @@ e2e-auth:
 # top-level groups and a different API audience. No third-party credentials.
 e2e-portability:
     sh scripts/e2e-portability.sh
+
+# Non-default internal trust-id proof for /internal/refresh.
+e2e-c8-altids:
+    sh scripts/e2e-c8-altids.sh
 
 # Render api-gateway/apisix.yaml.local from the template (dev secrets).
 render:

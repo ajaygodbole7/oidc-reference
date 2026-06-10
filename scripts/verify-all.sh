@@ -38,6 +38,12 @@ sh "$script_dir/test-verify-secret-scan.sh"
 if [ "${RUN_FULL_STACK_AUTH:-0}" = "1" ]; then
   info "running live-infra E2E"
   sh "$script_dir/test-e2e.sh"
+  info "running authenticated browser E2E"
+  sh "$script_dir/e2e-auth.sh"
+  info "running hermetic IdP portability E2E"
+  sh "$script_dir/e2e-portability.sh"
+  info "running non-default internal trust-id E2E"
+  sh "$script_dir/e2e-c8-altids.sh"
 fi
 
 success "all verifications passed"

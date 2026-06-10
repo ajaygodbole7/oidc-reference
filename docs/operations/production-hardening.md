@@ -45,8 +45,8 @@ architecture is intended to be copied and hardened for a specific platform.
 - Sender-constrained tokens with DPoP or mTLS where the Resource Server is
   exposed outside a trusted service boundary.
 - PAR/JAR for higher-assurance authorization request handling.
-- Back-channel logout if the IdP can reach the Auth Service through a trusted
-  internal route.
+- A trusted provider-to-Auth-Service route for the implemented Back-Channel
+  Logout endpoint.
 
 These are not required for the local reference to be correct, but they are
 normal review topics for regulated or high-risk deployments.
