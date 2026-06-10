@@ -139,6 +139,8 @@ emitted today:
 | `refresh_rejected` | Pre-refresh validation failed | `missing_sid`, `no_such_session`, `session_absolute_expired`, `session_absolute_expired_post_refresh`, `refresh_token_expired` |
 | `refresh_failed` | Keycloak unreachable or other transient error | `authorization_server_unreachable` |
 | `refresh_token_rejected` | Keycloak returned `invalid_grant` on refresh (reuse, expiry, revocation, or SSO max — not distinguishable at the RP) | `session_invalidated` |
+| `backchannel_logout_succeeded` | `/backchannel-logout` accepted a valid `logout_token` | `session_deleted`, `no_matching_session` |
+| `backchannel_logout_rejected` | `/backchannel-logout` rejected the token | `invalid_logout_token`, `missing_logout_token` |
 
 **Never logged:** access token, refresh token, ID token, raw `sid`,
 raw `state`, raw `XSRF-TOKEN` value, raw `oauth_tx` value, client

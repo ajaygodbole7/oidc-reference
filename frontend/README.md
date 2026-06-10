@@ -6,7 +6,8 @@ owns the flow.
 ## How auth works here
 
 - Sign in is a top-level navigation to `/auth/login` (a BFF endpoint).
-- After Keycloak login, the browser lands back at `/` with an `HttpOnly`
+- After Keycloak login, the browser lands back on the originally-requested
+  URL (saved-request replay; an explicit `/auth/login` defaults to `/`) with an `HttpOnly`
   session cookie set by the BFF.
 - The SPA loads user identity from `/auth/me`.
 - All API calls go to `/api/*` with `credentials: "include"`.

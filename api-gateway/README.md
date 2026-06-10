@@ -21,8 +21,9 @@ and forwards `/auth/*` to the Auth Service unchanged.
 - `config.yaml` — APISIX node config (standalone data-plane, port 9080,
   admin API disabled, `extra_lua_path` for the custom plugin, shared
   dicts for the Client-Credentials token cache and worker-local lock).
-- `apisix.yaml` — declarative routes + upstreams. One route per
-  allowlisted `/api/**` path attaching `bff-session`; a passthrough
+- `apisix.yaml.template` — declarative routes + upstreams, rendered to the
+  gitignored `apisix.yaml.local` by `scripts/render-apisix-config.sh`. One
+  route per allowlisted `/api/**` path attaching `bff-session`; a passthrough
   route for `/auth/*` to the Auth Service.
 - `plugins/bff-session.lua` — the plugin. Implements steps 1–7 of the
   pipeline in the `access` phase; `Cache-Control: no-store` is enforced
@@ -32,7 +33,7 @@ and forwards `/auth/*` to the Auth Service unchanged.
 
 ## Run locally
 
-Compose mounts `config.yaml` and the rendered `apisix.yaml` into
+Compose mounts `config.yaml` and the rendered `apisix.yaml.local` into
 `/usr/local/apisix/conf/`, and `plugins/bff-session.lua` into the APISIX
 plugin directory `/usr/local/apisix/apisix/plugins/` (see `compose.yaml`
 for the exact mount targets):
@@ -43,7 +44,8 @@ docker compose up apisix
 
 ## Secrets you must populate
 
-`apisix.yaml` contains `REPLACE_ME_*` placeholders for:
+`apisix.yaml.template` uses `${VAR}` env interpolation, filled by
+`scripts/render-apisix-config.sh` at render time, for:
 
 - `gateway_client_secret` — Keycloak client secret for
   `oidc-reference-api-gateway`. Realm-import procedure regenerates this.
@@ -54,7 +56,6 @@ Both are env-supplied in production and gitignored locally.
 
 ## Extending the allowlist
 
-To add a route, copy one of the `/api/*` blocks in `apisix.yaml` and
-adjust `uri` + `methods`. Off-allowlist `/api/*` paths intentionally
-return `404` before the plugin runs — the set of declared routes IS the
-allowlist.
+To add a route, copy one of the `/api/*` blocks in `apisix.yaml.template`
+and adjust `uri` + `methods`. Off-allowlist `/api/*` paths return `404`
+before the plugin runs — the set of declared routes IS the allowlist.

@@ -19,6 +19,9 @@ detection, RP-initiated logout, OIDC Back-Channel Logout, and the
 - `/internal/refresh` — back-channel RPC, served as an OAuth Resource Server.
   Called by the API Gateway as the `oidc-reference-api-gateway` Client
   Credentials client, audience-bound to `oidc-reference-auth-internal`.
+- `/backchannel-logout` — OIDC Back-Channel Logout 1.0, IdP-to-service (root
+  path, no `/auth` prefix). Form-encoded `logout_token`; validates the token
+  and revokes the mapped session(s). See SPEC-0001 §Auth Service Endpoints.
 
 ## Trust boundary
 

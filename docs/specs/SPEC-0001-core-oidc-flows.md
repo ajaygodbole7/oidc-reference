@@ -133,7 +133,7 @@ exists so a reader does not assume omission is oversight.
   and internal `token-uri` / `jwks-uri`; Resource Server validates the
   canonical issuer while fetching keys from an internal `jwk-set-uri`.
 - **Session store**: Redis-compatible server-side state store. Local
-  reference: Valkey 8. Writer: Auth Service. Reader on the bearer-injection
+  reference: Valkey 9. Writer: Auth Service. Reader on the bearer-injection
   path: API Gateway (tolerant reader, see §7.2).
 - **Authorization Server**: Keycloak.
 - **Local infra**: Docker Compose.
@@ -1159,7 +1159,7 @@ NOT listed here is pattern-level and does not change.
 ### A.1 Swapping the IdP (Keycloak → Auth0 / Okta / Entra ID / Ory Hydra / ...)
 
 The Auth Service is built on `com.nimbusds.oauth2-oidc-sdk` and Spring
-Security 6.x, both of which speak generic OAuth 2.1 + OIDC. Discovery
+Security 7.x, both of which speak generic OAuth 2.1 + OIDC. Discovery
 (`.well-known/openid-configuration`) and JWKS are how the code learns
 about endpoints and signing keys; nothing in the Java code knows the
 issuer is Keycloak.

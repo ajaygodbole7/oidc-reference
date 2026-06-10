@@ -243,11 +243,13 @@ in [`docs/architecture/architecture-decisions.md`](docs/architecture/architectur
   cover the demonstrated flow; scopes cover the authorization model.
   Reconsider for multiple authorization servers, untrusted-network
   authorization request handling, or structured per-resource grants.
-- **OIDC Back-Channel Logout / Front-Channel Logout.** RP-initiated logout
-  covers user-driven logout; BCL requires AS-to-BFF reachability that
-  doesn't fit the local-only posture. Reconsider for SSO ecosystems with
-  central session termination across relying parties.
-- **OIDC Session Management.** Same reasoning as BCL.
+- **OIDC Front-Channel Logout.** RP-initiated logout covers user-driven
+  logout, and OIDC Back-Channel Logout (implemented; `POST
+  /backchannel-logout`) covers IdP-driven revocation. The browser-iframe
+  front-channel variant is not added.
+- **OIDC Session Management.** The cookie-based BFF has no browser↔AS
+  session to monitor; session changes surface via `/auth/me` polling or the
+  next `/api/**` returning 401.
 - **Encrypted-at-rest sessions in Valkey.** Local Valkey runs without
   AUTH/TLS/encryption. Reconsider before any non-local deployment alongside
   state-store AUTH, TLS, and network isolation.
@@ -257,12 +259,12 @@ in [`docs/architecture/architecture-decisions.md`](docs/architecture/architectur
 
 ## Stack
 
-- React 18 + TypeScript, Vite
+- React 19 + TypeScript, Vite
 - Java 25 + Spring Boot 4 (Auth Service, Resource Server)
 - Nimbus `oauth2-oidc-sdk` for OIDC discovery, JWKS, ID-token validation,
   PKCE
 - Spring Security 7 (JWT decoder, validator composition)
-- Apache APISIX 3.11 standalone + custom Lua plugin
+- Apache APISIX 3.16 standalone + custom Lua plugin
   (`lua-resty-http`, `lua-resty-lock`)
 - Keycloak 26 (embedded H2 via `KC_DB=dev-file`; no separate database)
 - Valkey 9 (Redis-compatible state store)

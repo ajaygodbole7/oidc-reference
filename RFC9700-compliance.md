@@ -67,7 +67,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 2.3 | Least privilege (`SHOULD`) | ✅ | Auth Service client default scopes: `openid profile email roles api.audience api.read` (no admin/write by default). Service client default scopes: `api.audience service.jobs`. |
-| 2.3 | Audience restriction (`SHOULD`); RS verifies (`MUST`) | ✅ | `api.audience` client scope's `oidc-audience-mapper` adds `oidc-reference-api` to `aud`. Resource Server configures `spring.security.oauth2.resourceserver.jwt.audiences` in `application.yml`. Wrong-audience rejection asserted by `ApiSecurityTest`. |
+| 2.3 | Audience restriction (`SHOULD`); RS verifies (`MUST`) | ✅ | `api.audience` client scope's `oidc-audience-mapper` adds `oidc-reference-api` to `aud`. Resource Server validates `aud` with a custom `JwtClaimValidator` on `app.audience` (env `OIDC_AUDIENCE`, default `oidc-reference-api`) in `SecurityConfig`, accepting both the RFC-7519 string and array shapes. Wrong-audience rejection asserted by `ApiSecurityTest`. |
 | 2.3 | Resource/action restriction (scope or `authorization_details`) | ✅ | Scopes: `api.read`, `api.write`, `admin.read`, `service.jobs`. RAR (RFC 9396) not used. |
 
 ## §2.4 — ROPC

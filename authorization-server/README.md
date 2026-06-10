@@ -30,6 +30,8 @@ tests/smoke.sh
   (redirects `http://127.0.0.1:5173/auth/callback/idp` for Vite-dev and
   `http://127.0.0.1:9080/auth/callback/idp` for APISIX-fronted local
   harnesses)
+- API Gateway client (confidential, Client Credentials only):
+  `oidc-reference-api-gateway` — authenticates to `/internal/refresh`.
 - Service client (confidential): `oidc-reference-service`
 - API audience: `oidc-reference-api` via the `api.audience` client scope
   protocol mapper.
