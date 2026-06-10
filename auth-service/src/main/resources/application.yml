@@ -12,6 +12,16 @@ spring:
     redis:
       host: ${SPRING_DATA_REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Bound the Redis leg. Lettuce defaults to a 60s command timeout and a
+      # 10s connect timeout, so a partitioned/wedged Valkey would hang each
+      # /internal/refresh and /auth/me on its session GET/PUT for up to a
+      # minute (the IdP HTTP path is already bounded by IdpHttp; this is the
+      # matching bound for the store leg). Valkey is local on the compose
+      # network (sub-ms normally) and the gateway only waits 5s on
+      # /internal/refresh, so a 1s ceiling fails fast well inside that budget
+      # with ample headroom over normal latency. Tune per-deploy.
+      timeout: ${REDIS_TIMEOUT:1s}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
 
 app:
   # Public-facing origin of this Auth Service. When set, callback/login
