@@ -196,7 +196,7 @@ the RFC 9700 BCP; no new requirements beyond what that doc tracks.
 
 ## Out of scope
 
-These OIDC specs are intentionally not implemented. The reasoning lives
+These OIDC specs are not implemented. The reasoning lives
 in `docs/architecture/architecture-decisions.md` §F.
 
 | Spec | Status | Reason / when to revisit |

@@ -159,7 +159,7 @@ topology, not new OIDC content.
 
 **Locked defaults captured with this decision:**
 
-- **Gateway runtime: APISIX.** Production-grade open-source API gateway
+- **Gateway runtime: APISIX.** Open-source API gateway
   (OpenResty / nginx + Lua). Declarative routes plus a custom `bff-session`
   Lua plugin that does tolerant session read from Valkey, bearer
   injection, signed-CSRF validation, and refresh delegation to the Auth

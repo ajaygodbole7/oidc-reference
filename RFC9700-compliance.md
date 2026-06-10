@@ -223,7 +223,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 
 ## Known gaps
 
-Items where the reference is intentionally short of the BCP, with the
+Items where the reference is short of the BCP, with the
 trigger for reconsidering.
 
 | Gap | Why | When to revisit |

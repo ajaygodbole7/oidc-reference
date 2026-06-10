@@ -27,23 +27,19 @@ and forwards `/auth/*` to the Auth Service unchanged.
 - `plugins/bff-session.lua` — the plugin. Implements steps 1–7 of the
   pipeline in the `access` phase; `Cache-Control: no-store` is enforced
   in `header_filter`.
-- `tests/` — black-box integration tests (owned by another agent).
+- `tests/` — black-box integration tests.
 - `*.example` files — frozen templates kept for new contributors.
 
 ## Run locally
 
-The Compose-update agent wires this directory at `/usr/local/apisix/conf`
-in the APISIX container, with `plugins/` mounted at
-`/usr/local/apisix/plugins/` (matching `extra_lua_path` in `config.yaml`).
-Once that lands:
+Compose mounts `config.yaml` and the rendered `apisix.yaml` into
+`/usr/local/apisix/conf/`, and `plugins/bff-session.lua` into the APISIX
+plugin directory `/usr/local/apisix/apisix/plugins/` (see `compose.yaml`
+for the exact mount targets):
 
 ```
 docker compose up apisix
 ```
-
-Note: an early-commit placeholder directory `apisix/` exists at the repo
-root. The Compose-update agent will retire that bind-mount target; the
-real gateway lives under `api-gateway/`.
 
 ## Secrets you must populate
 
