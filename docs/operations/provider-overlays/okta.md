@@ -2,7 +2,7 @@
 
 This is a credentialed, non-gating portability runbook. The enforced gate is
 `scripts/e2e-portability.sh`, which is hermetic and re-runnable without
-third-party credentials. Okta is the external validation artifact: it proves
+third-party credentials. Okta is the external validation artifact. It proves
 the same config surface against a real enterprise IdP.
 
 ## Why Okta First
@@ -10,8 +10,8 @@ the same config surface against a real enterprise IdP.
 Okta supports standard OIDC Authorization Code + PKCE and standard
 RP-initiated logout. That matches this reference's logout invariant:
 `id_token_hint` may leave the server only in a server-generated top-level
-redirect to the provider's end-session endpoint. Auth0 is deliberately not the
-first external proof because its common logout path is provider-specific.
+redirect to the provider's end-session endpoint. Auth0 is not the first
+external proof because its common logout path is provider-specific.
 
 ## Required Okta Setup
 

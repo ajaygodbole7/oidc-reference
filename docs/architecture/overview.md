@@ -2,7 +2,7 @@
 
 A local reference implementation of OAuth 2.1 and OpenID Connect for a
 browser app, built on the Backend-for-Frontend (BFF) session pattern in its
-**split implementation**: the browser never holds an access, refresh, or ID
+split implementation: the browser never holds an access, refresh, or ID
 token.
 
 Two services divide the BFF role. A confidential **Auth Service** owns the
@@ -10,8 +10,10 @@ OAuth/OIDC client: the Authorization Code Flow with PKCE, the session cookie,
 ID-token validation, refresh-token rotation, and RP-initiated logout. An
 **API Gateway** owns `/api/**` routing and bearer injection. They share a
 Valkey state store and sit behind a single ingress. Tokens live in the state
-store, addressed by an opaque `HttpOnly` session cookie. This follows IETF
-guidance for OAuth 2.0 for Browser-Based Apps (draft-ietf-oauth-browser-based-apps).
+store, addressed by an opaque `HttpOnly` session cookie.
+
+This follows IETF guidance for OAuth 2.0 for Browser-Based Apps
+(draft-ietf-oauth-browser-based-apps).
 
 For the rationale behind the split and the rejected alternatives, see
 [`architecture-decisions.md`](architecture-decisions.md). For the wire

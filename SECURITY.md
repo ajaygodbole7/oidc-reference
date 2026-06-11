@@ -16,26 +16,26 @@ The depth lives in:
 
 ## Scope
 
-This is a **local reference implementation** of the BFF session pattern
-for OAuth 2.1 / OpenID Connect. It is intended to be run on a developer
-machine via Docker Compose to demonstrate the protocol mechanics and the
-control surface.
+This is a local reference implementation of the BFF session pattern
+for OAuth 2.1 / OpenID Connect. It runs on a developer machine via
+Docker Compose to demonstrate the protocol mechanics and the control
+surface.
 
 What that means for security claims:
 
-- Browser-token boundary, OIDC validation, refresh-rotation + reuse
+- These controls are implemented and tested at this revision:
+  browser-token boundary, OIDC validation, refresh-rotation + reuse
   detection, signed CSRF, browser binding, redirect-URI pinning,
-  rate-limit, and the audit-log discipline below — all are implemented
-  and tested at this revision. These rows are real.
-- Local HTTP, default sentinel secrets, in-process refresh lock, no
-  encryption-at-rest on Valkey, no DPoP / mTLS, no central session
-  termination — all are documented non-goals for the local reference.
+  rate-limit, and the audit-log discipline below.
+- These are documented non-goals for the local reference: local HTTP,
+  default sentinel secrets, in-process refresh lock, no encryption-at-rest
+  on Valkey, no DPoP / mTLS, no central session termination.
   See [README "What's deliberately not here"](README.md#whats-deliberately-not-here)
   and [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
   §F for the reconsideration triggers.
 
 The reference is not a deployable production system. Adapting it for
-production requires the items called out in "Production hardening" below.
+production requires the items in "Production hardening" below.
 
 ## Threat model
 
@@ -142,14 +142,14 @@ emitted today:
 | `backchannel_logout_succeeded` | `/backchannel-logout` accepted a valid `logout_token` | `session_deleted`, `no_matching_session` |
 | `backchannel_logout_rejected` | `/backchannel-logout` rejected the token | `invalid_logout_token`, `missing_logout_token` |
 
-**Never logged:** access token, refresh token, ID token, raw `sid`,
+Never logged: access token, refresh token, ID token, raw `sid`,
 raw `state`, raw `XSRF-TOKEN` value, raw `oauth_tx` value, client
 secrets, request bodies.
 
-**Hashed for correlation:** subject (`sub_hash=`), sid (`sid_hash=`).
-Both are SHA-256 truncated to 96 bits, base64url. Long enough to make
-collision impractical at this scale; short enough that the hash alone
-is not session-recovery material.
+Hashed for correlation: subject (`sub_hash=`), sid (`sid_hash=`).
+Both are SHA-256 truncated to 96 bits, base64url. This is long enough
+to make collision impractical at this scale, and short enough that the
+hash alone is not session-recovery material.
 
 ## Production hardening
 
@@ -184,15 +184,15 @@ and `OIDC-compliance.md`. Address before any non-local deployment:
 
 This is a reference repo, not a hosted service.
 
-For **vulnerabilities in this implementation** — open a private GitHub
+For vulnerabilities in this implementation, open a private GitHub
 Security Advisory via the repo's [Security tab](../../security/advisories/new).
-Public issues are fine for general bugs; please use the private
-advisory channel for anything you would not want to disclose before
-a fix is published.
+Public issues are fine for general bugs. Use the private advisory
+channel for anything you would not want to disclose before a fix is
+published.
 
-For **vulnerabilities in the upstream libraries** this reference depends
+For vulnerabilities in the upstream libraries this reference depends
 on (Spring Boot, Spring Security, Nimbus `oauth2-oidc-sdk`, Keycloak,
-APISIX, Valkey, `lua-resty-http`, `lua-resty-lock`) — report to the
+APISIX, Valkey, `lua-resty-http`, `lua-resty-lock`), report to the
 respective project's published security channel.
 
 ## License

@@ -212,19 +212,19 @@ in `docs/architecture/architecture-decisions.md` §F.
 
 ## Architecture notes
 
-- **ID-token validation surface is explicit code.** OIDC Core §3.1.3.7
+- ID-token validation surface is explicit code. OIDC Core §3.1.3.7
   is implemented in `JwtOidcIdTokenValidator` rather than inside
-  framework auto-config. This is a teaching property of the reference —
-  the validator's 11-step checklist maps line-for-line to spec steps.
-- **Conformance is IdP-agnostic.** Keycloak is the local IdP; any
+  framework auto-config. The validator's 11-step checklist maps
+  line-for-line to spec steps.
+- Conformance is IdP-agnostic. Keycloak is the local IdP. Any
   conformant OIDC OP with equivalent realm configuration preserves
   these rows. See SPEC-0001 Appendix A for the per-vendor swap matrix.
-- **No in-browser OIDC client.** The browser holds no tokens; the SPA
+- No in-browser OIDC client. The browser holds no tokens. The SPA
   never parses an ID token, calls a UserInfo endpoint, or handles a
-  refresh-token rotation. All OIDC conformance is server-side, which
-  removes an entire class of browser-side conformance footguns
-  (storage-tier leakage, alg confusion via attacker-supplied JOSE
-  headers, etc.).
+  refresh-token rotation. All OIDC conformance is server-side. This
+  removes an entire class of browser-side conformance footguns: storage-tier
+  leakage, alg confusion via attacker-supplied JOSE headers, and
+  similar.
 
 ## Updating this file
 

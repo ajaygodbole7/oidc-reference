@@ -6,10 +6,10 @@ Code, Codex, or human).
 ## Project Goal
 
 Build a local OAuth 2.1 / OIDC reference that uses the Backend-for-Frontend
-session pattern in its split-implementation shape: the browser never holds
-tokens; a confidential **Auth Service** owns the OAuth/OIDC client role;
-an **API Gateway** (APISIX) owns routing and bearer injection; tokens
-live in a Redis-compatible server-side state store (Valkey locally).
+session pattern in its split-implementation shape. The browser never holds
+tokens. A confidential Auth Service owns the OAuth/OIDC client role. An API
+Gateway (APISIX) owns routing and bearer injection. Tokens live in a
+Redis-compatible server-side state store (Valkey locally).
 
 The canonical end-to-end flow is the Mermaid sequence diagram in the root
 `README.md`. The build contract is `docs/specs/SPEC-0001-core-oidc-flows.md`.
@@ -38,9 +38,9 @@ Five directories, five components, no cloud.
 - Security Agent: threat model and negative auth cases
 - Docs Agent: docs scoped to the assigned task
 
-Auth Service and API Gateway have separate ownership boundaries: the Auth
+Auth Service and API Gateway have separate ownership boundaries. The Auth
 Service owns OAuth/OIDC client behavior and writes `tx:{state}` and
-`sess:{sid}`; the API Gateway owns routing, the `/api/**` allowlist, and
+`sess:{sid}`. The API Gateway owns routing, the `/api/**` allowlist, and
 the tolerant `sess:{sid}` reader. They share only the documented JSON
 schema in SPEC-0001 §"`sess:{sid}` schema contract" and the
 `/internal/refresh` contract.

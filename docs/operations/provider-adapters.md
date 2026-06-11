@@ -5,11 +5,14 @@ only the API Gateway, the Auth Service is the confidential OIDC client, and the
 Resource Server validates standard JWT claims. Keycloak is the local reference
 Authorization Server, not a code dependency.
 
-The promise is configuration-only provider swap for a standard OIDC provider:
-the issuer, endpoints, audience, scopes, role-claim path, **and** the internal
-trust identifiers (the gateway's client id, the internal-refresh audience, and
-the Resource Server's service-account allowlist) are all env-configurable. No
-provider-facing identifier is baked into Java or APISIX. The alternate-claim
+A provider swap is configuration-only for a standard OIDC provider. The
+following are all env-configurable:
+
+- the issuer, endpoints, audience, scopes, and role-claim path;
+- the internal trust identifiers: the gateway's client id, the internal-refresh
+  audience, and the Resource Server's service-account allowlist.
+
+No provider-facing identifier is baked into Java or APISIX. The alternate-claim
 Keycloak realm gate (`just e2e-portability`) proves a config-only swap of the
 token shape end-to-end. If an IdP requires application-code branches by provider
 brand, that provider is outside the current reference contract.
@@ -17,7 +20,7 @@ brand, that provider is outside the current reference contract.
 ### Portability scope
 
 Everything an IdP swap touches is configuration. The defaults are this
-reference's local Keycloak names — real IdPs (Okta/Auth0/Entra) assign client
+reference's local Keycloak names. Real IdPs (Okta/Auth0/Entra) assign client
 ids you don't choose, so the trust identifiers are knobs, not constants.
 
 | Config knob | Default | Env var |
@@ -30,23 +33,23 @@ ids you don't choose, so the trust identifiers are knobs, not constants.
 | RS service-account allowlist | `oidc-reference-api-gateway,oidc-reference-service` | `RS_SERVICE_CLIENT_IDS` |
 | RS jobs client id | `oidc-reference-service` | `RS_JOBS_CLIENT_ID` |
 
-What stays Keycloak-specific is provisioning *format*, not identity values: the
-realm seed JSON and the Keycloak smoke script are replaced wholesale by the
-target IdP's own provisioning (Terraform, Management API, etc.).
+What stays Keycloak-specific is provisioning *format*, not identity values. The
+realm seed JSON and the Keycloak smoke script are replaced by the target IdP's
+own provisioning (Terraform, Management API, etc.).
 
 These knobs are the relying party's half of the contract. The IdP must also be
 configured to issue matching values. For example, setting
 `INTERNAL_REFRESH_AUDIENCE` on the Auth Service does not make Okta, Entra, or
-Keycloak emit that audience; the provider-side client/scope/audience mapper must
+Keycloak emit that audience. The provider-side client/scope/audience mapper must
 move with it. The same is true for `OIDC_AUDIENCE`, `GATEWAY_CLIENT_ID`, and role
 claim mappers.
 
-Roles are read from **two** tokens and must agree: the Auth Service reads them
-from the **id_token** for `/auth/me`, while the Resource Server reads them from the
-**access_token** for `/api/**` authorization. They line up only because the realm
-maps roles into both tokens, so an IdP swap MUST configure **both** mappers (the
+Roles are read from two tokens and must agree. The Auth Service reads them
+from the `id_token` for `/auth/me`. The Resource Server reads them from the
+`access_token` for `/api/**` authorization. They line up only because the realm
+maps roles into both tokens, so an IdP swap MUST configure both mappers (the
 alt-realm portability proof already does). The `/auth/me` roles are
-**display-only** — the access token is the sole authorization source.
+display-only; the access token is the sole authorization source.
 
 ## Supported Configuration Surface
 
@@ -96,12 +99,12 @@ sh scripts/e2e-portability.sh
 That script starts the same local topology against
 `oidc-reference-alt`, a second Keycloak realm imported into the same Keycloak
 container. It proves the provider boundary without third-party credentials by
-changing only provider-shaped configuration:
+changing only provider-shaped configuration.
 
-- roles are emitted as a top-level `groups` claim, so
+- Roles are emitted as a top-level `groups` claim, so
   `OIDC_ROLES_CLAIM_PATH=groups` must drive both `/auth/me` and
-  Resource Server authorization;
-- access tokens carry `aud=oidc-reference-alt-api`, so `OIDC_AUDIENCE` must
+  Resource Server authorization.
+- Access tokens carry `aud=oidc-reference-alt-api`, so `OIDC_AUDIENCE` must
   drive Resource Server validation.
 
 The default Keycloak flow remains untouched. The alt realm exists to prove the
@@ -137,12 +140,12 @@ For a provider to pass the reference's portability bar:
    - Keep `APP_REFRESH_REQUIRE_ROTATION=true` for providers with refresh-token rotation and reuse detection.
    - Set it false only for a provider that does not rotate refresh tokens, and document that downgrade.
 7. Logout behavior is tested. If the provider does not support compatible RP-initiated logout, keep local logout only and document that the IdP session remains alive.
-8. Session lifetimes are coordinated: the BFF absolute ceiling
-   (`SessionRecord.ABSOLUTE_TTL`, 8h) MUST stay **≤ the provider's SSO max
-   session lifespan**. If the IdP ceiling is lower, an active session is
+8. Session lifetimes are coordinated. The BFF absolute ceiling
+   (`SessionRecord.ABSOLUTE_TTL`, 8h) MUST stay ≤ the provider's SSO max
+   session lifespan. If the IdP ceiling is lower, an active session is
    ejected early when the next refresh returns `invalid_grant`; lower the BFF
-   ceiling to match. (Keycloak `ssoSessionMaxLifespan` defaults to 10h; Okta,
-   Auth0, and Entra differ — check the provider's session policy.)
+   ceiling to match. (Keycloak `ssoSessionMaxLifespan` defaults to 10h. Okta,
+   Auth0, and Entra differ; check the provider's session policy.)
 9. `sh scripts/e2e-auth.sh` or an equivalent provider-backed full-stack proof passes.
 
 ## Known Portability Gaps

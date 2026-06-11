@@ -1,8 +1,8 @@
 # API Gateway (APISIX)
 
-APISIX in **standalone mode** plus the custom `bff-session` Lua plugin.
+APISIX in standalone mode plus the custom `bff-session` Lua plugin.
 The gateway is the single browser-facing ingress in the full Compose
-stack: it owns `/api/**` (bearer injection against the Resource Server)
+stack. It owns `/api/**` (bearer injection against the Resource Server)
 and forwards `/auth/*` to the Auth Service unchanged.
 
 ## Where this fits in the spec
@@ -58,4 +58,4 @@ Both are env-supplied in production and gitignored locally.
 
 To add a route, copy one of the `/api/*` blocks in `apisix.yaml.template`
 and adjust `uri` + `methods`. Off-allowlist `/api/*` paths return `404`
-before the plugin runs — the set of declared routes IS the allowlist.
+before the plugin runs. The set of declared routes is the allowlist.

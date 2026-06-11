@@ -40,17 +40,19 @@ tests/smoke.sh
 
 ## Secrets
 
-Realm JSON ships placeholder dev secrets that all carry the loud sentinel
+Realm JSON ships placeholder dev secrets that all carry the sentinel
 marker `CHANGE_BEFORE_DEPLOY`:
 
 - `LOCAL_DEV_AUTH_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY`
 - `LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY`
 - `LOCAL_DEV_SERVICE_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY`
 
-These are local-only bootstrap values; `SecretSentinelValidator` in the
+These are local-only bootstrap values. `SecretSentinelValidator` in the
 Auth Service refuses to boot whenever any of these sentinels survive into a
-`prod` or `production` Spring profile. Rotate before any non-local use, supply
-real values via env vars, and never commit replacements.
+`prod` or `production` Spring profile.
+
+Rotate before any non-local use. Supply real values via env vars, and never
+commit replacements.
 
 ## Harness Requirements
 

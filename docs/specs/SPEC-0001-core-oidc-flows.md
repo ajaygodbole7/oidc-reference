@@ -44,10 +44,10 @@ The canonical end-to-end flow is the Mermaid sequence diagram in the root
 - Hand-implementing OAuth/OIDC protocol primitives, cookies, or session
   encoding.
 
-### Explicitly out of scope
+### Out of scope
 
 The following OAuth / OIDC mechanisms are each a defensible addition to a
-more ambitious reference, but are deliberately not built here. This section
+more ambitious reference, but are not built here. This section
 exists so a reader does not assume omission is oversight.
 
 - **PAR (RFC 9126, Pushed Authorization Requests).** Recommended by
@@ -66,7 +66,7 @@ exists so a reader does not assume omission is oversight.
 
 - **OIDC Front-Channel Logout 1.0.** Not implemented: the cookie-based
   BFF pattern keeps browser session state at the BFF, and RP-Initiated
-  Logout plus the implemented Back-Channel Logout endpoint cover this
+  Logout plus the Back-Channel Logout endpoint cover this
   reference's local logout contract.
 
 - **OIDC Session Management 1.0** (`check_session_iframe`,
@@ -119,7 +119,7 @@ its major line.
   `credentials: "include"`. The Vite dev server proxies `/auth/*` to the
   Auth Service and `/api/**` to the APISIX gateway so the cookie is
   same-origin in dev. In the full Compose stack, APISIX is the ingress
-  directly — there is no separate ingress proxy in front of it.
+  directly. There is no separate ingress proxy in front of it.
 - **Auth Service**: Java 25, Spring Boot 4, Spring Security
   OAuth2 Client, custom Redis-compatible transaction and session
   repositories. Owns `/auth/*` and `/internal/refresh`. Acts as an OAuth
@@ -394,9 +394,9 @@ expiring access token and both call `/internal/refresh`. With rotation
 (`refreshTokenMaxReuse: 0`) a second concurrent refresh against Keycloak
 would fail with `invalid_grant` and destroy the session. The Auth Service
 serializes the refresh window with a per-session lock so only one refresh
-is in flight per session; the second caller re-reads `sess:{sid}` under
+is in flight per session. The second caller re-reads `sess:{sid}` under
 the lock and returns the already-rotated token. The in-process lock map
-is bounded by session lifetime; a clustered Auth Service must replace it
+is bounded by session lifetime. A clustered Auth Service must replace it
 with a distributed lock (e.g., Valkey `SET NX EX`).
 
 ### Session Lifecycle
@@ -409,7 +409,7 @@ with a distributed lock (e.g., Valkey `SET NX EX`).
   B3 and the Threat Model row below.
 - `sess:{sid}` is created only on successful callback, with a freshly
   generated opaque session id. Session fixation is structurally
-  impossible — there is no prior session to fixate.
+  impossible: there is no prior session to fixate.
 - On logout the session cookie and the CSRF cookie are expired
   (`Max-Age=0`) and `sess:{sid}` is deleted from the Redis-compatible
   state store before the browser is redirected to Keycloak's end-session
@@ -431,10 +431,10 @@ format, validation algorithm, and signing-key handling.
   Mismatch or invalid signature → 403.
 - The session cookie (`__Host-sid` in prod, `sid` in local) is `HttpOnly`
   and never readable by JS; it is not part of the double-submit pair.
-- **Naive double-submit is explicitly rejected.** Comparing an unsigned
+- **Naive double-submit is rejected.** Comparing an unsigned
   cookie value to the same value echoed in a header is defeated by
   cookie injection from a sibling-subdomain XSS or `document.cookie`
-  write vulnerability — the attacker can set a matching cookie+header
+  write vulnerability. The attacker can set a matching cookie+header
   pair in the victim's browser. Signing breaks the attack because the
   attacker cannot forge a valid HMAC without the server-side signing key.
 
@@ -468,7 +468,7 @@ format, validation algorithm, and signing-key handling.
 ### API Behavior
 
 - Stateless. No sessions, no cookies. CORS denies browser origins (defense
-  in depth — browser is never expected to reach the RS directly).
+  in depth; the browser is never expected to reach the RS directly).
 - Bound to an internal Compose network in the canonical stack.
 - Errors as RFC 7807 `application/problem+json` via Spring `ProblemDetail`.
 - Audit log for denied access and validation failures, non-secret metadata
@@ -579,7 +579,7 @@ add a fourth service that violates them.
 
 The API Gateway is APISIX (OpenResty / nginx + Lua), current stable. It
 runs on port `9080` and is the browser-facing ingress directly in the full
-Compose stack — no separate ingress proxy sits in front of it. Routes are
+Compose stack. No separate ingress proxy sits in front of it. Routes are
 declared in `config.yaml`; runtime configuration is reloaded without
 restarting the worker processes.
 
@@ -803,8 +803,8 @@ use beyond what the Gateway needs):
 `absolute_expires_at` is the hard ceiling (default 8h from `created_at`, kept
 ≤ the IdP's SSO max session lifespan) past
 which the session MUST be evicted regardless of sliding TTL. The Auth Service
-re-checks this on every `/auth/me` read and on every `/internal/refresh` —
-crossing the boundary during a refresh round-trip causes an explicit DEL +
+re-checks this on every `/auth/me` read and on every `/internal/refresh`.
+Crossing the boundary during a refresh round-trip causes an explicit DEL +
 404 instead of relying on backend-dependent `EXPIRE k 0` semantics.
 
 The signed CSRF token (§7.3) is issued to the browser as the `XSRF-TOKEN`
@@ -849,7 +849,7 @@ in their test suites:
   the Gateway's tolerant reader, assert `access_token` and
   `access_token_expires_at` are extracted correctly. Catches reader-
   side regressions and JSON-library configuration drift (the two
-  services must serialize/parse with compatible settings — UTC
+  services must serialize/parse with compatible settings: UTC
   timestamps, no field reordering required, no special-character
   escaping divergence).
 
@@ -921,7 +921,7 @@ verification. The attack model: an attacker with an XSS or
 (`evil.example.com` against `app.example.com`) can set a cookie value
 in the victim's browser; combined with the ability to issue cross-site
 requests, they can craft a request whose cookie and header match,
-defeating naive double-submit. Signing breaks this — the attacker
+defeating naive double-submit. Signing breaks this: the attacker
 cannot forge a valid signature.
 
 ## Acceptance Criteria
@@ -1162,7 +1162,7 @@ applies), seen to fail the right way when the guard is removed.
 This reference uses **Keycloak** as the local Authorization Server and
 **APISIX** as the local API Gateway. Neither choice is load-bearing on the
 BFF session pattern itself. This appendix names every file that would
-change to swap one of those vendors. The split is the contract: anything
+change to swap one of those vendors. The split is the contract. Anything
 NOT listed here is pattern-level and does not change.
 
 ### A.1 Swapping the IdP (Keycloak → Auth0 / Okta / Entra ID / Ory Hydra / ...)
@@ -1170,7 +1170,7 @@ NOT listed here is pattern-level and does not change.
 The Auth Service is built on `com.nimbusds.oauth2-oidc-sdk` and Spring
 Security 7.x, both of which speak generic OAuth 2.1 + OIDC. Discovery
 (`.well-known/openid-configuration`) and JWKS are how the code learns
-about endpoints and signing keys; nothing in the Java code knows the
+about endpoints and signing keys. Nothing in the Java code knows the
 issuer is Keycloak.
 
 Changes required:
@@ -1262,5 +1262,5 @@ Both sides talk Valkey via RESP today. To swap:
   `bff-session.lua`'s `read_session` with the equivalent client for the
   target store. The JSON payload shape stays identical.
 
-The `schema/sess-payload.example.json` contract stays the same — it's a
-JSON-level contract that doesn't depend on the store.
+The `schema/sess-payload.example.json` contract stays the same. It is a
+JSON-level contract that does not depend on the store.

@@ -6,11 +6,16 @@ OAuth2 Client starter); see
 [`../docs/architecture/architecture-decisions.md`](../docs/architecture/architecture-decisions.md)
 §A7 for why.
 
-This directory owns the Authorization Code Flow with PKCE, the session
-cookie, the custom Redis-compatible `tx:{state}` and `sess:{sid}`
-repositories, ID-token validation, refresh-token rotation with reuse
-detection, RP-initiated logout, OIDC Back-Channel Logout, and the
-`/internal/refresh` RPC.
+This directory owns:
+
+- the Authorization Code Flow with PKCE
+- the session cookie
+- the custom Redis-compatible `tx:{state}` and `sess:{sid}` repositories
+- ID-token validation
+- refresh-token rotation with reuse detection
+- RP-initiated logout
+- OIDC Back-Channel Logout
+- the `/internal/refresh` RPC
 
 ## Endpoints
 

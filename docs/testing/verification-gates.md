@@ -58,17 +58,17 @@ just e2e-portability
 ```
 
 Runs the same full-stack proof against a second Keycloak realm imported into
-the same local Keycloak container. The alternate realm intentionally differs
-from the reference realm in the places that must be configuration-driven:
+the same local Keycloak container. The alternate realm differs from the
+reference realm in the places that must be configuration-driven:
 
-- roles are emitted as top-level `groups`, not `realm_access.roles`;
+- roles are emitted as top-level `groups`, not `realm_access.roles`.
 - Resource Server audience is `oidc-reference-alt-api`, not
   `oidc-reference-api`.
 
 This gate is the enforced IdP-portability proof because it is re-runnable
 without third-party credentials. It does not try to force Keycloak to emit
-`scp`; that branch is covered by Resource Server unit tests and by the
-provider runbooks for IdPs that naturally emit `scp`.
+`scp`. That branch is covered by Resource Server unit tests and by the
+provider runbooks for IdPs that emit `scp`.
 
 ## Full Local Verification
 

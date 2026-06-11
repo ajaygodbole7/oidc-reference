@@ -19,7 +19,7 @@ OAuth 2.1 / OpenID Connect. Contributions are welcome via pull request.
 - Run the relevant per-component verify script:
   `scripts/verify-{auth-service,backend,frontend,api-gateway,auth-server}.sh`.
 - For full-stack changes, run `RUN_FULL_STACK_AUTH=1 ./scripts/verify-all.sh`.
-- Keep changes surgical. The repo intentionally avoids speculative
+- Keep changes surgical. The repo avoids speculative
   abstraction (see [README "What's deliberately not here"](README.md#whats-deliberately-not-here)).
 
 ## Reporting security issues

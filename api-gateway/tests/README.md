@@ -1,10 +1,11 @@
 # api-gateway/tests
 
-Live integration tests for the APISIX `bff-session` plugin. The harness
-POSTs/GETs against a running APISIX at `127.0.0.1:9080`, seeds non-refresh
-session state directly into Valkey via `docker compose exec valkey valkey-cli`,
-mints a real service token for header/query echo probes, and mints a real
-login-derived session for the refresh-delegation test.
+Live integration tests for the APISIX `bff-session` plugin. The harness:
+
+- POSTs/GETs against a running APISIX at `127.0.0.1:9080`.
+- Seeds non-refresh session state directly into Valkey via `docker compose exec valkey valkey-cli`.
+- Mints a real service token for header/query echo probes.
+- Mints a real login-derived session for the refresh-delegation test.
 
 ## What it is
 
@@ -74,7 +75,7 @@ The following tests are skipped without their gating env var:
 - `test_state_changing_method_requires_signed_csrf` — skipped without
   `CSRF_SIGNING_KEY`. The helper computes HMAC-SHA256 with the
   Base64-decoded key bytes over the ASCII bytes of the token-value
-  base64url; this must match the Auth Service and gateway HMAC scheme
+  base64url. This must match the Auth Service and gateway HMAC scheme
   exactly. If they diverge (different algorithm, different value
   encoding, different key encoding), update `sign_csrf_token` in
   `lib.sh` in lockstep.
@@ -85,5 +86,5 @@ The following tests are skipped without their gating env var:
 `test_query_string_preserved`, and `test_hop_by_hop_headers_stripped` use
 `/api/_test/echo` on the Resource Server. That endpoint exists only under the
 `gateway-test` Spring profile and reflects only the narrow fields the gateway
-harness needs; it does not echo `Authorization`. The default profile returns
+harness needs. It does not echo `Authorization`. The default profile returns
 404 for the same path, which is covered by the Resource Server test suite.

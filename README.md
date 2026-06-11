@@ -1,57 +1,86 @@
 # oidc-reference
 
-Local reference implementation of the Backend-for-Frontend (BFF) session
-pattern for OAuth 2.1 and OpenID Connect Core 1.0. The browser holds no
-access, refresh, or ID token; the OIDC client role lives in a confidential
-server-side service. Session identity is an opaque `HttpOnly` cookie;
-tokens live in a Redis-compatible state store keyed by that cookie.
+A complete, runnable reference for the Backend-for-Frontend (BFF) session
+pattern: browser-app OAuth 2.1 and OpenID Connect Core 1.0 with no tokens in
+the browser.
 
-The implementation follows
-[RFC 9700](https://datatracker.ietf.org/doc/rfc9700/) (OAuth 2.0 Security
-BCP) and OIDC Core §3.1.3.7 for ID-token validation. Two flows are
-demonstrated: browser login via Authorization Code + PKCE with
-saved-request replay, and service-to-service via Client Credentials.
+The OIDC client role lives in a confidential server-side service, split into a
+dedicated Auth Service (the OAuth/OIDC client) and a dedicated API Gateway
+(routing and bearer injection). The browser holds only an opaque `HttpOnly`
+session cookie. Tokens live in a Redis-compatible state store keyed by that
+cookie.
 
-## Why this shape
+It implements [RFC 9700](https://datatracker.ietf.org/doc/rfc9700/) (OAuth 2.0
+Security BCP) and OIDC Core §3.1.3.7 for ID-token validation, across two flows:
+browser login via Authorization Code + PKCE with saved-request replay, and
+service-to-service via Client Credentials.
 
-**Why BFF and not a public-client SPA running PKCE in the browser.**
-Browser PKCE is valid OAuth, but any successful XSS can use or exfiltrate
-tokens reachable by JavaScript, browser refresh-token rotation is fragile
-in cross-origin policies, and silent iframe renewal is no longer a
-dependable browser primitive. A server-side BFF keeps the access /
-refresh / ID token off the browser entirely. A token-mediating backend
-that still hands access tokens to JavaScript was also rejected for the
-same XSS-exfiltration reason.
+What it gives you:
 
-**Why split BFF into Auth Service + API Gateway, not one combined
-service.** Production OIDC deployments at meaningful scale separate the
-OAuth surface from the API-gateway surface — different teams (identity
-vs. platform), different scaling characteristics (auth is low-frequency
-big-payload, API is high-frequency small-payload), different operational
-concerns. The "BFF" name historically (Sam Newman, 2015) referred to a
-per-frontend API aggregator sitting *after* auth; conflating it with the
-OAuth client role obscures both. A combined BFF is also valid; this
-reference ships the split because that's the shape production readers
-recognize.
+- **The split shape, not a combined demo.** A separate Auth Service and API
+  Gateway, the way production OIDC deployments separate the identity surface
+  from the API edge.
+- **The token invariant, enforced and asserted by a live test.** Access and
+  refresh tokens never reach the browser; the id_token never reaches browser
+  JS, storage, SPA-readable JSON, SPA-visible cookies, or app logs. Only the
+  server's `/auth/logout/continue` → IdP redirect carries `id_token_hint`.
+- **Every control mapped to a standard, a symbol, and a test.** The Security
+  controls table ties each control to its RFC/OIDC section, the code that
+  implements it, and the live gate that proves it.
+- **Provider-portable by configuration.** No provider brand is baked into Java
+  or Lua. `just e2e-portability` proves a token-shape swap end-to-end against a
+  second realm.
 
-**Why a server-side state store, not a framework HTTP-session blob.** The
-two pieces of state have different lifetimes and addressing: a short
-pre-auth OAuth transaction keyed by `state`, and a longer post-auth
-session keyed by `sid`. Keeping them as separate keyspaces (`tx:{state}`
-and `sess:{sid}`) means the transaction is keyed by the OAuth `state`
-itself — no pre-auth session cookie, and so no session-fixation class to
-defend against. Both keyspaces are inspectable, which is the right
-property for a reference and for incident response.
+## Design decisions
 
-**Why standard OAuth/OIDC interfaces, not provider-specific APIs.** All
-application code branches on `iss` / `aud` / scopes / claim paths /
-endpoints from `.well-known/openid-configuration` — never on the provider
-brand. Provider differences live in configuration: `app.roles-claim-path`
-for the claim shape, env vars for the issuer and client credentials. Swapping
-a provider is a config exercise — issuer, endpoints, audience, scopes, roles,
-**and** the internal trust identifiers (gateway/service client ids, internal
-refresh audience) are all env knobs with local-Keycloak defaults; nothing
-provider-facing is baked into Java or APISIX. The alternate-realm gate
+Each decision states what the reference does and the alternative it rejects.
+Full rationale and reconsideration triggers are in
+[`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md).
+
+**BFF, not a public-client SPA running PKCE in the browser.** A server-side
+BFF keeps the access, refresh, and ID tokens off the browser entirely. Browser
+PKCE is valid OAuth, but:
+
+- a token reachable by JavaScript can be used or exfiltrated by any successful XSS;
+- browser refresh-token rotation is fragile under cross-origin policies;
+- silent iframe renewal is no longer a dependable browser primitive.
+
+A token-mediating backend that still hands access tokens to JavaScript is
+rejected for the same XSS reason.
+
+**Split into Auth Service + API Gateway, not one combined service.** Production
+OIDC deployments at scale separate the OAuth surface from the API-gateway
+surface:
+
+- different teams own them (identity vs. platform);
+- different scaling profiles (auth is low-frequency, big-payload; API is
+  high-frequency, small-payload);
+- different operational concerns.
+
+The "BFF" name (Sam Newman, 2015) originally meant a per-frontend API
+aggregator sitting *after* auth; conflating it with the OAuth client role
+obscures both. A combined BFF is also valid. This reference ships the split
+because that is the shape production readers recognize.
+
+**A server-side state store, not a framework HTTP-session blob.** The two
+pieces of state have different lifetimes and addressing: a short pre-auth OAuth
+transaction keyed by `state`, and a longer post-auth session keyed by `sid`.
+
+Keeping them as separate keyspaces (`tx:{state}` and `sess:{sid}`) keys the
+transaction by the OAuth `state` itself. There is no pre-auth session cookie,
+and so no session-fixation class to defend against. Both keyspaces are
+inspectable, the right property for a reference and for incident response.
+
+**Standard OAuth/OIDC interfaces, not provider-specific APIs.** Application
+code branches on `iss` / `aud` / scopes / claim paths / endpoints from
+`.well-known/openid-configuration`, never on the provider brand. Provider
+differences live in configuration:
+
+- `app.roles-claim-path` for the claim shape;
+- env vars for the issuer, client credentials, audiences, and the internal
+  trust identifiers (gateway/service client ids, internal-refresh audience).
+
+Nothing provider-facing is baked into Java or APISIX. The alternate-realm gate
 `just e2e-portability` proves the token-shape swap end-to-end; SPEC-0001
 Appendix A and `provider-adapters.md` §"Portability scope" enumerate every knob.
 
@@ -74,11 +103,13 @@ For non-local hardening, see
 
 ### Login — Authorization Code + PKCE
 
-Login starts when the browser hits a protected `/api/**` URL with no session — the
-gateway bounces a top-level navigation to `/auth/login`, or returns `401` to an XHR
-so the SPA navigates itself — or from an explicit "Sign in". The Auth Service runs
-the OAuth round-trip and returns the browser to the originally requested URL with
-the session and CSRF cookies attached.
+Login is triggered two ways: the browser hits a protected `/api/**` URL with no
+session, or the user clicks an explicit "Sign in". On the no-session `/api/**`
+case the gateway bounces a top-level navigation to `/auth/login` (or returns
+`401` to an XHR, so the SPA navigates itself).
+
+The Auth Service then runs the OAuth round-trip and returns the browser to the
+originally requested URL with the session and CSRF cookies attached.
 
 ```mermaid
 sequenceDiagram
@@ -109,9 +140,9 @@ sequenceDiagram
 ### Authenticated request — proxy and transparent refresh
 
 Every `/api/**` call carries only the opaque session cookie. The gateway looks up
-the session, transparently refreshes the access token when it is near expiry
-(delegating to the Auth Service, which holds the refresh token), then injects a
-bearer for the Resource Server.
+the session, refreshes the access token when it is near expiry (delegating to the
+Auth Service, which holds the refresh token), then injects a bearer for the
+Resource Server.
 
 ```mermaid
 sequenceDiagram
@@ -305,9 +336,11 @@ RUN_FULL_STACK_AUTH=1 ./scripts/verify-all.sh   # also brings the stack up and r
 `just e2e-auth` is the canonical authenticated local proof. It brings the stack
 up, runs `frontend/tests/e2e/reference-flow.spec.ts` for the real browser flow,
 then runs the gateway refresh-delegation proof with a real login-derived
-`sess:{sid}`. It covers Keycloak login, `/auth/me`, authenticated `/api/**`,
-role enforcement, refresh delegation, and RP-initiated logout through the
-same-origin `/auth/logout/continue` handle.
+`sess:{sid}`.
+
+It covers Keycloak login, `/auth/me`, an authenticated `/api/**` call, role
+enforcement, refresh delegation, and RP-initiated logout through the same-origin
+`/auth/logout/continue` handle.
 
 ## Documentation
 

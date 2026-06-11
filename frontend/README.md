@@ -1,14 +1,14 @@
 # Frontend
 
-React + TypeScript + Vite SPA. **No OAuth/OIDC client library** — the BFF
+React + TypeScript + Vite SPA. No OAuth/OIDC client library. The BFF
 owns the flow.
 
 ## How auth works here
 
 - Sign in is a top-level navigation to `/auth/login` (a BFF endpoint).
 - After Keycloak login, the browser lands back on the originally-requested
-  URL (saved-request replay; an explicit `/auth/login` defaults to `/`) with an `HttpOnly`
-  session cookie set by the BFF.
+  URL with an `HttpOnly` session cookie set by the BFF. This uses
+  saved-request replay; an explicit `/auth/login` defaults to `/`.
 - The SPA loads user identity from `/auth/me`.
 - All API calls go to `/api/*` with `credentials: "include"`.
 - Sign out POSTs `/auth/logout` with the CSRF header, then performs a

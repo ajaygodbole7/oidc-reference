@@ -29,10 +29,11 @@ or directly:
 just test-e2e        # or: sh scripts/test-e2e.sh
 ```
 
-The live-infra E2E renders the APISIX config, brings up the Compose stack
-(Keycloak, Valkey, APISIX), runs the IdP realm/discovery/token smoke and the
-gateway behaviour suite against it, then tears the stack down. For the full
-browser login flow, use `just up` + `just dev` and drive the SPA at
+The live-infra E2E renders the APISIX config and brings up the Compose stack
+(Keycloak, Valkey, APISIX). It runs the IdP realm/discovery/token smoke and the
+gateway behaviour suite against it, then tears the stack down.
+
+For the full browser login flow, use `just up` + `just dev` and drive the SPA at
 `http://127.0.0.1:5173`.
 
 ## Canonical Authenticated Proof
@@ -42,12 +43,15 @@ just e2e-auth        # or: sh scripts/e2e-auth.sh
 ```
 
 `just e2e-auth` is the canonical authenticated local proof. It runs
-`frontend/tests/e2e/reference-flow.spec.ts` against the live stack: a real
-Keycloak login through the Auth Service, an authenticated `/api/**` call
-through APISIX, and RP-initiated logout through the same-origin
-`/auth/logout/continue` handle. It also asserts the token-isolation invariant
-(no access/refresh/ID token in browser storage, JS-readable cookies, or
-SPA-readable bodies).
+`frontend/tests/e2e/reference-flow.spec.ts` against the live stack. The test
+covers:
+
+- a real Keycloak login through the Auth Service,
+- an authenticated `/api/**` call through APISIX, and
+- RP-initiated logout through the same-origin `/auth/logout/continue` handle.
+
+It also asserts the token-isolation invariant: no access/refresh/ID token in
+browser storage, JS-readable cookies, or SPA-readable bodies.
 
 ## Harness Steps
 
@@ -55,8 +59,8 @@ SPA-readable bodies).
 2. Build Resource Server (`backend-resource-server/`).
 3. Build Auth Service (`auth-service/`).
 4. Render the APISIX route config and start Keycloak, Valkey, Auth Service,
-   Resource Server, and APISIX via the root `compose.yaml` (Keycloak uses embedded H2 — there is no
-   separate database).
+   Resource Server, and APISIX via the root `compose.yaml`. Keycloak uses
+   embedded H2; there is no separate database.
 5. Import the realm.
 6. Wait for Compose health checks: Auth Service and Resource Server stay
    internal-only and are reachable by APISIX through service-name DNS.

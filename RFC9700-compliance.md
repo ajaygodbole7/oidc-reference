@@ -239,13 +239,13 @@ trigger for reconsidering.
 Several BCP items are satisfied by the BFF session pattern itself rather
 than by an added mechanism:
 
-- **Tokens never reach the browser.** §4.3.2 (no access tokens in URI),
+- Tokens never reach the browser. §4.3.2 (no access tokens in URI),
   §4.6 (no access-token injection into a JS context), and the baseline
   confidentiality property of §4.9.3 are addressed architecturally.
-- **PKCE + confidential client + secret + rotation** stack on the
+- PKCE, confidential client, secret, and rotation stack on the
   Auth Service ↔ Keycloak hop, the only OAuth surface in the system.
-- **Resource Server is not browser-reachable.** The Compose topology
-  keeps the RS on the internal network; the API Gateway is the only
+- Resource Server is not browser-reachable. The Compose topology
+  keeps the RS on the internal network. The API Gateway is the only
   inbound path. CORS denial on `/api/**` is defense in depth.
 
 RFC 9700 compliance is IdP-agnostic. Keycloak is the local IdP; any

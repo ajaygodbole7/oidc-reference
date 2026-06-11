@@ -3,10 +3,15 @@
 The Auth Service treats refresh-token rotation as a security invariant by
 default. A refresh-grant response that omits a new `refresh_token`, or
 returns the same value as the one we sent, is treated as a rotation
-failure: the controller invalidates the session, deletes `sess:{sid}`,
-emits the `security_audit refresh_token_rejected` event, and returns 409 —
-the same path Keycloak's own reuse-detection chain takes when it sees a
-replayed refresh token.
+failure. On that failure the controller:
+
+- invalidates the session,
+- deletes `sess:{sid}`,
+- emits the `security_audit refresh_token_rejected` event, and
+- returns 409.
+
+This is the same path Keycloak's own reuse-detection chain takes when it
+sees a replayed refresh token.
 
 This default exists because silently accepting an un-rotated refresh
 token is indistinguishable, from the BFF's perspective, from a stolen
@@ -52,7 +57,7 @@ The BFF reference targets Keycloak with rotation on; that is the
 security posture being demonstrated. The escape hatch exists so the
 reference can be re-pointed at a non-rotating provider for a demo or
 migration without rewriting the refresh client. Production deployments
-should pick the value once and pin it; flipping at runtime is not part
+should pick the value once and pin it. Flipping at runtime is not part
 of the contract.
 
 If you are running this against a non-rotating provider and want the

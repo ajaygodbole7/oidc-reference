@@ -32,23 +32,26 @@ refresh token, or ID token. The Backend-for-Frontend is the OAuth/OIDC client,
 and tokens are kept server-side.
 
 A public-client SPA running Authorization Code + PKCE in the browser was
-rejected. It is valid OAuth, but any successful XSS can use or exfiltrate
-tokens reachable by JavaScript, browser refresh-token rotation is fragile, and
-silent iframe renewal is no longer a dependable browser primitive. A
-token-mediating backend was also rejected because it still hands access tokens
-to JavaScript.
+rejected. It is valid OAuth, but it has three problems:
 
-The reference implements the BFF pattern as a split: a dedicated Auth Service
-owns the OAuth/OIDC client role under `/auth/*`, and a dedicated API Gateway
-owns the routing and bearer-injection role under `/api/**`. The split is an
-operational topology choice (see A6); it does not move tokens to the browser
+- Any successful XSS can use or exfiltrate tokens reachable by JavaScript.
+- Browser refresh-token rotation is fragile.
+- Silent iframe renewal is no longer a dependable browser primitive.
+
+A token-mediating backend was also rejected because it still hands access
+tokens to JavaScript.
+
+The reference implements the BFF pattern as a split. A dedicated Auth Service
+owns the OAuth/OIDC client role under `/auth/*`. A dedicated API Gateway owns
+the routing and bearer-injection role under `/api/**`. The split is an
+operational topology choice (see A6). It does not move tokens to the browser
 and does not change any protocol-level OIDC decision. A combined-BFF
-implementation of the same pattern is also valid and is the shape most
+implementation of the same pattern is also valid, and is the shape most
 existing references ship.
 
 The cost is two extra services and server-side session state. For a reference
-whose teaching surface is the security posture and the production-shape
-operational topology, that is the right trade.
+whose teaching surface is the security posture and the operational topology,
+that is the right trade.
 
 Spec: SPEC-0001 Auth Service + API Gateway endpoints.
 
@@ -57,9 +60,9 @@ Spec: SPEC-0001 Auth Service + API Gateway endpoints.
 OAuth and OIDC library maturity wins over framework-footprint optimization.
 Alternatives considered: Quarkus, Helidon SE, Vert.x, and Node.
 
-Spring Security provides mature OAuth2 Client, OIDC login, Resource Server,
-JWT validation, and CSRF primitives. The BFF still owns custom repository code
-for `tx:{state}` and `sess:{sid}`; Spring is not allowed to hide those states
+Spring Security provides OAuth2 Client, OIDC login, Resource Server, JWT
+validation, and CSRF primitives. The BFF still owns custom repository code for
+`tx:{state}` and `sess:{sid}`. Spring is not allowed to hide those states
 inside a framework-managed HTTP session. Virtual threads reduce the historical
 need to choose a reactive stack for this mostly IO-bound workload.
 
@@ -76,7 +79,7 @@ because it is open source and Redis-wire-compatible.
 The application contract is expressed as logical keyspaces: `tx:{state}` for
 OAuth transactions and `sess:{sid}` for post-callback sessions. The BFF must
 not depend on Valkey-specific commands, modules, clustering behavior, or admin
-APIs. Redis-compatible alternatives should be swappable by configuration.
+APIs. Redis-compatible alternatives are swappable by configuration.
 
 This is a server-side state store, not just a cache. `sess:{sid}` contains
 tokens and claims and must be treated as sensitive state.
@@ -139,23 +142,27 @@ The BFF pattern (A1) is implemented as two services, not one:
   to the Auth Service via `/internal/refresh`. Itself a confidential client
   at Keycloak for the Client Credentials token used on `/internal/*`.
 
-Rationale: **adoptability and responsibility clarity.** Production OIDC
+Rationale: adoptability and responsibility clarity. Production OIDC
 deployments at meaningful scale almost always separate the OAuth surface
-from the API-gateway surface — different teams (identity vs. platform),
-different scaling characteristics (auth is low-frequency, big payload; API
-is high-frequency, small payload), different operational concerns. A
-reference that ships the split shape is one production readers recognize.
-The "BFF" name historically (Sam Newman, 2015) referred to a per-frontend
-API aggregator sitting post-auth; conflating that with the OAuth client
-role obscures both. The split lets each service do exactly one thing.
+from the API-gateway surface. They differ on three axes:
 
-The split does not change any protocol-level OIDC decision: Authorization
-Code + PKCE, ID-token validation, refresh-token rotation with reuse
-detection, audience binding, role mapping, RP-initiated logout, IdP
-portability, storage portability, single-wildcard `/api/**` with
-allowlist, RS-side explicit validation, virtual threads on the Spring
-services, dev cookie binding via forwarded headers. It is operational
-topology, not new OIDC content.
+- Different teams: identity vs. platform.
+- Different scaling characteristics: auth is low-frequency, big payload;
+  API is high-frequency, small payload.
+- Different operational concerns.
+
+A reference that ships the split shape is one production readers recognize.
+The "BFF" name historically (Sam Newman, 2015) referred to a per-frontend
+API aggregator sitting post-auth. Conflating that with the OAuth client
+role obscures both. The split lets each service do one thing.
+
+The split does not change any protocol-level OIDC decision. The following
+are all unchanged: Authorization Code + PKCE, ID-token validation,
+refresh-token rotation with reuse detection, audience binding, role mapping,
+RP-initiated logout, IdP portability, storage portability, single-wildcard
+`/api/**` with allowlist, RS-side explicit validation, virtual threads on the
+Spring services, and dev cookie binding via forwarded headers. It is
+operational topology, not new OIDC content.
 
 **Locked defaults captured with this decision:**
 
@@ -164,9 +171,9 @@ topology, not new OIDC content.
   Lua plugin that does tolerant session read from Valkey, bearer
   injection, signed-CSRF validation, and refresh delegation to the Auth
   Service. Custom Spring (WebMVC + virtual threads) and Spring Cloud
-  Gateway were considered; APISIX was chosen because the production-shape
+  Gateway were considered. APISIX was chosen because the production-shape
   argument that motivates the split applies to the Gateway runtime
-  itself — a real ingress data plane reads more truthfully than an
+  itself: a real ingress data plane reads more truthfully than an
   embedded Spring proxy. Spring Cloud Gateway is noted as a production
   alternative for organizations standardizing on a JVM ingress.
 - **Session-schema contract.** Tolerant reader on documented JSON: the API
@@ -182,7 +189,7 @@ topology, not new OIDC content.
   Resource Server for `/internal/*` with the configured internal-refresh
   audience (`oidc-reference-auth-internal` by local default). mTLS noted as
   production hardening.
-- **Ingress.** APISIX is itself the ingress in the full Compose stack — no
+- **Ingress.** APISIX is itself the ingress in the full Compose stack, with no
   separate Traefik or NGINX in front of it. The frontend dev loop uses the
   Vite proxy with two upstreams (`/auth/*` → Auth Service, `/api/**` →
   APISIX). Same `X-Forwarded-Host` discipline at both layers.
@@ -190,9 +197,8 @@ topology, not new OIDC content.
 Trade-off: five runtime services (Keycloak, Valkey, Auth Service, API
 Gateway, Resource Server; Keycloak uses embedded H2, no separate database).
 Cold-start time for the full Compose stack is on the order of 30–60s on a
-fast machine. Two
-secrets (Auth Service Keycloak secret, API Gateway Keycloak secret) plus
-the CSRF signing key are handled via env + bootstrap (E2).
+fast machine. Two secrets (Auth Service Keycloak secret, API Gateway Keycloak
+secret) plus the CSRF signing key are handled via env + bootstrap (E2).
 
 Spec: SPEC-0001 Auth Service + API Gateway Endpoints; SPEC-0001 API
 Gateway Architecture (APISIX); SPEC-0001 §7.1 `/internal/refresh` contract.
@@ -200,7 +206,7 @@ Gateway Architecture (APISIX); SPEC-0001 §7.1 `/internal/refresh` contract.
 ### A7. Nimbus oauth2-oidc-sdk Directly, Not spring-boot-starter-oauth2-client
 
 The Auth Service uses `com.nimbusds:oauth2-oidc-sdk` (the OAuth/OIDC client
-machinery) and `com.nimbusds:nimbus-jose-jwt` (JWS/JWE/JWK) **directly**,
+machinery) and `com.nimbusds:nimbus-jose-jwt` (JWS/JWE/JWK) directly,
 not the Spring Security OAuth2 Client starter. Spring Security still
 provides the filter chain (security headers, JWT decoder for the
 `/internal/*` Resource Server role); the OAuth flow itself bypasses
@@ -214,13 +220,13 @@ is unchanged. Two properties improve:
    client-authentication method dispatch, and the token-endpoint
    request/response shape become visible code in this reference rather
    than framework-internal behavior. For a teaching repo, the OAuth/OIDC
-   wire shape *is* the lesson.
+   wire shape is the lesson.
 2. **Portability.** The Nimbus helper classes
    (`AuthorizationCodeTokenExchangeClient`,
    `AuthorizationCodeTokenRefreshClient`, `JwtOidcIdTokenValidator`,
    `OidcProviderMetadata`) carry zero framework imports beyond `java.*`,
    `com.nimbusds.*`, and `jakarta.validation.*`. They lift unmodified into
-   Quarkus, Micronaut, Helidon, or plain servlets — only the host's DI
+   Quarkus, Micronaut, Helidon, or plain servlets. Only the host's DI
    annotations and HTTP request type need to change.
 
 **Alternatives surveyed and rejected.**
@@ -232,22 +238,21 @@ is unchanged. Two properties improve:
 - **`pac4j-oidc`.** Misadvertised as framework-agnostic; declares
   hard compile-time deps on `spring-core` and Guava.
 - **`jjwt`.** Cleaner fluent API for the JWT primitive but narrower spec
-  coverage; no built-in remote JWKS source. Would require pairing with a
-  separate OAuth client library — Nimbus already covers both.
+  coverage, with no built-in remote JWKS source. Would require pairing with
+  a separate OAuth client library. Nimbus already covers both.
 - **Quarkus / Micronaut OIDC client modules.** Hard-coupled to their
-  framework's filter chain — defeats the portability property above.
+  framework's filter chain, which defeats the portability property above.
 
 **Trade-off.** OIDC Core §3.1.3.7 validation is explicit code in
 `JwtOidcIdTokenValidator` (~60 LOC) rather than a one-line Spring
-configuration. This is the right trade for a reference: explicit
-validation is auditable; framework-default validation is a black box that
+configuration. This is the right trade for a reference. Explicit
+validation is auditable. Framework-default validation is a black box that
 moves between Spring versions.
 
-**Production-readiness deltas vs Spring's wrapping.** Nimbus's
-`JWKSourceBuilder` is uniquely sophisticated — refresh-ahead caching,
-rate limiting, retry, outage tolerance, force-refresh on unknown `kid`.
-Spring's `NimbusJwtDecoder` wraps the same library but exposes a narrower
-default configuration.
+**Deltas vs Spring's wrapping.** Nimbus's `JWKSourceBuilder` covers
+refresh-ahead caching, rate limiting, retry, outage tolerance, and
+force-refresh on unknown `kid`. Spring's `NimbusJwtDecoder` wraps the same
+library but exposes a narrower default configuration.
 
 Spec: SPEC-0001 Target Stack; `JwtOidcIdTokenValidator.java` (validator
 construction); `AuthorizationCodeTokenExchangeClient.java` (token-endpoint
@@ -262,12 +267,15 @@ objects with different lifetimes and different addressing schemes. They use
 logically distinct Redis-compatible keyspaces, not one framework-managed HTTP
 session blob.
 
-The framework default was rejected for three reasons. First, the reference
-diagram and tests need visible, inspectable `tx:{state}` and `sess:{sid}`
-objects. Second, keying pre-auth state by OAuth `state` eliminates the need to
-mint a pre-auth session cookie, which removes the session-fixation class this
-reference is trying to avoid. Third, incident response is simpler when the
-operator can inspect transaction and session records independently.
+The framework default was rejected for three reasons:
+
+- The reference diagram and tests need visible, inspectable `tx:{state}` and
+  `sess:{sid}` objects.
+- Keying pre-auth state by OAuth `state` eliminates the need to mint a
+  pre-auth session cookie, which removes the session-fixation class this
+  reference is trying to avoid.
+- Incident response is simpler when the operator can inspect transaction and
+  session records independently.
 
 Trade-off: custom transaction and session repositories are required.
 
@@ -282,19 +290,19 @@ Spec: SPEC-0001 State Store Keys; SPEC-0001 Session Lifecycle.
 The session cookie is `__Host-sid` with `HttpOnly`, `Secure`, `SameSite=Lax`,
 `Path=/`, and no `Domain`. After a successful OAuth callback the Auth Service
 returns a direct `302` to the same-origin-validated saved request URL.
-State-changing requests are protected by a **signed** double-submit CSRF
+State-changing requests are protected by a signed double-submit CSRF
 token (HMAC-signed or session-bound), not naive cookie-header match.
 
 What was rejected: `SameSite=Strict` plus an intermediate same-origin HTML
-landing page. The landing page is real engineering complexity — an HTML
+landing page. The landing page is added engineering complexity. It is an HTML
 response that becomes an XSS surface needing a tight CSP, additional test
 scaffolding, and a "this exists only to work around a cookie attribute" step
 in the architecture diagram. The threat `Strict` defends against beyond `Lax`
-is being-linkable-while-authenticated from a cross-site context, which is the
+is being-linkable-while-authenticated from a cross-site context. That is the
 intended behavior for most browser apps and is a concern only for narrow
 threat models (banking, certain compliance regimes). For the reference's
 threat model, the CSRF risks `Strict` would mitigate on state-changing
-requests are already fully covered by the signed double-submit CSRF token.
+requests are already covered by the signed double-submit CSRF token.
 Mainstream production BFF implementations (`oauth2-proxy`, Spring Cloud
 Gateway BFF samples, Auth0 / Curity reference docs) ship `SameSite=Lax`.
 
@@ -305,7 +313,7 @@ vulnerability on a sibling subdomain (`evil.example.com` against
 browser, defeating a naive cookie-equals-header check. Signing the token
 (HMAC-SHA256 over the token value with a server-side key, validated in
 constant time on receipt) or binding it to a server-side session record
-breaks the attack: the attacker cannot forge a valid signature.
+breaks the attack. The attacker cannot forge a valid signature.
 
 Trade-off: cross-site top-level GET navigation to the app lands the user
 authenticated. Acceptable for the reference's threat model and matches user
@@ -316,11 +324,11 @@ Spec: SPEC-0001 Session Cookie; SPEC-0001 CSRF.
 ### B3. Login-CSRF Defense Is State + PKCE + Nonce + `oauth_tx` Browser Binding
 
 Login-CSRF and cross-user session fixation are defended by the
-OIDC-standard combination — server-side `state` validated against
+OIDC-standard combination: server-side `state` validated against
 `tx:{state}`, PKCE code-verifier (S256, required even on the confidential
-client), and ID-token `nonce` validation — **plus** an `oauth_tx`
-browser-binding cookie whose HMAC is stored in `tx:{state}` and verified
-at the callback.
+client), and ID-token `nonce` validation. To this the reference adds an
+`oauth_tx` browser-binding cookie whose HMAC is stored in `tx:{state}` and
+verified at the callback.
 
 - **`state`** — generated server-side, persisted as the key of `tx:{state}`,
   validated on callback. A callback with an attacker-supplied state has no
@@ -335,16 +343,16 @@ at the callback.
   rejects when it does not match.
 
 **Why the first three are not enough.** RFC 9700 §4.7's `state` defense
-covers the case where the *victim* initiated the OAuth flow and the
-attacker cannot predict `state`. It does **not** cover the inverse: an
+covers the case where the victim initiated the OAuth flow and the
+attacker cannot predict `state`. It does not cover the inverse: an
 attacker who runs their own login flow at the AS, captures the resulting
 `(code, state)` callback URL, and induces the victim to load it (a crafted
 link, a redirect from an attacker page, an open-redirect chain in another
 property). The victim's browser then hits `/auth/callback/idp` with values
-the *attacker* controls; `tx:{state}` exists (the attacker created it),
-PKCE succeeds (the attacker generated the verifier), the ID-token `nonce`
+the attacker controls. `tx:{state}` exists (the attacker created it), PKCE
+succeeds (the attacker generated the verifier), and the ID-token `nonce`
 matches (the attacker chose it). The result is a session minted from the
-attacker's identity logged into the victim's browser — a session-fixation
+attacker's identity logged into the victim's browser: a session-fixation
 class attack.
 
 The `oauth_tx` cookie closes this: the victim's browser cannot present a
@@ -358,8 +366,8 @@ browser only sends it on the one path that needs it), one field in the
 `SignedCsrfSupport.hmacSha256` helper is reused, so no new crypto
 machinery.
 
-The threat is real and the OIDC standards do not cover it directly;
-equivalent browser-binding cookies are documented in Curity's and Auth0's
+The threat is real and the OIDC standards do not cover it directly.
+Equivalent browser-binding cookies are documented in Curity's and Auth0's
 BFF reference patterns. See `OAuthTxBinding.java` for the implementation and
 SPEC-0001 §"State Store Keys" for the wire shape.
 
@@ -368,7 +376,7 @@ verification.
 
 ### B4. Signed Double-Submit CSRF
 
-State-changing requests use a **signed** double-submit CSRF token. The Auth
+State-changing requests use a signed double-submit CSRF token. The Auth
 Service issues `XSRF-TOKEN` as a JS-readable cookie whose value is
 `<token-value-base64>.<hmac-base64>` where the HMAC is
 HMAC-SHA256(signing_key, token-value-base64). The SPA echoes the full signed
@@ -383,11 +391,11 @@ an XSS or `document.cookie` write vulnerability on a sibling subdomain
 (`evil.example.com` against `app.example.com`) can set a matching cookie and
 header pair in the victim's browser, satisfying a naive
 cookie-equals-header check from a cross-site request. Signing the token
-breaks the attack — the attacker cannot forge a valid HMAC without the
+breaks the attack: the attacker cannot forge a valid HMAC without the
 server-side key. A session-bound variant (the token contains or hashes the
-`sid`) is an equivalent defense; the HMAC variant is the reference's
-chosen shape because it does not require a `sess:{sid}` lookup before
-signature validation.
+`sid`) is an equivalent defense. The HMAC variant is the reference's chosen
+shape because it does not require a `sess:{sid}` lookup before signature
+validation.
 
 The synchronizer-token pattern was considered. It is acceptable, but it
 adds another server lookup for a same-origin SPA-to-API-Gateway flow where
@@ -433,7 +441,7 @@ The BFF must emit an audit event when refresh reuse or refresh failure causes
 session invalidation.
 
 Rotation creates a known concurrency race: two concurrent BFF requests can both
-detect an expiring access token and both try to refresh. One wins; the other
+detect an expiring access token and both try to refresh. One wins. The other
 can make the rotated token appear reused. The BFF serializes the refresh window
 per session.
 
@@ -502,8 +510,8 @@ Service's `/internal/refresh` Keycloak round-trip. Virtual threads scale
 this workload without forcing the project into a reactive programming model.
 
 The API Gateway is APISIX (OpenResty / nginx + Lua), not a Spring service,
-so D1 does not apply to it. APISIX's own request model — nginx worker
-processes with cooperative Lua coroutines per request — is the
+so D1 does not apply to it. APISIX's own request model (nginx worker
+processes with cooperative Lua coroutines per request) is the
 production-shape equivalent for the Gateway's small, latency-sensitive
 routing workload.
 
@@ -526,7 +534,7 @@ The reference has two ingress shapes:
   `/auth/*` → Auth Service (`:8081`), `/api/**` → APISIX (`:9080`). Both
   legs set `X-Forwarded-Host` / `-Proto` / `-Port` so the browser sees a
   single SPA origin.
-- **Full Compose run.** APISIX is the ingress directly — there is no
+- **Full Compose run.** APISIX is the ingress directly; there is no
   separate ingress proxy in front of it. APISIX terminates the browser
   connection, routes `/auth/*` to the Auth Service and `/api/**` through
   its own `bff-session` plugin to the Resource Server, and forwards the
