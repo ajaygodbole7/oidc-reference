@@ -89,7 +89,7 @@ Appendix A and `provider-adapters.md` §"Portability scope" enumerate every knob
 | Component | Role |
 |---|---|
 | `frontend/` | React + TypeScript SPA. Cookie-authenticated. No OIDC client library in the browser. |
-| `auth-service/` | Confidential OIDC client (Nimbus `oauth2-oidc-sdk`). Owns `/auth/*`, the OAuth round-trip, session storage, and `/internal/refresh`. |
+| `auth-service/` | Confidential OIDC client (Nimbus `oauth2-oidc-sdk`). Owns `/auth/*`, the OAuth round-trip, session storage, and `/internal/resolve`. |
 | `api-gateway/` | APISIX standalone + custom Lua plugin (`bff-session`). Owns `/api/**` allowlist, `sess:{sid}` lookup, bearer injection, signed-CSRF validation, and refresh delegation. |
 | `backend-resource-server/` | JWT validation only; never sees session cookies. |
 | `authorization-server/` | Keycloak realm + Compose service. |
@@ -167,11 +167,14 @@ sequenceDiagram
 
 ### Authenticated request — proxy and transparent refresh
 
-Every `/api/**` call carries only the opaque session cookie. The gateway looks up
-the session, refreshes the access token when it is near expiry (delegating to the
-Auth Service over an internal RPC authenticated with Client Credentials; the Auth
-Service holds the refresh token), then injects a bearer for the
-Resource Server.
+Every `/api/**` call carries only the opaque session cookie. The gateway holds no
+session store handle: it resolves the sid via the Auth Service's
+`/internal/resolve` (authenticated with Client Credentials over an internal RPC).
+The Auth Service looks up the session, slides the idle window, refreshes the
+access token when it is near expiry, and returns the current token; the gateway
+injects it as a bearer for the Resource Server. This is the phantom-token pattern
+— only the Auth Service touches the session store (see
+[`docs/architecture/phantom-token-session-resolution.md`](docs/architecture/phantom-token-session-resolution.md)).
 
 ```mermaid
 sequenceDiagram
@@ -183,15 +186,16 @@ sequenceDiagram
     participant K as IdP
     participant R as Resource Server
 
-    B->>G: GET /api/… (Cookie: __Host-sid, CSRF)
-    G->>V: Look up session by sid
+    B->>G: GET /api/… (Cookie __Host-sid, CSRF)
+    Note over G: The gateway holds no store handle — it resolves the sid via the Auth Service.
+    G->>A: POST /internal/resolve (gateway service token + sid)
+    A->>V: Look up session, slide the idle window
     opt access token near expiry
-        G->>A: POST /internal/refresh (gateway service token + sid)
         A->>K: Refresh-token grant
         K-->>A: rotated access + refresh tokens
         A->>V: Update session
-        A-->>G: 200 (refreshed)
     end
+    A-->>G: 200 access_token
     G->>R: GET /api/… + Authorization: Bearer access_token
     Note over G,R: Gateway strips the inbound cookie and injects the bearer.<br/>The browser never sends or sees a token.
     R->>R: Validate JWT (iss, sig, aud, exp, scope/roles)
@@ -224,7 +228,7 @@ JavaScript: the Auth Service hands back a same-origin, single-use handle and emi
 the IdP redirect itself from `/auth/logout/continue`.
 
 Wire-level detail — exact cookie attributes, TTLs, validation rules, and the
-`/internal/refresh`, `sess:{sid}`, and signed-CSRF contracts — lives in
+`/internal/resolve`, `sess:{sid}`, and signed-CSRF contracts — lives in
 [SPEC-0001](docs/specs/SPEC-0001-core-oidc-flows.md).
 
 ### Service-to-service — Client Credentials
@@ -375,7 +379,7 @@ enforcement, refresh delegation, and RP-initiated logout through the same-origin
 
 - [`docs/specs/SPEC-0001-core-oidc-flows.md`](docs/specs/SPEC-0001-core-oidc-flows.md)
   — the build contract. Wire formats for `sess:{sid}`, `tx:{state}`,
-  `/internal/refresh`, signed CSRF; threat model; trust boundaries.
+  `/internal/resolve`, signed CSRF; threat model; trust boundaries.
   Appendix A is the vendor-swap matrix.
 - [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
   — rationale + rejected alternatives.

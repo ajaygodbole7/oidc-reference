@@ -31,7 +31,7 @@ tests/smoke.sh
   `http://127.0.0.1:9080/auth/callback/idp` for APISIX-fronted local
   harnesses)
 - API Gateway client (confidential, Client Credentials only):
-  `oidc-reference-api-gateway` — authenticates to `/internal/refresh`.
+  `oidc-reference-api-gateway` — authenticates to `/internal/resolve`.
 - Service client (confidential): `oidc-reference-service`
 - API audience: `oidc-reference-api` via the `api.audience` client scope
   protocol mapper.

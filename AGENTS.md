@@ -19,10 +19,10 @@ Five directories, five components, no cloud.
 - `frontend/` — React SPA, cookie-authenticated, no in-browser OIDC library.
 - `auth-service/` — Spring Boot Auth Service, OAuth2 confidential client +
   custom Redis-compatible `tx:{state}` and `sess:{sid}` repositories,
-  per-session refresh lock, `/internal/refresh` as OAuth Resource Server.
+  per-session refresh lock, `/internal/resolve` as OAuth Resource Server.
 - `api-gateway/` — APISIX gateway, `/api/**` routing with allowlist,
   tolerant `sess:{sid}` reader, bearer injection, signed CSRF validation,
-  Client Credentials to call `/internal/refresh`.
+  Client Credentials to call `/internal/resolve`.
 - `backend-resource-server/` — Spring Boot Resource Server, JWT validation
   only.
 - `authorization-server/` — Keycloak realm + Compose.
@@ -43,7 +43,7 @@ Service owns OAuth/OIDC client behavior and writes `tx:{state}` and
 `sess:{sid}`. The API Gateway owns routing, the `/api/**` allowlist, and
 the tolerant `sess:{sid}` reader. They share only the documented JSON
 schema in SPEC-0001 §"`sess:{sid}` schema contract" and the
-`/internal/refresh` contract.
+`/internal/resolve` contract.
 
 Coordinate before editing `AGENTS.md`, root build files, root
 `compose.yaml`, shared verification scripts, or Keycloak realm files once

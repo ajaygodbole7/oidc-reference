@@ -122,12 +122,12 @@ its major line.
   directly. There is no separate ingress proxy in front of it.
 - **Auth Service**: Java 25, Spring Boot 4, Spring Security
   OAuth2 Client, custom Redis-compatible transaction and session
-  repositories. Owns `/auth/*` and `/internal/refresh`. Acts as an OAuth
+  repositories. Owns `/auth/*` and `/internal/resolve`. Acts as an OAuth
   Resource Server for `/internal/*`.
 - **API Gateway**: APISIX (OpenResty / nginx + Lua), current stable. Routes
-  declared in `config.yaml`. Custom Lua plugin `bff-session` performs
-  tolerant `sess:{sid}` read from Valkey, bearer injection, signed-CSRF
-  validation, and refresh delegation to the Auth Service.
+  declared in `config.yaml`. Custom Lua plugin `bff-session` resolves the
+  opaque sid via the Auth Service (`/internal/resolve`), injects the returned
+  bearer, and validates signed CSRF. It holds no session store handle.
 - **Resource Server**: Java 25, Spring Boot 4, Spring Security
   OAuth2 Resource Server. JWT validation only.
 - **OIDC endpoint split**: `issuer-uri` remains the canonical
@@ -137,8 +137,8 @@ its major line.
   and internal `token-uri` / `jwks-uri`; Resource Server validates the
   canonical issuer while fetching keys from an internal `jwk-set-uri`.
 - **Session store**: Redis-compatible server-side state store. Local
-  reference: Valkey 9. Writer: Auth Service. Reader on the bearer-injection
-  path: API Gateway (tolerant reader, see §7.2).
+  reference: Valkey 9. Writer and sole reader: Auth Service — the API Gateway
+  resolves the sid via `/internal/resolve` and never reads the store (§7.1).
 - **Authorization Server**: Keycloak.
 - **Local infra**: Docker Compose.
 - **Tests**: backend unit/integration, APISIX route + plugin tests,
@@ -221,7 +221,7 @@ except through documented configuration.
 - Default scopes: `auth.internal`.
 - Used by the APISIX `bff-session` plugin to obtain a service token whose
   `aud` contains the configured internal-refresh audience. The token is
-  presented as the Bearer credential on `POST /internal/refresh` calls to
+  presented as the Bearer credential on `POST /internal/resolve` calls to
   the Auth Service.
 - Token cache: the Gateway holds a single in-process cached token per
   worker, refreshed proactively when remaining lifetime falls below 60s.
@@ -319,13 +319,13 @@ protocol-relative, no leading slash, overlong, encoded backslash).
 
 | Path | Method | Auth | Purpose |
 |---|---|---|---|
-| `/api/**` | any | session | Single wildcard handler with a path-pattern allowlist (declared in APISIX `config.yaml`; default `/api/me`, `/api/user-data`, `/api/admin`); paths outside the allowlist return 404. On no-session: top-level navigation → `302 /auth/login?return_to=<URL>`; XHR → `401`. With session: tolerant-read `sess:{sid}` (§7.2); if `access_token_expires_at` is within the refresh window, call `POST /internal/refresh` on the Auth Service (§7.1) and re-read `sess:{sid}`; proxy to Resource Server with `Authorization: Bearer <access_token>`. Strip inbound `Cookie` and hop-by-hop headers; forward query string. Validate signed CSRF (§7.3) on state-changing requests. Response `Cache-Control: no-store`. |
+| `/api/**` | any | session | Single wildcard handler with a path-pattern allowlist (declared in APISIX `config.yaml`; default `/api/me`, `/api/user-data`, `/api/admin`); paths outside the allowlist return 404. On no-session: top-level navigation → `302 /auth/login?return_to=<URL>`; XHR → `401`. With a session cookie: `POST /internal/resolve` on the Auth Service (§7.1) — it looks up the session, slides the idle TTL, refreshes the access token if near expiry, and returns it; proxy to Resource Server with `Authorization: Bearer <access_token>` from the resolve response. The gateway holds no store handle. Strip inbound `Cookie` and hop-by-hop headers; forward query string. Validate signed CSRF (§7.3) on state-changing requests. Response `Cache-Control: no-store`. |
 
 ### Internal RPCs
 
 | Path | Method | Auth | Purpose |
 |---|---|---|---|
-| `/internal/refresh` | POST | Client Credentials (Bearer JWT, `aud` contains configured internal-refresh audience; `azp`/`client_id` equals configured gateway client id) | Auth Service endpoint, called by the API Gateway. Local defaults are `oidc-reference-auth-internal` and `oidc-reference-api-gateway`. Reachable only on the internal Compose network — never via the browser-facing ingress. Performs the refresh-token grant against Keycloak under a per-session lock, validates rotation, emits the `refresh_token_rejected` audit event on `invalid_grant`, and updates `sess:{sid}`. Full contract per §7.1. |
+| `/internal/resolve` | POST | Client Credentials (Bearer JWT, `aud` contains configured internal-refresh audience; `azp`/`client_id` equals configured gateway client id) | Auth Service endpoint, called by the API Gateway on every `/api/**` request. Local defaults are `oidc-reference-auth-internal` and `oidc-reference-api-gateway`. Reachable only on the internal Compose network — never via the browser-facing ingress. Looks up `sess:{sid}`, slides the idle TTL, and returns the current access token; on a near-expiry token it performs the refresh-token grant against Keycloak under a per-session lock, validates rotation, and emits the `refresh_token_rejected` audit event on `invalid_grant`. Full contract per §7.1. |
 
 ### Session Cookie
 
@@ -358,8 +358,8 @@ of `sess:{sid}` on the bearer-injection path.
   does not match the stored hash. The cookie is single-use, evicted on callback
   (success or failure). Defends against an attacker who exfiltrated `(code, state)`
   but does not hold the originating browser's cookie.
-- `sess:{sid}` → see §7.2 for the full schema and the tolerant-reader
-  contract. Sliding idle TTL (default 30m via `SESSION_IDLE_TTL`), absolute cap
+- `sess:{sid}` → see §7.2 for the full schema (Auth-Service-private).
+  Sliding idle TTL (default 30m via `SESSION_IDLE_TTL`), absolute cap
   (default 8h via `SESSION_MAX_TTL`, kept ≤ the IdP SSO max). Written
   by the Auth Service's custom state-store session repository after callback; not
   stored in a framework-managed HTTP session.
@@ -376,10 +376,9 @@ of `sess:{sid}` on the bearer-injection path.
 
 ### Refresh and Rotation
 
-- The API Gateway initiates refresh when `sess:{sid}.access_token_expires_at`
-  is within 60s. Refresh is delegated to the Auth Service via
-  `POST /internal/refresh` (§7.1); the Gateway does not call Keycloak
-  directly for refresh.
+- The Auth Service initiates refresh inside `/internal/resolve` when
+  `sess:{sid}.access_token_expires_at` is within 60s; the Gateway just calls
+  resolve on every `/api/**` request and never calls Keycloak directly (§7.1).
 - Refresh tokens are rotated; reuse invalidates the session and emits a
   security audit log event from the Auth Service.
 - The rotation-requirement knob (`app.refresh-require-rotation`) and the
@@ -389,13 +388,14 @@ of `sess:{sid}` on the bearer-injection path.
 
 ### Concurrency
 
-Concurrent `/api/**` requests on a single session can both detect an
-expiring access token and both call `/internal/refresh`. With rotation
+Concurrent `/api/**` requests on a single session can both resolve a near-expiry
+access token and both reach the refresh leg of `/internal/resolve`. With rotation
 (`refreshTokenMaxReuse: 0`) a second concurrent refresh against Keycloak
 would fail with `invalid_grant` and destroy the session. The Auth Service
 serializes the refresh window with a per-session lock so only one refresh
 is in flight per session. The second caller re-reads `sess:{sid}` under
-the lock and returns the already-rotated token. The in-process lock map
+the lock and returns the already-rotated token. The lock-free fresh path is not
+serialized — only the near-expiry refresh takes the lock. The in-process lock map
 is bounded by session lifetime. A clustered Auth Service must replace it
 with a distributed lock (e.g., Valkey `SET NX EX`).
 
@@ -525,7 +525,7 @@ format, validation algorithm, and signing-key handling.
 | Open redirect | Saved-request target is same-origin validated; Auth-Service-issued redirects use fixed or allowlisted targets |
 | Access token replay | Short access-token lifetime; audience binding |
 | Audience confusion | Auth Service validates `id_token.aud = oidc-reference-auth`; Auth Service `/internal/*` validates Bearer `aud` contains the configured internal-refresh audience and `azp/client_id` equals the configured gateway client id; RS validates `access_token.aud` contains the configured API audience |
-| Internal-RPC compromise | `/internal/refresh` reachable only on the internal Compose network; Bearer-validated Client Credentials with audience binding; per-session lock prevents concurrent refresh races |
+| Internal-RPC compromise | `/internal/resolve` reachable only on the internal Compose network; Bearer-validated Client Credentials with audience binding; per-session lock prevents concurrent refresh races |
 | CSRF signing-key compromise | 256-bit env-supplied secret, gitignored; current implementation is single-key hard cutover. Dual-key grace-window rotation is production hardening. |
 | Overbroad scopes | Per-client default scopes are least-privilege |
 | Role mapping drift | Single mapping path tested both ends |
@@ -557,20 +557,20 @@ add a fourth service that violates them.
   `oidc-reference-auth-internal`. No shared secrets between services, no
   trusted-network assumption.
 
-- **Gateway → Valkey, Auth Service → Valkey.** Shared single-tenant
-  keystore. The Auth Service is the **sole writer** to `tx:*` and
-  `sess:*`. The Gateway is the **sole non-Auth-Service reader** of
-  `sess:*` (only the two required fields named in §7.2). No other
-  service may read or write these keyspaces. Trust here is via
-  infrastructure isolation: Valkey is on the internal network with no
-  host port in production-shape deployments, and no AUTH is configured
-  in the local reference (production must add one). A fourth reader or
-  writer would introduce a confused-deputy class of bug.
+- **Auth Service → Valkey.** The Auth Service is the **sole reader and
+  writer** of `tx:*` and `sess:*`. Under the phantom-token topology the
+  Gateway has no Valkey client at all — it resolves the sid via
+  `/internal/resolve` (§7.1), so the session store is reachable only from the
+  Auth Service. Trust here is via infrastructure isolation: Valkey is on the
+  internal network with no host port in production-shape deployments, and no
+  AUTH is configured in the local reference (production must add one). Any
+  second reader or writer of these keyspaces would introduce a confused-deputy
+  class of bug.
 
 - **Auth Service → Keycloak, Gateway → Keycloak.** Each service
   authenticates to Keycloak as its own confidential client. Tokens
   obtained by one service are never lent to the other. The Gateway's
-  CC token (for `/internal/refresh`) and Auth Service's user-flow
+  CC token (for `/internal/resolve`) and Auth Service's user-flow
   tokens (for the OIDC dance) are issued independently.
 
 - **Tokens never reach the browser.** This is preserved verbatim from
@@ -587,26 +587,27 @@ declared in `config.yaml`; runtime configuration is reloaded without
 restarting the worker processes.
 
 **Custom plugin: `bff-session`.** A single Lua plugin attached to every
-`/api/**` route does the BFF-side gateway work in one pass per request:
+`/api/**` route does the BFF-side gateway work in one pass per request. The
+gateway holds **no session store handle** — it carries only the opaque sid and
+resolves it via the Auth Service (the phantom-token pattern, §7.1):
 
-1. **Session lookup.** Read `__Host-sid` (or `sid` in local HTTP) and
-   `GET sess:{sid}` from Valkey via the `lua-resty-redis` client. Apply
-   the tolerant-reader contract (§7.2): consume only `access_token` and
-   `access_token_expires_at`; treat any payload missing those fields as
-   "no session" and log.
-2. **No-session branching.** Distinguish top-level navigation from XHR
-   using Fetch Metadata: `Sec-Fetch-Mode: navigate` +
+1. **Cookie read.** Read the opaque sid from `__Host-sid` (or `sid` in local
+   HTTP). No store lookup — the gateway has no Redis/Valkey client.
+2. **No-session branching.** With no sid cookie, distinguish top-level
+   navigation from XHR using Fetch Metadata: `Sec-Fetch-Mode: navigate` +
    `Sec-Fetch-Dest: document` (with `Accept: text/html` as fallback) →
    respond `302 /auth/login?return_to=<original-URL>`; otherwise → `401`
-   with no `Location` header.
-3. **Refresh check.** If `access_token_expires_at` is within 60s,
-   call `POST /internal/refresh` on the Auth Service (§7.1) with the
-   cached configured gateway-client service token. Map response codes to
-   browser-facing status per the §7.1 handling table. On 200, re-read
-   `sess:{sid}` to pick up the rotated access token.
-4. **Signed CSRF validation.** On state-changing methods
+   with no `Location` header. This fires before any resolve call.
+3. **Signed CSRF validation.** On state-changing methods
    (`POST`/`PUT`/`DELETE`/`PATCH`), validate the signed double-submit
-   token per §7.3. Mismatch or invalid signature → 403.
+   token per §7.3 (stateless — cookie + header + sid, no store read).
+   Mismatch or invalid signature → 403.
+4. **Resolve.** `POST /internal/resolve` on the Auth Service (§7.1) with the
+   cached configured gateway-client service token and the sid. The Auth
+   Service looks up the session, slides the idle TTL, refreshes the access
+   token if near expiry, and returns the current `access_token`. Map response
+   codes to browser-facing status per the §7.1 handling table; on 200, take
+   the `access_token` from the response body.
 5. **Path allowlist.** The allowlist is the set of route patterns
    declared in APISIX `config.yaml`; paths outside the allowlist match
    no route and APISIX returns 404 before the plugin runs.
@@ -623,7 +624,7 @@ remaining lifetime falls below 60s; serialized with a worker-local lock so
 concurrent requests do not trigger duplicate Keycloak calls. Invalidated
 on Auth Service 401 (per §7.1).
 
-**Timeouts on `/internal/refresh`** per §7.1: connect 1s, read 5s.
+**Timeouts on `/internal/resolve`** per §7.1: connect 1s, read 5s.
 Rolling-window circuit breaking is not implemented in the reference
 gateway; APISIX's built-in `api-breaker` plugin is the production
 primitive to add when operating beyond local reference scope.
@@ -635,10 +636,19 @@ plus §7.1, §7.2, and §7.3.
 
 ## 7. Internal Contracts
 
-### 7.1 `/internal/refresh` Contract
+### 7.1 `/internal/resolve` Contract
+
+The API Gateway holds only the opaque sid. On every `/api/**` request it calls
+`/internal/resolve` to obtain the current access token to inject upstream. This is
+the **phantom-token pattern** (see
+`docs/architecture/phantom-token-session-resolution.md`): the gateway never reads
+the session store and has no knowledge of the `sess:{sid}` schema; the Auth Service
+is the only component that touches the store. Resolve folds three things the
+gateway used to split between a direct Valkey read and `/internal/refresh`:
+session lookup, the idle-TTL slide, and refresh-when-near-expiry.
 
 ```
-POST /internal/refresh
+POST /internal/resolve
 Host: auth-service  (internal network only; not reachable via Ingress)
 Authorization: Bearer <api-gateway service token>
 Content-Type: application/json
@@ -657,72 +667,74 @@ Bearer-token validation requirements (Auth Service):
   - azp or client_id = configured gateway client id
               (default "oidc-reference-api-gateway")
   - alg     = RS256
-  - scope   contains "internal.refresh"  (only if scope-based authorization
-            is enabled — NOT enabled in this reference; the code checks
-            audience + azp/client_id binding, which is sufficient)
 
 Success response:
   HTTP/1.1 200 OK
   Content-Type: application/json
   {
-    "refreshed_at": "<ISO-8601 UTC>",
+    "access_token": "<current access token JWT>",
     "access_token_expires_at": "<ISO-8601 UTC>"
   }
+  The gateway injects access_token as the upstream Authorization: Bearer. The
+  token travels gateway <- Auth Service over the internal RPC only; it is never
+  logged (the audit hashes sid/sub) and never reaches the browser.
 
 Error responses:
   HTTP/1.1 401 Unauthorized
     - Bearer token invalid, expired, or wrong audience/client.
-    - Body: application/problem+json with non-secret reason.
 
   HTTP/1.1 404 Not Found
-    - No sess:{sid} exists for the given sid (session expired,
-      logged out, or never existed).
-    - Body: application/problem+json.
+    - No sess:{sid} for the sid (expired, logged out, or never existed); OR the
+      absolute ceiling was passed; OR the refresh token was itself already
+      expired — in the latter two the session is deleted. A predictable session
+      end, not a failed grant.
 
   HTTP/1.1 409 Conflict
     - Refresh rejected by Keycloak (invalid_grant) — session invalidated.
     - Auth Service emits the refresh_token_rejected audit event before returning.
-    - Body: application/problem+json.
 
   HTTP/1.1 502 Bad Gateway
-    - Keycloak unreachable or refresh-token grant failed for non-
-      reuse reason.
-    - Body: application/problem+json.
+    - Keycloak unreachable or refresh-token grant failed for non-reuse reason.
+
+  All error bodies are application/problem+json with a non-secret reason.
 
 Auth Service preconditions and behavior:
   1. Validate the Bearer token per the requirements above.
   2. Look up sess:{sid} in Valkey. If missing, return 404.
-  3. Acquire the per-session refresh lock (in-process ReentrantLock
-     keyed by sid; or Valkey SET NX EX for clustered deployments).
-  4. Re-read sess:{sid} under the lock (another caller may have just
-     refreshed).
-  5. If access_token_expires_at is still within the no-refresh window
-     (> threshold seconds from now), return 200 with current expiry.
-     This makes /internal/refresh idempotent under contention.
-  6. Otherwise, if the refresh token is itself already past expiry, emit the
-     refresh_rejected (refresh_token_expired) audit event, DEL sess:{sid},
-     release lock, return 404 — a predictable session end, not a failed grant,
-     so it never reaches the reuse/rejection path below.
-  7. Otherwise, POST grant_type=refresh_token to Keycloak.
-  8. On invalid_grant from Keycloak (refresh token expired/revoked, SSO max
-     reached, or genuine reuse — RFC 6749 §5.2 does not distinguish them, and
-     the RP cannot attribute the cause): emit the refresh_token_rejected /
-     session_invalidated audit event, DEL sess:{sid}, release lock, return 409.
-  9. On success: validate rotation (new refresh token differs from
-     old), update sess:{sid} with new tokens and new
-     access_token_expires_at, release lock, return 200.
-  10. On other Keycloak failure: release lock, return 502.
+  3. If absolute_expires_at is past the ceiling, DEL sess:{sid}, return 404.
+  4. Slide the idle TTL: EXPIRE sess:{sid} to min(idle window, remaining
+     absolute). This is the /api-activity slide that used to live in the gateway.
+     (/auth/me is a liveness read and never slides — see §7.2.)
+  5. FRESH PATH (lock-free): if access_token_expires_at is NOT within the refresh
+     window, return 200 with the current access_token + expiry. No lock, no
+     Keycloak call — the hot path taken by the vast majority of /api requests.
+  6. NEAR-EXPIRY PATH: acquire the per-session refresh lock (in-process
+     ReentrantLock keyed by sid; or Valkey SET NX EX for clustered deployments).
+  7. Re-read sess:{sid} under the lock and re-check the window (another caller may
+     have just refreshed). If now fresh, return 200 with the current token —
+     this makes the near-expiry path idempotent under contention.
+  8. If the refresh token is itself already past expiry, emit
+     refresh_token_expired, DEL sess:{sid}, release lock, return 404.
+  9. POST grant_type=refresh_token to Keycloak.
+ 10. On invalid_grant (refresh token expired/revoked, SSO max reached, or genuine
+     reuse — RFC 6749 §5.2 does not distinguish them, and the RP cannot attribute
+     the cause): emit refresh_token_rejected / session_invalidated, DEL
+     sess:{sid}, release lock, return 409.
+ 11. On success: validate rotation (new refresh token differs from old), update
+     sess:{sid} with the new tokens and access_token_expires_at, release lock,
+     return 200 with the new access_token.
+ 12. On other Keycloak failure: release lock, return 502.
 ```
 
-**API Gateway-side handling of each `/internal/refresh` response.**
+**API Gateway-side handling of each `/internal/resolve` response.**
 
 | Status | Gateway action |
 |---|---|
-| 200 | Re-read `sess:{sid}` to pick up the rotated access token; proceed with the original request. |
-| 401 | The Gateway's own Client Credentials token failed validation at Auth Service. Invalidate the Gateway's cached service token, fetch a new one from Keycloak, retry the refresh call **once**. If the second attempt also returns 401, return `502` to the browser and emit a Gateway-side security audit event — the Gateway's identity is misconfigured or its Keycloak client has been disabled. |
-| 404 | Session was logged out concurrently or expired between the Gateway's read and the refresh attempt. Return `401` to the browser, expire `__Host-sid`, and rely on the SPA to trigger a fresh login on the next top-level navigation. |
+| 200 | Inject the returned `access_token` as `Authorization: Bearer` and proxy the request upstream. No store read — the token is in the response body. |
+| 401 | The Gateway's own Client Credentials token failed validation at Auth Service. Invalidate the Gateway's cached service token, fetch a new one from Keycloak, retry the resolve call **once**. If the second attempt also returns 401, return `502` to the browser and emit a Gateway-side security audit event — the Gateway's identity is misconfigured or its Keycloak client has been disabled. |
+| 404 | Session was logged out concurrently, expired, or hit the absolute ceiling. Return `401` to the browser, expire `__Host-sid`, and rely on the SPA to trigger a fresh login on the next top-level navigation. This is the instant-revocation path: a server-side `DEL sess:{sid}` makes the very next resolve a 404. |
 | 409 | Refresh rejected by Keycloak (`invalid_grant`) — Auth Service has invalidated `sess:{sid}` and emitted the `refresh_token_rejected` audit event (the cause may be reuse, but is not provable at the RP). Return `401` to the browser, expire `__Host-sid`, and emit a Gateway-side audit event for trace correlation. |
-| 502 | Keycloak transient failure during refresh. Return `503 Service Unavailable` to the browser with `Retry-After: 1`. Do **not** expire `__Host-sid` — the session itself is still valid; refresh is temporarily unavailable. |
+| 502 | Keycloak transient failure during resolve's refresh leg. Return `503 Service Unavailable` to the browser with `Retry-After: 1`. Do **not** expire `__Host-sid` — the session itself is still valid; refresh is temporarily unavailable. |
 
 **Client Credentials token cache (API Gateway).**
 
@@ -737,10 +749,12 @@ The API Gateway holds a cached service token issued by Keycloak under
   trigger duplicate Keycloak calls.
 - On Keycloak unavailability during proactive refresh: use the still-
   valid cached token until expiry. If expiry is reached and Keycloak
-  is still unreachable, fail closed — return `503` for inbound API
-  requests that need to call `/internal/refresh`. Inbound requests
-  that do not need refresh (access token still fresh in `sess:{sid}`)
-  are unaffected.
+  is still unreachable, fail closed — return `503` for inbound `/api`
+  requests. Under the phantom-token topology **every** `/api` request
+  calls `/internal/resolve`, so a dead CC token blocks all of them: there
+  is no longer a gateway-side fast path that skips the Auth Service. The
+  CC-token cache lifetime is therefore the availability floor for the
+  whole `/api` surface.
 - On 401 from Auth Service for the Gateway's token (per the failure
   table above): invalidate the cache entry and re-fetch.
 - The cache is **not** shared across Gateway workers or instances. Each
@@ -751,38 +765,30 @@ The API Gateway holds a cached service token issued by Keycloak under
   serializes through a single IdP token call. Cheap mitigation: make the skew a
   fraction of `expires_in` rather than a fixed 60 s.
 
-**Timeout and circuit-breaker on `/internal/refresh`.**
+**Timeout and circuit-breaker on `/internal/resolve`.**
 
-The Gateway's call to `/internal/refresh`:
+The Gateway's call to `/internal/resolve`:
 
 - Connect timeout: 1 s.
-- Read timeout: 5 s. The call may include a Keycloak round-trip inside
-  Auth Service; 5 s is generous for healthy operation and tight enough
-  to fail fast under contention.
+- Read timeout: 5 s. The near-expiry leg may include a Keycloak round-trip
+  inside Auth Service; 5 s is generous for healthy operation (the lock-free
+  fresh path is far faster) and tight enough to fail fast under contention.
 - Rolling-window circuit breaking is production hardening, not shipped
   reference behavior. If added with APISIX `api-breaker`, it must
   distinguish *transport / 5xx* failures from *200 / 401 / 404 / 409*
   responses so normal session-loss conditions do not trip the breaker.
 
-### 7.2 `sess:{sid}` Schema Contract
+### 7.2 `sess:{sid}` Schema (Auth-Service-private)
 
-The Valkey value at key `sess:{sid}` is a JSON object. The Auth Service
-is the sole writer. The API Gateway is the sole reader for the bearer-
-injection path; it uses a **tolerant reader** that consumes only the
-fields it needs.
+The Valkey value at key `sess:{sid}` is a JSON object. Under the phantom-token
+topology the Auth Service is its **sole writer and sole reader** — the API
+Gateway never touches it (it resolves the sid via `/internal/resolve`, §7.1, and
+receives only the access token). The schema is therefore an Auth Service internal
+detail, **not** a cross-component wire contract: the Auth Service can change it
+freely without coordinating a gateway change. It is documented here as a
+reference.
 
-Required fields (API Gateway depends on these):
-
-```
-{
-  "access_token":             "<JWT>",                 // string
-  "access_token_expires_at":  "<ISO-8601 UTC>",        // string
-  ... // other fields ignored by the API Gateway
-}
-```
-
-Full schema (Auth Service writes; reserved for Auth Service internal
-use beyond what the Gateway needs):
+Full schema (Auth Service writes and reads):
 
 ```
 {
@@ -806,7 +812,7 @@ use beyond what the Gateway needs):
 `absolute_expires_at` is the hard ceiling (default 8h from `created_at`, kept
 ≤ the IdP's SSO max session lifespan) past
 which the session MUST be evicted regardless of sliding TTL. The Auth Service
-re-checks this on every `/auth/me` read and on every `/internal/refresh`.
+re-checks this on every `/auth/me` read and on every `/internal/resolve`.
 Crossing the boundary during a refresh round-trip causes an explicit DEL +
 404 instead of relying on backend-dependent `EXPIRE k 0` semantics.
 
@@ -814,51 +820,33 @@ The signed CSRF token (§7.3) is issued to the browser as the `XSRF-TOKEN`
 cookie on the same 302 that sets `__Host-sid`; it is not stored in
 `sess:{sid}`. Validation is stateless: cookie and header must match, and
 the HMAC must verify against `token-value-base64 + ":" + sid`. No
-session-store read is required for CSRF validation.
+session-store read is required for CSRF validation — the gateway validates
+CSRF from the cookie + header alone, before it ever calls `/internal/resolve`.
 
-Sliding idle TTL is enforced by the API Gateway on authenticated `/api/**`
-traffic with `EXPIRE sess:{sid} min(SESSION_IDLE_TTL,
-remaining_absolute_ttl)`. `/auth/me` and other Auth Service read probes do
-not slide the idle window. There is no `last_touched_at` field because the
-Redis-compatible TTL itself is the source of truth. A future iteration that
-wants a separate watermark field can add one without breaking the tolerant
-reader.
+**Sliding idle TTL** is enforced by the **Auth Service** inside
+`/internal/resolve` on authenticated `/api/**` traffic with
+`EXPIRE sess:{sid} min(SESSION_IDLE_TTL, remaining_absolute_ttl)`. `/auth/me`
+and other Auth Service read probes do NOT slide the idle window. There
+is no `last_touched_at` field because the Redis-compatible TTL itself is the
+source of truth.
 
-Schema contract rules:
+Schema rules (all internal to the Auth Service):
 
-1. The API Gateway MUST read only `access_token` and
-   `access_token_expires_at`. It MUST NOT depend on any other field.
-2. The Auth Service MAY add fields to the schema at any time. The Gateway
-   ignores unknown fields (Jackson + cjson both default to that). Adding a
-   field is a non-breaking change because of the tolerant-reader contract.
-3. The Auth Service MUST NOT remove or rename existing required fields
-   without a coordinated change to the Gateway's reader and to
-   `schema/sess-payload.example.json` (the cross-component contract fixture).
-4. The Gateway MUST log and treat as "no session" any payload it cannot
-   parse or whose `access_token_expires_at` is absent.
+1. The Auth Service MAY add, remove, or rename fields at will — the schema is
+   private, so there is no external reader to coordinate with. It tolerates
+   unknown fields on read (Jackson defaults to
+   `FAIL_ON_UNKNOWN_PROPERTIES=false`), so a forward-compatible field addition
+   is safe across a rolling deploy.
+2. A payload that cannot be parsed, or whose `access_token_expires_at` is
+   absent, is treated as "no session" (resolve returns 404).
 
-**Contract test (mandatory).**
-
-A shared JSON fixture is checked into the repository as the canonical
-example of a `sess:{sid}` payload — suggested location
-`schema/sess-payload.example.json`. Both services include this fixture
-in their test suites:
-
-- **Auth Service test.** Construct a session through the service's
-  session writer, serialize, parse against the fixture's required
-  fields, assert every required field is present and well-typed.
-  Catches writer-side field removals, renames, or type drift.
-- **API Gateway test.** Load the fixture as a JSON document, invoke
-  the Gateway's tolerant reader, assert `access_token` and
-  `access_token_expires_at` are extracted correctly. Catches reader-
-  side regressions and JSON-library configuration drift (the two
-  services must serialize/parse with compatible settings: UTC
-  timestamps, no field reordering required, no special-character
-  escaping divergence).
-
-Both tests run in their respective test commands and execute under
-`scripts/verify-all.sh`. Schema drift is caught by either test failing,
-preventing the writer and reader from silently diverging across deploys.
+**Contract test.** Because the schema is no longer a cross-component contract,
+there is no shared `sess`-payload fixture and no gateway-side tolerant-reader
+test. The Auth Service owns the write→read→resolve round-trip end to end; its
+own suites (`InternalResolveControllerTest`, the `SessionRecord` tests, and the
+gateway behaviour suite's extra-fields case, which seeds Valkey and proves the
+**Auth Service** reader tolerates unknown fields) are the guard. These run under
+`scripts/verify-all.sh` and the live e2e battery.
 
 ### 7.3 Signed CSRF Token Contract
 
@@ -981,8 +969,8 @@ cannot forge a valid signature.
 - `/auth/login` returns `400 application/problem+json` when `return_to` is
   missing or invalid (absolute URL, protocol-relative, no leading slash,
   overlong, encoded backslash).
-- API Gateway `/internal/refresh` precondition: the Auth Service rejects
-  any `/internal/refresh` call lacking a valid Bearer token whose `aud`
+- API Gateway `/internal/resolve` precondition: the Auth Service rejects
+  any `/internal/resolve` call lacking a valid Bearer token whose `aud`
   contains the configured internal-refresh audience and whose
   `azp/client_id` equals the configured gateway client id.
 - Signed CSRF token rejection on tamper: a token whose `token-value-base64`
@@ -1048,7 +1036,7 @@ cannot forge a valid signature.
 - `sess:{sid}` respects sliding + absolute TTL.
 - Logout deletes session, expires `__Host-sid` and `XSRF-TOKEN`, and
   issues Keycloak end-session redirect with `id_token_hint`.
-- **`/internal/refresh` contract tests (§7.1).** Rejects requests with
+- **`/internal/resolve` contract tests (§7.1).** Rejects requests with
   missing Bearer token (401). Rejects token with wrong `aud` (401),
   wrong `azp/client_id` (401), bad signature (401), expired (401). With
   valid Bearer and unknown `sid`, returns 404. With valid Bearer and
@@ -1074,22 +1062,23 @@ cannot forge a valid signature.
   `Sec-Fetch-Mode: navigate` + `Sec-Fetch-Dest: document`, with `Accept:
   text/html` as fallback) → `302 /auth/login?return_to=<URL>`; XHR/fetch →
   `401` with no `Location` header and no OAuth flow start.
-- With session: tolerant read of `sess:{sid}` extracts only
-  `access_token` and `access_token_expires_at`; payloads missing those
-  fields are treated as "no session" and logged.
+- With a session cookie: the plugin calls `POST /internal/resolve` with the
+  cached configured gateway-client service token and the sid; it reads
+  `access_token` from the 200 body. It holds no store handle and never reads
+  `sess:{sid}` directly.
 - Bearer injection: upstream request to RS includes `Authorization:
-  Bearer <access_token>`; inbound `Cookie` is stripped; hop-by-hop
-  headers are stripped; query string is preserved.
-- Refresh delegation: when `access_token_expires_at` is within 60s, the
-  plugin calls `POST /internal/refresh` with the cached configured gateway
-  client service token. On 200 the plugin re-reads `sess:{sid}` and
+  Bearer <access_token>` (from the resolve response); inbound `Cookie` is
+  stripped; hop-by-hop headers are stripped; query string is preserved.
+- Resolve delegation: every `/api/**` request calls `POST /internal/resolve`;
+  the Auth Service slides the idle TTL and, when `access_token_expires_at` is
+  within 60s, refreshes. On 200 the plugin injects the returned token and
   proceeds. On 401 the plugin invalidates the cached service token and
-  retries once; second 401 → 502 to browser plus
-  Gateway audit event. On 404 → 401 to browser plus cookie expiry. On
+  retries once; second 401 → 502 to browser plus Gateway audit event. On
+  404 → 401 to browser plus cookie expiry (the instant-revocation path). On
   409 → 401 to browser plus Gateway audit event. On 502 → 503 to browser
   with `Retry-After: 1` (session not invalidated).
-- Concurrent `/api/**` requests on a single session produce one
-  `/internal/refresh` call, not two (Auth Service per-session lock).
+- Concurrent `/api/**` requests on a single session produce one upstream
+  refresh, not two (Auth Service per-session lock; the fresh path is lock-free).
 - Signed CSRF validation on state-changing `/api/**` requests:
   signature-tamper, value-tamper, missing-cookie, missing-header,
   cookie-header mismatch, and valid-token-from-another-session all
@@ -1121,9 +1110,11 @@ cannot forge a valid signature.
 - Saved-request E2E: top-level nav to a protected URL → OAuth round-trip →
   lands on the originally requested URL via the direct `302` from the
   Auth Service (no landing page).
-- `sess:{sid}` schema-contract test: shared fixture
-  (`schema/sess-payload.example.json`) parses against the Auth Service
-  writer's output and against the API Gateway's tolerant reader (§7.2).
+- `sess:{sid}` is Auth-Service-private (§7.2): no cross-component fixture. The
+  Auth Service's own write→read→resolve round-trip is covered by
+  `InternalResolveControllerTest` and the gateway behaviour suite's
+  extra-fields case (which seeds Valkey and proves the Auth Service reader
+  tolerates unknown fields).
 - Client Credentials happy-path and failure tests.
 - Client Credentials end-to-end gate: real `curl` against the AS for a
   service-client token, real `curl` against the RS `/api/jobs` with the
@@ -1143,7 +1134,7 @@ applies), seen to fail the right way when the guard is removed.
   id token in `localStorage`, `sessionStorage`, `document.cookie`, or IndexedDB).
 - **C8** (`e2e-conformance`, `e2e-c8-altids`) — internal trust identity:
   `GATEWAY_CLIENT_ID` and `INTERNAL_REFRESH_AUDIENCE` are config-driven on the
-  wire, and a one-sided mismatch breaks `/internal/refresh`. The non-default run
+  wire, and a one-sided mismatch breaks `/internal/resolve`. The non-default run
   (`e2e-c8-altids`) threads alternate identifiers through
   `compose.portability.yml` and the APISIX render.
 - **C9** (`e2e-conformance`) — session window: a non-default
@@ -1188,7 +1179,7 @@ Changes required:
 | `compose.yaml` keycloak service | `compose.yaml` | Remove the Keycloak service (which uses embedded H2 via `KC_DB=dev-file` — there is no separate database) if the target IdP is hosted (Auth0, Okta) or replaced with a different local container (Hydra, Dex). The realm-smoke script `authorization-server/tests/smoke.sh` is Keycloak-specific and would be deleted or rewritten. |
 | `idp_token_url` in `apisix.yaml.template` | per-route plugin config | The Lua plugin field is IdP-vendor neutral; just point it at the new IdP's token endpoint. |
 | RS audience name | `oidc-reference-realm.json` audience-mapper config OR the equivalent on the new IdP | The RS expects `oidc-reference-api` in `aud`; the IdP must be configured to add that value. |
-| `INTERNAL_REFRESH_AUDIENCE` | Auth Service env | Audience the gateway's CC token must carry for `/internal/refresh`. Default `oidc-reference-auth-internal`; set to whatever the new IdP issues for the gateway client. |
+| `INTERNAL_REFRESH_AUDIENCE` | Auth Service env | Audience the gateway's CC token must carry for `/internal/resolve`. Default `oidc-reference-auth-internal`; set to whatever the new IdP issues for the gateway client. |
 | `GATEWAY_CLIENT_ID` | Auth Service env + APISIX render | The gateway's confidential client id — the Auth Service requires it in the caller's `azp`/`client_id`, and APISIX authenticates as it. Real IdPs assign client ids you don't choose, so this is a config knob (default `oidc-reference-api-gateway`), set in both places. |
 | `RS_SERVICE_CLIENT_IDS` / `RS_JOBS_CLIENT_ID` | Resource Server env | Service-account allowlist (denied on `/api/me`) and the single client allowed to `POST /api/jobs`. Defaults are the local Keycloak client names. |
 | Back-Channel Logout enablement | IdP client config | Register the Auth Service `/backchannel-logout` URL as the client's `backchannel_logout_uri` and enable "Backchannel logout session required" so the IdP stamps `sid` into the id_token and the logout_token. The logout_token `aud` must equal the Auth Service client id (`app.client-id`), which the AS validates. Without this, IdP-driven session revocation silently no-ops. |
@@ -1206,32 +1197,31 @@ What does NOT change:
 ### A.2 Swapping the API Gateway (APISIX → Envoy / Traefik / Kong / HAProxy / NGINX + Lua)
 
 The API Gateway is the role that owns: (a) routing `/api/**` to the
-Resource Server with the allowlist, (b) reading `sess:{sid}` from the
-state store and injecting a bearer for the upstream, (c) validating the
-signed CSRF on state-changing requests, (d) delegating refresh to the
-Auth Service via `/internal/refresh`, (e) the no-cookie XHR-vs-document
-classification per the entry-conditions rules. Any gateway that satisfies
-those five responsibilities and the wire contracts below is a valid
-implementation.
+Resource Server with the allowlist, (b) resolving the opaque sid via the Auth
+Service's `/internal/resolve` and injecting the returned bearer for the upstream,
+(c) validating the signed CSRF on state-changing requests, (d) the no-cookie
+XHR-vs-document classification per the entry-conditions rules. Any gateway that
+satisfies those responsibilities and the wire contracts below is a valid
+implementation. It holds **no session store handle** — the phantom-token split
+(§7.1) keeps the store private to the Auth Service.
 
 Wire contracts the alternate gateway MUST satisfy:
 
-1. **Session read.** `GET sess:{sid}` from Valkey (or any
-   Redis-compatible store), parse JSON per `schema/sess-payload.example.json`
-   §7.2 tolerant-reader rules. Treat unparseable / missing
-   `access_token_expires_at` as "no session".
+1. **Session resolve.** `POST /internal/resolve` with a Client-Credentials
+   bearer (carrying the configured internal-refresh audience and
+   `azp=<configured gateway client id>`) and the sid from the cookie. Read
+   `access_token` from the 200 body; handle the §7.1 status table (404/409 →
+   401 + cookie clear, 401 → CC retry, 502 → 503). The gateway has no
+   Redis/Valkey client — lookup, idle slide, and refresh all happen in the
+   Auth Service.
 2. **Bearer injection.** Strip the inbound `Cookie` and `Authorization`
    headers (and the rest of HOP_BY_HOP); set `Authorization: Bearer
-   <sess.access_token>`.
+   <resolved access_token>`.
 3. **Signed CSRF.** For state-changing methods (POST/PUT/PATCH/DELETE),
    validate the `X-XSRF-TOKEN` header against the `XSRF-TOKEN` cookie
    per §7.3 — same HMAC-SHA256 over the value, standard Base64 key,
-   base64url-no-padding output, `.` separator.
-4. **Refresh delegation.** When `sess.access_token_expires_at` is within
-   the refresh window, `POST /internal/refresh` with a Client-Credentials
-   bearer carrying the configured internal-refresh audience and
-   `azp=<configured gateway client id>`. Handle the §7.1 status table.
-5. **No-session response shape.** XHR → `401`. Top-level document
+   base64url-no-padding output, `.` separator. Stateless: no store read.
+4. **No-session response shape.** XHR → `401`. Top-level document
    navigation → `302 /auth/login?return_to=<original URL>`. Classification
    via `Sec-Fetch-Mode`/`Sec-Fetch-Dest` with `Accept` as the fallback.
 
@@ -1248,9 +1238,8 @@ What does NOT change:
 
 - All Java code (Auth Service, Resource Server).
 - All frontend code.
-- The cross-component contracts (`sess:{sid}` schema, `/internal/refresh`,
-  signed CSRF, `oauth_tx` browser binding) — the new gateway must satisfy
-  them.
+- The cross-component contracts (the `/internal/resolve` RPC, signed CSRF,
+  `oauth_tx` browser binding) — the new gateway must satisfy them.
 - The state store (`Valkey` / any Redis-compatible).
 - The IdP and realm config.
 

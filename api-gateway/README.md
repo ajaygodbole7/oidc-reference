@@ -9,7 +9,7 @@ and forwards `/auth/*` to the Auth Service unchanged.
 
 - `../docs/specs/SPEC-0001-core-oidc-flows.md`
   - §"API Gateway Architecture (APISIX)" — plugin pipeline.
-  - §7.1 `/internal/refresh` contract — Gateway-side response table.
+  - §7.1 `/internal/resolve` contract — Gateway-side response table.
   - §7.2 `sess:{sid}` schema — tolerant reader rules.
   - §7.3 signed CSRF contract — HMAC-SHA256, constant-time compare.
   - §"Login Entry Conditions" — Fetch-Metadata 401 vs. 302 branching.

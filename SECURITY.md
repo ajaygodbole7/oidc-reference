@@ -75,8 +75,8 @@ Core § that owns the deeper discussion.
 | G-1 | Attacker forges the upstream `Authorization` header by including one in the inbound request | `bff-session.lua` `HOP_BY_HOP` table strips inbound `authorization` before injecting the gateway-controlled bearer. | None. | `bff-session.lua` |
 | G-2 | SSRF via `/api/**` to arbitrary upstream paths | APISIX route table is an explicit per-path allowlist (`/api/me`, `/api/user-data`, `/api/admin`). Off-allowlist paths return 404 before the plugin runs. | Adding an RS endpoint requires updating the gateway allowlist. | RFC 9700 §"chokepoint" guidance; ADR §C4 |
 | G-3 | Inbound request bypasses CSRF on state-changing `/api/**` | Lua plugin `csrf_ok` validates `XSRF-TOKEN` cookie + `X-XSRF-TOKEN` header HMAC bound to the request sid for `POST` / `PUT` / `PATCH` / `DELETE`. | Same as B-1 — an XSS issuing same-origin requests can still read the JS-readable XSRF cookie and echo it. The signed-CSRF defense is against cookie-injection, not XSS. | ADR §B4 |
-| G-4 | `/internal/refresh` reachable from the browser | APISIX route table does not expose `/internal/*`; only the in-cluster Lua plugin calls it. Auth Service Order-1 filter chain requires a valid Client-Credentials bearer with `aud=oidc-reference-auth-internal`. | None within the local topology. | SPEC-0001 §7.1 |
-| G-5 | Attacker forges a Client-Credentials bearer for `/internal/refresh` | `SecurityConfig` + `InternalRefreshController` validate: signature (RS256), `iss`, `exp`, `aud` contains `oidc-reference-auth-internal`, `azp` or `client_id` is `oidc-reference-api-gateway`. | None. | SPEC-0001 §7.1 |
+| G-4 | `/internal/resolve` reachable from the browser | APISIX route table does not expose `/internal/*`; only the in-cluster Lua plugin calls it. Auth Service Order-1 filter chain requires a valid Client-Credentials bearer with `aud=oidc-reference-auth-internal`. | None within the local topology. | SPEC-0001 §7.1 |
+| G-5 | Attacker forges a Client-Credentials bearer for `/internal/resolve` | `SecurityConfig` + `InternalRefreshController` validate: signature (RS256), `iss`, `exp`, `aud` contains `oidc-reference-auth-internal`, `azp` or `client_id` is `oidc-reference-api-gateway`. | None. | SPEC-0001 §7.1 |
 | G-6 | Client-credentials token cache stampede after expiry | `lua-resty-lock` around the token fetch — the loser of the race blocks until the winner has populated the cache, then re-reads. | None. | `bff-session.lua` `fetch_cc_token` |
 | G-7 | Forged-IP burst against `/auth/login` exhausts `tx:{state}` entries | APISIX `limit-req` plugin per remote_addr on `/auth/login` and `/auth/callback/idp` (rate 5/s, burst 10). | A distributed attacker pool with different source IPs would still consume entries; `tx:{state}` TTL is 5 min, so steady-state burst impact is bounded. | `apisix.yaml.template` |
 
@@ -113,7 +113,7 @@ Core § that owns the deeper discussion.
 |---|---|---|---|
 | `AUTH_CLIENT_SECRET` | Auth Service ↔ Keycloak (OAuth client secret) | `LOCAL_DEV_AUTH_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY` | `SecretSentinelValidator` |
 | `APP_COOKIE_SIGNING_KEY` / `CSRF_SIGNING_KEY` | Auth Service signer ↔ APISIX plugin validator | 32 zero-bytes base64-encoded | `SecretSentinelValidator` (Java) + `bff-session.lua` `warn_on_dev_sentinels` (Lua) |
-| `GATEWAY_CLIENT_SECRET` | APISIX plugin ↔ Keycloak (Client-Credentials secret for `/internal/refresh`) | `LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY` | `bff-session.lua` `warn_on_dev_sentinels` |
+| `GATEWAY_CLIENT_SECRET` | APISIX plugin ↔ Keycloak (Client-Credentials secret for `/internal/resolve`) | `LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY` | `bff-session.lua` `warn_on_dev_sentinels` |
 | `SERVICE_CLIENT_SECRET` | External service clients ↔ Keycloak | `LOCAL_DEV_SERVICE_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY` | Realm seed grep |
 
 All four keys must be rotated before any non-local deployment. The
@@ -134,13 +134,18 @@ emitted today:
 | `callback_failed` | `/auth/callback/idp` rejected | `invalid_state`, `missing_tx_binding`, `missing_tx_cookie`, `tx_cookie_mismatch`, `iss_mismatch`, `token_exchange_failed` |
 | `logout_succeeded` | `/auth/logout` accepted | `ok` |
 | `auth_denied` | Authenticated request without a session, or CSRF mismatch | `no_session`, `csrf_invalid`, `missing_bearer`, `bearer_audience_or_client_mismatch` |
-| `refresh_succeeded` | `/internal/refresh` rotated tokens | `ok` |
-| `refresh_not_needed` | Access token still inside the no-refresh window | `outside_refresh_window` |
-| `refresh_rejected` | Pre-refresh validation failed | `missing_sid`, `no_such_session`, `session_absolute_expired`, `session_absolute_expired_post_refresh`, `refresh_token_expired` |
+| `refresh_succeeded` | `/internal/resolve` rotated tokens on the near-expiry path | `ok` |
+| `refresh_rejected` | Pre-refresh validation failed | `missing_sid`, `no_such_session`, `session_absolute_expired`, `session_absolute_expired_post_refresh`, `session_deleted_during_refresh`, `refresh_token_expired` |
 | `refresh_failed` | Keycloak unreachable or other transient error | `authorization_server_unreachable` |
 | `refresh_token_rejected` | Keycloak returned `invalid_grant` on refresh (reuse, expiry, revocation, or SSO max — not distinguishable at the RP) | `session_invalidated` |
 | `backchannel_logout_succeeded` | `/backchannel-logout` accepted a valid `logout_token` | `session_deleted`, `no_matching_session` |
 | `backchannel_logout_rejected` | `/backchannel-logout` rejected the token | `invalid_logout_token`, `missing_logout_token` |
+
+The lock-free fresh path of `/internal/resolve` (access token still inside the
+no-refresh window — the common case, taken on the majority of `/api/**`
+requests) emits **no** audit event by design: one security-audit line per API
+request is pure noise. Audit events fire only on a refresh attempt or a
+rejection.
 
 Never logged: access token, refresh token, ID token, raw `sid`,
 raw `state`, raw `XSRF-TOKEN` value, raw `oauth_tx` value, client

@@ -15,13 +15,13 @@ This directory owns:
 - refresh-token rotation with reuse detection
 - RP-initiated logout
 - OIDC Back-Channel Logout
-- the `/internal/refresh` RPC
+- the `/internal/resolve` RPC
 
 ## Endpoints
 
 - `/auth/login`, `/auth/callback/idp`, `/auth/logout`, `/auth/logout/continue`,
   `/auth/me` — browser-facing, cookie-authenticated.
-- `/internal/refresh` — back-channel RPC, served as an OAuth Resource Server.
+- `/internal/resolve` — back-channel RPC, served as an OAuth Resource Server.
   Called by the API Gateway as the `oidc-reference-api-gateway` Client
   Credentials client, audience-bound to `oidc-reference-auth-internal`.
 - `/backchannel-logout` — OIDC Back-Channel Logout 1.0, IdP-to-service (root
@@ -32,12 +32,12 @@ This directory owns:
 
 The Auth Service is the sole writer of `tx:{state}` and `sess:{sid}`. The
 API Gateway reads `sess:{sid}` but never writes it. The two share only the
-`sess:{sid}` JSON schema and the `/internal/refresh` contract, both in
+`sess:{sid}` JSON schema and the `/internal/resolve` contract, both in
 [`../docs/specs/SPEC-0001-core-oidc-flows.md`](../docs/specs/SPEC-0001-core-oidc-flows.md)
 (§7.1, §7.2).
 
 ## Specification
 
 - [`../docs/specs/SPEC-0001-core-oidc-flows.md`](../docs/specs/SPEC-0001-core-oidc-flows.md)
-  §Auth Service, §7.1 (`/internal/refresh`), §7.2 (`sess:{sid}` schema),
+  §Auth Service, §7.1 (`/internal/resolve`), §7.2 (`sess:{sid}` schema),
   §7.3 (signed CSRF).
