@@ -141,7 +141,8 @@ sequenceDiagram
 
 Every `/api/**` call carries only the opaque session cookie. The gateway looks up
 the session, refreshes the access token when it is near expiry (delegating to the
-Auth Service, which holds the refresh token), then injects a bearer for the
+Auth Service over an internal RPC authenticated with Client Credentials; the Auth
+Service holds the refresh token), then injects a bearer for the
 Resource Server.
 
 ```mermaid

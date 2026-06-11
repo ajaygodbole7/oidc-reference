@@ -34,11 +34,12 @@ require_present "[Aa]pi [Gg]ateway|API Gateway|api-gateway" README.md docs
 require_present "/internal/refresh" README.md docs
 require_present "[Cc]lient [Cc]redentials" README.md docs
 
-# Live cross-service smoke. With the new topology the Resource Server has
-# no host port — only services on the oidc-internal Compose network can
-# reach it. We therefore run the curl invocations from inside the
-# `apisix` container (its Dockerfile installs curl). The token call to
-# Keycloak still goes via host :8080 (Keycloak stays host-exposed).
+# Live cross-service smoke. With the split topology the Resource Server has
+# no host port — only services on the oidc-internal Compose network can reach
+# it. We therefore make the RS call from a throwaway curl container that shares
+# the apisix container's network namespace, so `resource-server` DNS resolves
+# exactly as it does for the gateway (the stock APISIX image ships no curl).
+# The token call to Keycloak still goes via host :8080 (Keycloak stays host-exposed).
 if [ "${RUN_LIVE_CROSS_SERVICE:-0}" = "1" ]; then
   : "${OIDC_TOKEN_URL:?set OIDC_TOKEN_URL}"
   : "${OIDC_SERVICE_CLIENT_ID:?set OIDC_SERVICE_CLIENT_ID}"
@@ -65,14 +66,16 @@ if [ "${RUN_LIVE_CROSS_SERVICE:-0}" = "1" ]; then
   access_token="$(TOKEN_RESPONSE="$token_response" node -e 'try { const body = JSON.parse(process.env.TOKEN_RESPONSE ?? ""); if (typeof body.access_token === "string") process.stdout.write(body.access_token); } catch {}')"
   [ -n "$access_token" ] || fail "token response did not include access_token"
 
-  # Run the RS POST from inside the apisix container so it can resolve
-  # `resource-server` via Compose DNS. Pass the bearer through env to
-  # avoid leaking it into the container's argv.
-  docker compose exec -T \
+  # Reach the RS over the Compose network from a throwaway curl container that
+  # shares the apisix container's network namespace; `resource-server` DNS then
+  # resolves exactly as it does for the gateway. The bearer is passed via env
+  # and expanded INSIDE the container, never on the host-visible argv.
+  docker run --rm --network "container:$apisix_id" \
     -e ACCESS_TOKEN="$access_token" \
     -e RS_JOBS_URL="$RS_JOBS_URL" \
-    apisix sh -c 'curl -fsS -X POST -H "Authorization: Bearer $ACCESS_TOKEN" "$RS_JOBS_URL" >/dev/null' \
-    || fail "RS /api/jobs call via apisix container failed"
+    --entrypoint sh curlimages/curl:latest -c \
+    'curl -fsS -X POST -H "Authorization: Bearer $ACCESS_TOKEN" "$RS_JOBS_URL" >/dev/null' \
+    || fail "RS /api/jobs call (curl on apisix network) failed"
 fi
 
 echo "cross-service contract checks passed"

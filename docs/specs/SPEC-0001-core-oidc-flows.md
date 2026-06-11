@@ -444,7 +444,10 @@ format, validation algorithm, and signing-key handling.
 
 - `GET /api/public` — no authentication.
 - `GET /api/me` — authenticated user token; returns `sub`.
-- `GET /api/user-data` — requires scope `api.read`.
+- `GET /api/user-data` — requires scope `api.read`. Returns the caller's
+  profile and entitlements (`subject`, `username`, `email` when present,
+  `roles`, `scopes`) derived from the validated access token — no downstream
+  call and no token relay (architecture-decisions §F).
 - `POST /api/admin` — requires authority `ROLE_admin` (mapped from
   `realm_access.roles`). Scope-based admin is documented as a non-default
   alternative.

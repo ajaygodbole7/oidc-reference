@@ -1,12 +1,16 @@
 package com.example.oidcreference;
 
 import java.security.Principal;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -60,9 +64,34 @@ class ApiController {
         || (clientId != null && serviceClients.contains(clientId));
   }
 
+  // Returns the caller's profile + entitlements derived straight from the
+  // access token THIS Resource Server already validated, at its own audience.
+  // No downstream call, no token relay: a token minted for `oidc-reference-api`
+  // must not be replayed to a different audience (RFC 9700 §2.3, least
+  // privilege). Service fan-out would require token exchange (RFC 8693), which
+  // is documented out of scope in architecture-decisions §F.
   @GetMapping("/user-data")
-  Map<String, String> userData() {
-    return Map.of("status", "user-data");
+  Map<String, Object> userData(JwtAuthenticationToken authentication) {
+    Jwt token = authentication.getToken();
+    Map<String, Object> profile = new LinkedHashMap<>();
+    profile.put("subject", token.getSubject());
+    profile.put("username", token.getClaimAsString("preferred_username"));
+    String email = token.getClaimAsString("email");
+    if (email != null) {
+      profile.put("email", email);
+    }
+    profile.put("roles", authorityValues(authentication, "ROLE_"));
+    profile.put("scopes", authorityValues(authentication, "SCOPE_"));
+    return profile;
+  }
+
+  private static List<String> authorityValues(JwtAuthenticationToken authentication, String prefix) {
+    return authentication.getAuthorities().stream()
+        .map(GrantedAuthority::getAuthority)
+        .filter(authority -> authority.startsWith(prefix))
+        .map(authority -> authority.substring(prefix.length()))
+        .sorted()
+        .toList();
   }
 
   @PostMapping("/admin")

@@ -395,7 +395,9 @@ test("4. saved-request replay returns to the protected path", async ({
   ]);
 
   await expect(page).toHaveURL(`${APP_ORIGIN}/api/user-data`);
-  await expect(page.locator("body")).toContainText("user-data");
+  // /api/user-data returns the caller's profile derived from the validated
+  // access token; for the alice login that includes preferred_username "alice".
+  await expect(page.locator("body")).toContainText("alice");
   await assertNoBrowserTokens(page, context);
 });
 
@@ -494,7 +496,9 @@ test("7. authenticated /api proxy succeeds; browser sends no bearer", async ({
   });
 
   await page.getByRole("button", { name: /Call \/api\/user-data/i }).click();
-  await expect(page.getByTestId("api-result")).toContainText("user-data");
+  // The rendered result is the Resource Server's claims-derived profile for the
+  // logged-in user (alice), fetched through the gateway with a server-injected bearer.
+  await expect(page.getByTestId("api-result")).toContainText("alice");
 
   expect(authHeaders.length).toBeGreaterThan(0);
   for (const h of authHeaders) {
@@ -954,7 +958,7 @@ test("16. concurrent login tabs complete independently", async ({ browser }) => 
     ]);
 
     await expect(second.getByText(/signed in as/i)).toBeVisible();
-    await expect(first.locator("body")).toContainText("user-data");
+    await expect(first.locator("body")).toContainText("alice");
     const txCookiesAfter = (await context.cookies())
       .filter((c) => c.name.startsWith("oauth_tx_"));
     expect(txCookiesAfter.length).toBe(0);

@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
@@ -143,6 +144,30 @@ class ApiSecurityTest {
             .with(jwt().jwt(j -> j.claim("scope", "api.read"))
                        .authorities(new SimpleGrantedAuthority("SCOPE_api.read"))))
         .andExpect(status().isOk());
+  }
+
+  @Test
+  void userDataReturnsClaimsDerivedProfile() throws Exception {
+    // /api/user-data returns the caller's profile + entitlements derived
+    // straight from the validated access token — no downstream call, no token
+    // relay. Proves the Resource Server reads identity and authorization off
+    // the JWT it already validated, at its own audience.
+    mockMvc.perform(get("/api/user-data")
+            .with(jwt()
+                .jwt(j -> j
+                    .subject("alice-123")
+                    .claim("preferred_username", "alice")
+                    .claim("email", "alice@example.com"))
+                .authorities(
+                    new SimpleGrantedAuthority("SCOPE_api.read"),
+                    new SimpleGrantedAuthority("ROLE_user"))))
+        .andExpect(status().isOk())
+        .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+        .andExpect(jsonPath("$.subject").value("alice-123"))
+        .andExpect(jsonPath("$.username").value("alice"))
+        .andExpect(jsonPath("$.email").value("alice@example.com"))
+        .andExpect(jsonPath("$.roles", org.hamcrest.Matchers.hasItem("user")))
+        .andExpect(jsonPath("$.scopes", org.hamcrest.Matchers.hasItem("api.read")));
   }
 
   @Test

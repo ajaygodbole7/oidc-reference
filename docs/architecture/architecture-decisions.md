@@ -632,6 +632,30 @@ single-RS reference.
 Reconsider when adding a second Resource Server or binding tokens to concrete
 resource URLs.
 
+### Downstream Service-To-Service Calls / Token Exchange
+
+The Resource Server serves resources from the token it already validated. It
+does not call a further downstream service.
+
+This is deliberate. The access token is audience-restricted to
+`oidc-reference-api` (RFC 9700 §2.3, least privilege). Relaying that token to a
+second service is token passthrough: it stretches one credential across
+audiences and inflates its blast radius, and it fails cleanly anyway when the
+second service validates `aud`. The correct way to call a downstream service —
+exchanging the user token for one scoped to that service (RFC 8693 Token
+Exchange), or the calling service obtaining its own token — is a distinct flow
+with its own grant, threat model, and tests. It is orthogonal to what this
+reference teaches (browser-app OAuth with no tokens in the browser).
+
+So `/api/user-data` returns the caller's profile and entitlements derived from
+the validated JWT itself, not from a downstream fetch. The two service-to-service
+patterns that ARE shown use their own Client Credentials identity, not a relayed
+user token: the API Gateway → Auth Service `/internal/refresh` call, and the
+machine client → Resource Server `/api/jobs` call.
+
+Reconsider when the reference grows a real second service the Resource Server
+must call on the user's behalf; add RFC 8693 Token Exchange at that point.
+
 ### Global CSP And Referrer-Policy Baseline
 
 A global application CSP and Referrer-Policy baseline are deferred because
