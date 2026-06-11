@@ -137,6 +137,34 @@ sequenceDiagram
     A-->>B: 302 → original URL + __Host-sid + CSRF cookie
 ```
 
+### Identity and session state — `/auth/me`
+
+The SPA holds no session state of its own. On mount it calls `/auth/me` to learn
+whether a session exists and who the user is. The same endpoint is how it learns
+about logout: a server-side session death — RP logout, back-channel logout, or a
+rejected refresh — surfaces as `401` on the next `/auth/me` or `/api/**` call, and
+the SPA returns to the anonymous state. `/auth/me` is a pure read; it never extends
+the session and never returns a token.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser (SPA)
+    participant A as Auth Service (BFF)
+    participant V as Session Store
+
+    Note over B: On mount, the SPA asks "who am I?" — its only window into session state.
+    B->>A: GET /auth/me (sends the __Host-sid cookie)
+    A->>V: Read the session record (pure read, no idle-window slide)
+    alt session valid
+        A-->>B: 200 claims (sub, preferred_username, name, email, roles)
+        Note over B: Authenticated — render identity and roles (display only, never a token)
+    else no, expired, or server-deleted session
+        A-->>B: 401 (Cache-Control no-store)
+        Note over B: Anonymous — render "Sign in"
+    end
+```
+
 ### Authenticated request — proxy and transparent refresh
 
 Every `/api/**` call carries only the opaque session cookie. The gateway looks up
