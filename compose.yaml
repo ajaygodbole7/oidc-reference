@@ -168,9 +168,10 @@ services:
   # declarative in-repo, just like everything else.
   apisix:
     image: apache/apisix:3.16.0-debian
+    # No valkey dependency: the gateway holds no session store handle. It
+    # resolves the sid via the Auth Service's /internal/resolve; only the
+    # Auth Service touches Valkey.
     depends_on:
-      valkey:
-        condition: service_healthy
       keycloak:
         condition: service_healthy
       auth-service:
@@ -179,13 +180,10 @@ services:
         condition: service_healthy
     environment:
       APISIX_STAND_ALONE: "true"
-      # Pin the container TZ to UTC as defense in depth. bff-session.lua's
-      # parse_iso8601_utc computes the epoch with pure integer date math
-      # (days_from_civil), so it is timezone-independent and does NOT rely
-      # on this pin for correctness — the TZ-matrix unit test
-      # (api-gateway/tests/test-lua-unit.sh) proves it holds under
-      # UTC / Asia/Kolkata / America/Los_Angeles. UTC is kept anyway so
-      # any os.date()-based logging elsewhere reads in UTC.
+      # Pin the container TZ to UTC so any os.date()-based logging reads in
+      # UTC. The plugin no longer parses timestamps (session expiry lives
+      # behind the Auth Service's /internal/resolve), so nothing here depends
+      # on the TZ for correctness.
       TZ: "UTC"
       # HMAC key for the signed double-submit CSRF cookie. The bff-session
       # Lua plugin and the Auth Service MUST share this key so cookies
@@ -201,7 +199,7 @@ services:
       # finds every place to rotate before any deploy.
       CSRF_SIGNING_KEY: ${CSRF_SIGNING_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
       # Gateway's Keycloak client secret — used by the plugin to obtain a
-      # Client-Credentials bearer when calling Auth Service /internal/refresh.
+      # Client-Credentials bearer when calling Auth Service /internal/resolve.
       # Matches the seeded realm value (authorization-server/realm/oidc-
       # reference-realm.json) so zero-config dev works; the same marker is
       # checked by SecretSentinelValidator on the Auth Service side.

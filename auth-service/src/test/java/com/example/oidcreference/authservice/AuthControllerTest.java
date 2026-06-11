@@ -378,7 +378,7 @@ class AuthControllerTest {
     // The browser cookie is a bearer handle, not the enforcement point —
     // session lifetime is enforced server-side by the sliding sess:{sid}
     // TTL and the absolute ceiling. A cookie Max-Age equal to the INITIAL
-    // idle TTL is never re-issued (the gateway slides only the Valkey key),
+    // idle TTL is never re-issued (the Auth Service slides only the Valkey session key),
     // so every real browser session would hard-stop 30 minutes after login
     // and the documented sliding-idle/8h-absolute design could never take
     // effect. The cookies must live until the absolute ceiling; an idle
@@ -397,8 +397,8 @@ class AuthControllerTest {
 
   @Test
   void backChannelLogoutIndexesLiveForTheRemainingAbsoluteTtl() throws Exception {
-    // The gateway slides only sess:{sid} and /internal/refresh rewrites only
-    // the session key — nothing ever re-extends the back-channel-logout
+    // The Auth Service slides only sess:{sid} (in /internal/resolve), rewriting
+    // only the session key — nothing ever re-extends the back-channel-logout
     // index keys. If they carry the idle TTL they expire ~30 minutes after
     // login and IdP-initiated logout silently degrades to a 200
     // "no_matching_session" for any longer-lived session. The index keys

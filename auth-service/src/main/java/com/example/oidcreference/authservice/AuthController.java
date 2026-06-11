@@ -234,8 +234,8 @@ class AuthController {
     var savedRequest = normalizeSavedRequest(transaction.savedRequest());
 
     // Cookie Max-Age is the ABSOLUTE ceiling, not the idle TTL. The cookies
-    // are issued exactly once — the gateway slides only the Valkey sess:
-    // key and never re-issues Set-Cookie — so an idle-TTL Max-Age would
+    // are issued exactly once — the Auth Service slides only the Valkey sess:
+    // key (in /internal/resolve) and never re-issues Set-Cookie — so an idle-TTL Max-Age would
     // hard-stop every browser session 30 minutes after login and the
     // sliding-idle design could never take effect. Lifetime enforcement is
     // server-side (sliding sess: TTL + absolute ceiling); a cookie that

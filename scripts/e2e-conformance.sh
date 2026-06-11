@@ -2,25 +2,26 @@
 # e2e-conformance.sh — SPEC-0001 live conformance gates (C8/C9, see §Test Plan).
 #
 # These gates close the part the browser suite and the default gateway suite do
-# NOT cover: that the session-idle TTL is genuinely CONFIG-DRIVEN and reaches
-# BOTH planes with a NON-DEFAULT value — not a constant baked into either side.
+# NOT cover: that the session-idle TTL is genuinely CONFIG-DRIVEN — the Auth
+# Service READS SESSION_IDLE_TTL, it is not a constant baked into the slide.
 #
-# Two planes must consume the SAME idle window:
-#   - auth-service   app.session-idle-ttl   (env SESSION_IDLE_TTL)
-#   - gateway plugin idle_ttl_seconds       (env SESSION_IDLE_TTL via the render)
-# If they diverge, the session slides by two different windows depending on which
-# door (/auth/me vs /api/**) last touched it. The C9.* checks below prove:
-#   C9.1  a non-default SESSION_IDLE_TTL / SESSION_MAX_TTL reaches both planes in
-#         the RESOLVED config (docker compose config + rendered apisix.yaml).
-#   C9.2  the gateway BEHAVIORALLY uses the configured idle (re-render to a small
-#         value, reload APISIX, observe the post-/api TTL land there — not 1800).
+# Under the phantom-token topology the idle slide lives in ONE plane: the Auth
+# Service's POST /internal/resolve (env SESSION_IDLE_TTL). The gateway holds no
+# store handle and no idle window — every /api/** request resolves the sid via
+# the Auth Service, which looks up the session and slides it. The C9.* checks
+# below prove:
+#   C9.1  a non-default SESSION_IDLE_TTL / SESSION_MAX_TTL reaches the auth-service
+#         plane in the RESOLVED config (docker compose config).
+#   C9.2  the Auth Service BEHAVIORALLY uses the configured idle (recreate the
+#         auth-service at a small value, resolve via /api, observe the post-/api
+#         TTL land there — not 1800).
 #   C9.3  /auth/me is a non-extending liveness read (it must not slide the TTL).
 #   C9.4  repeated /api activity keeps the session alive beyond one idle window.
 #   C9.5  the absolute session ceiling still wins under repeated /api activity.
 #
-# Requires a running stack (run scripts/up.sh first). Self-contained: it mutates
-# only api-gateway/apisix.yaml.local (gitignored) and bounces APISIX, restoring
-# the default render on exit.
+# Requires a running stack (run scripts/up.sh first). Self-contained: it
+# recreates only the auth-service container at a compressed idle for the
+# behavioral checks, restoring the default-idle auth-service on exit.
 #
 # Gating: set RUN_LIVE_CONFORMANCE=1.
 
@@ -48,41 +49,33 @@ HEADERS_TMP="$(mktemp)"
 ALT_IDLE=10
 ALT_MAX=45
 
-render_idle() {
-  # Render apisix.yaml.local with idle_ttl_seconds=$1, defaults otherwise.
-  SESSION_IDLE_TTL="$1" \
-    GATEWAY_CLIENT_ID=oidc-reference-api-gateway \
-    GATEWAY_CLIENT_SECRET="$DEV_GATEWAY_SECRET" \
-    CSRF_SIGNING_KEY="$DEV_CSRF_KEY" \
-    sh "$SCRIPT_DIR/render-apisix-config.sh" >/dev/null 2>&1
+set_auth_idle() {
+  # Recreate ONLY the auth-service with SESSION_IDLE_TTL=$1, everything else at
+  # its compose dev default (this mirrors how test-e2e.sh brings the stack up:
+  # CSRF_SIGNING_KEY pinned, all other auth-service env defaulted via ${VAR:-…}).
+  # The idle slide now lives in the Auth Service (POST /internal/resolve), so a
+  # behavioral idle change is an auth-service ENV change — NOT an apisix
+  # re-render: the gateway no longer knows the idle window. Health-gate on the
+  # container healthcheck with --wait (preferred over hand-tuned curl retries).
+  # Seeded sessions live in Valkey (untouched by the recreate), so they survive.
+  SESSION_IDLE_TTL="$1" CSRF_SIGNING_KEY="$DEV_CSRF_KEY" \
+    docker compose up -d --no-deps --force-recreate --wait auth-service \
+    >/dev/null 2>&1
 }
 
-reload_apisix() {
-  docker compose restart apisix >/dev/null 2>&1 || true
-  i=0
-  while [ "$i" -lt 30 ]; do
-    s="$(curl -s -o /dev/null -w '%{http_code}' "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-    [ -n "$s" ] && [ "$s" != "000" ] && return 0
-    i=$((i + 1)); sleep 2
-  done
-  printf 'fatal: APISIX did not come back after reload\n' >&2
-  exit 2
-}
-
-# Restore the default render + a default-idle APISIX on ANY exit, so a failed
-# run never leaves the dev stack on the compressed idle window.
+# Restore the default-idle auth-service on ANY exit, so a failed run never
+# leaves the dev stack on the compressed idle window.
 restore() {
   _status=$?
   trap - EXIT INT TERM
-  render_idle 1800 || true
-  reload_apisix || true
+  set_auth_idle 1800 >/dev/null 2>&1 || true
   clear_all_tracked_sessions || true
   exit "$_status"
 }
 trap restore EXIT INT TERM
 
 printf -- '---- SPEC-0001 C8 internal trust-identity gate (live wire) ----\n'
-# /internal/refresh is internal-only; its caller-identity + audience checks are
+# /internal/resolve is internal-only; its caller-identity + audience checks are
 # config-driven (GATEWAY_CLIENT_ID / INTERNAL_REFRESH_AUDIENCE). e2e-portability
 # proves the RS API-audience config-driven on the wire; this proves the INTERNAL
 # trust identity on the wire, positive AND negative, by minting real Keycloak CC
@@ -97,13 +90,13 @@ mint_cc() { # $1 client_id  $2 client_secret -> echoes access_token
 
 post_internal_refresh() { # $1 bearer -> echoes HTTP status
   # resource-server container has curl and sits on the compose network with
-  # auth-service. /internal/refresh is not routable through APISIX by design.
+  # auth-service. /internal/resolve is not routable through APISIX by design.
   docker compose exec -T resource-server curl -s -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Authorization: Bearer $1" \
     -H "Content-Type: application/json" \
     --data '{"sid":"conformance-nonexistent-sid"}' \
-    http://auth-service:8081/internal/refresh 2>/dev/null
+    http://auth-service:8081/internal/resolve 2>/dev/null
 }
 
 gw_tok="$(mint_cc oidc-reference-api-gateway "$DEV_GATEWAY_SECRET")"
@@ -120,7 +113,7 @@ else
   # lookup -> 404 (bogus sid). Any of 404/409/200 means "accepted past identity".
   case "$gw_code" in
     404|409|200)
-      printf '[PASS] C8 configured gateway client passes /internal/refresh identity check (status=%s)\n' "$gw_code"
+      printf '[PASS] C8 configured gateway client passes /internal/resolve identity check (status=%s)\n' "$gw_code"
       PASSED=$((PASSED + 1)) ;;
     401|403)
       printf '[FAIL] C8 configured gateway client was REJECTED at identity check (status=%s) — refresh would never work\n' "$gw_code"
@@ -133,7 +126,7 @@ else
   # audience -> rejected at the identity check, never reaching session logic.
   case "$svc_code" in
     401|403)
-      printf '[PASS] C8 foreign client REJECTED at /internal/refresh identity check (status=%s)\n' "$svc_code"
+      printf '[PASS] C8 foreign client REJECTED at /internal/resolve identity check (status=%s)\n' "$svc_code"
       PASSED=$((PASSED + 1)) ;;
     *)
       printf '[FAIL] C8 foreign client NOT rejected (status=%s; expected 401/403) — trust id not enforced on the wire\n' "$svc_code"
@@ -164,32 +157,33 @@ else
   FAILED=$((FAILED + 1))
 fi
 
-# rendered apisix idle_ttl_seconds must track SESSION_IDLE_TTL (the gateway plane)
-render_idle "$ALT_IDLE"
-rendered_idle="$(grep -m1 'idle_ttl_seconds:' api-gateway/apisix.yaml.local \
-  | grep -oE '[0-9]+' | head -1)"
-assert_status "C9.1 rendered apisix idle_ttl_seconds tracks SESSION_IDLE_TTL" \
-  "$ALT_IDLE" "${rendered_idle:-unset}"
-
-# --- C9.2 gateway behaviorally USES the configured idle (not the 1800 default) -
-reload_apisix
+# --- C9.2 the Auth Service behaviorally USES the configured idle (not 1800) ---
+# Recreate the auth-service at the compressed idle. The resolve handler reads
+# app.session-idle-ttl (env SESSION_IDLE_TTL) and slides to it on every /api
+# resolve; if it ignored config and used a hardcoded 1800, the post-/api TTL
+# below would land at ~1800 instead of ~10.
+if ! set_auth_idle "$ALT_IDLE"; then
+  printf 'fatal: auth-service did not become healthy at idle=%s\n' "$ALT_IDLE" >&2
+  exit 2
+fi
 sid="conf-idle-1"
 # absolute ceiling far in the future so the cap is the IDLE value, not remaining.
 setup_session_absolute "$sid" "test-jwt-conf-idle" 300 3600 100
-# The plugin slides the TTL in its access phase BEFORE forwarding upstream, so
-# the post-call TTL reflects the configured idle regardless of the RS verdict on
-# the (fake) bearer. We only require the plugin did NOT short-circuit the request
-# as no-session (302/401-no-cookie) or CSRF (403) — any forwarded status proves
-# the slide ran. A GET carries no CSRF, so 401-from-RS / 200 are the live cases.
+# The Auth Service slides the TTL inside /internal/resolve BEFORE the gateway
+# forwards upstream, so the post-call TTL reflects the configured idle regardless
+# of the RS verdict on the (fake) bearer. We only require the gateway did NOT
+# short-circuit as no-session (302/401-no-cookie) or CSRF (403) — any forwarded
+# status proves resolve ran. A GET carries no CSRF, so 401-from-RS / 200 are the
+# live cases.
 status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
   -H "Cookie: __Host-sid=$sid" \
   "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
 case "$status" in
   302|403|502|000|"")
-    printf '[FAIL] C9.2 plugin did not forward /api (status=%s) — slide did not run\n' "$status"
+    printf '[FAIL] C9.2 gateway did not resolve+forward /api (status=%s) — slide did not run\n' "$status"
     FAILED=$((FAILED + 1)) ;;
   *)
-    printf '[PASS] C9.2 plugin forwarded /api (status=%s; slide ran in access phase)\n' "$status"
+    printf '[PASS] C9.2 gateway resolved+forwarded /api (status=%s; Auth Service slid the session)\n' "$status"
     PASSED=$((PASSED + 1)) ;;
 esac
 after="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"
@@ -208,8 +202,9 @@ clear_session "$sid"
 
 # --- C9.3 /auth/me is a non-extending liveness read --------------------------
 # Seed a full-shaped session (with claims) so /auth/me returns 200, give it a
-# known low Valkey TTL, then hit /auth/me and assert the TTL was NOT bumped to
-# the idle window — only /api activity slides the session.
+# Valkey TTL (40) ABOVE the now-configured idle (10), then hit /auth/me and
+# assert the TTL was NOT slid down to the idle window — only /api activity (the
+# resolve path) slides the session. A wrongful slide here would drop 40 -> ~10.
 sid="conf-noextend-1"
 expires_at="$(iso8601_in 300)"
 absolute_expires_at="$(iso8601_in 3600)"
@@ -223,11 +218,14 @@ me_status="$(curl -s -o /dev/null -w '%{http_code}' \
 after_me="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"
 if [ "$me_status" = "200" ]; then
   # /auth/me accepted the session; it must NOT have slid the TTL toward idle.
-  if [ "$after_me" -le 40 ] && [ "$after_me" -gt 0 ]; then
-    printf '[PASS] C9.3 /auth/me did NOT extend session TTL (still %s<=40, no slide)\n' "$after_me"
+  # No slide keeps it near the seeded 40; a slide would drop it to ~10 (the
+  # configured idle). >20 cleanly separates the two outcomes.
+  if [ "$after_me" -gt 20 ] && [ "$after_me" -le 40 ]; then
+    printf '[PASS] C9.3 /auth/me did NOT slide session TTL (still %s, not dropped to ~%s)\n' \
+      "$after_me" "$ALT_IDLE"
     PASSED=$((PASSED + 1))
   else
-    printf '[FAIL] C9.3 /auth/me extended the session TTL to %s (must not slide)\n' "$after_me"
+    printf '[FAIL] C9.3 /auth/me slid the session TTL to %s (must not slide; expected ~40)\n' "$after_me"
     FAILED=$((FAILED + 1))
   fi
 else

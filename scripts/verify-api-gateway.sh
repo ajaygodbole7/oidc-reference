@@ -45,6 +45,20 @@ if [ ! -s "$plugin_lua" ]; then
   fail "$plugin_lua missing or empty (gateway-agent's Lua plugin must land here)"
 fi
 
+# Phantom-token invariant: the gateway holds NO session store handle. It resolves
+# the opaque sid via the Auth Service (POST /internal/resolve) and must NOT speak
+# Redis/Valkey directly. This guards against a regression that reintroduces a
+# store client or the gateway-side idle window — see
+# docs/architecture/phantom-token-session-resolution.md.
+if grep -E -q 'require.*resty\.redis|valkey_host|valkey_port|valkey_password|idle_ttl_seconds' "$plugin_lua"; then
+  fail "$plugin_lua speaks to a session store (resty.redis/valkey_*) — the gateway must resolve via /internal/resolve, not read the store"
+fi
+grep -F -q "/internal/resolve" "$plugin_lua" \
+  || fail "$plugin_lua missing the /internal/resolve back-channel call"
+if grep -E -q 'valkey_host|valkey_port|valkey_password|idle_ttl_seconds' "$apisix_yaml"; then
+  fail "$apisix_yaml still wires Valkey into the bff-session plugin — remove valkey_*/idle_ttl_seconds"
+fi
+
 # ---- Live check (opt-in) ----
 
 if [ "${RUN_LIVE_API_GATEWAY:-0}" = "1" ]; then

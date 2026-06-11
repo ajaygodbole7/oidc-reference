@@ -4,22 +4,26 @@
 -- Source of truth:
 --   docs/specs/SPEC-0001-core-oidc-flows.md
 --     §"API Gateway Architecture (APISIX)"
---     §7.1 /internal/refresh contract
---     §7.2 sess:{sid} schema (tolerant reader)
+--     §7.1 /internal/resolve contract
 --     §7.3 signed CSRF contract
+--
+-- Phantom-token shape: the gateway holds ONLY the opaque session id. It has
+-- no Valkey client and no knowledge of the session schema; it introspects the
+-- sid via the Auth Service to obtain the access token it injects upstream.
 --
 -- Pipeline executed in the APISIX `access` phase on every matched
 -- /api/** request:
 --   1. Read session cookie (__Host-sid in HTTPS, sid in HTTP).
 --   2. No cookie -> Fetch-Metadata classifier (navigation -> 302
 --      /auth/login?return_to=..., else -> 401 problem+json).
---   3. GET sess:{sid} from Valkey; tolerant read of access_token +
---      access_token_expires_at.
---   4. Signed CSRF validation on POST/PUT/DELETE/PATCH.
---   5. Refresh delegation when access_token_expires_at is within the
---      refresh window — Client-Credentials cached per worker.
---   6. Strip Cookie + hop-by-hop headers; inject Authorization: Bearer.
---   7. Header_filter phase adds Cache-Control: no-store on the response.
+--   3. Signed CSRF validation on POST/PUT/DELETE/PATCH (sid from the cookie;
+--      no store read).
+--   4. POST /internal/resolve {sid} on the Auth Service (Client-Credentials
+--      bearer, cached per worker). It looks up the session, slides the idle
+--      window, refreshes the access token if near expiry, and returns the
+--      current token. 404/409 -> session gone; 502/transport -> 503.
+--   5. Strip Cookie + hop-by-hop headers; inject Authorization: Bearer.
+--   6. Header_filter phase adds Cache-Control: no-store on the response.
 --
 -- The plugin's gateway-client identity and the CSRF signing key are supplied
 -- via plugin conf in apisix.yaml. No secrets are hard-coded in this module.
@@ -27,7 +31,6 @@
 
 local core        = require("apisix.core")
 local cjson       = require("cjson.safe")
-local redis       = require("resty.redis")
 local http        = require("resty.http")
 local hmac        = require("resty.hmac")
 local ngx         = ngx
@@ -50,22 +53,19 @@ local priority    = 2500
 local schema = {
   type = "object",
   required = {
-    "valkey_host", "valkey_port", "auth_service_base",
-    "idp_token_url", "gateway_client_id",
+    "auth_service_base", "idp_token_url", "gateway_client_id",
     "gateway_client_secret", "cookie_signing_key",
-    "refresh_window_seconds",
   },
   properties = {
-    valkey_host             = { type = "string" },
-    valkey_port             = { type = "integer", minimum = 1, maximum = 65535 },
-    valkey_password         = { type = "string" },                   -- optional
+    -- The gateway holds NO session store handle. It resolves the sid into an
+    -- access token by calling auth_service_base/internal/resolve (phantom
+    -- token); session lookup, the idle-TTL slide, and refresh all live in the
+    -- Auth Service, the sole reader/writer of sess:{sid}.
     auth_service_base       = { type = "string" },                   -- e.g. http://auth-service:8081
-    idp_token_url           = { type = "string" },                   -- IdP /token endpoint for Client Credentials
+    idp_token_url           = { type = "string" },                   -- IdP /token endpoint for the Client-Credentials bearer
     gateway_client_id       = { type = "string" },
     gateway_client_secret   = { type = "string" },
     cookie_signing_key      = { type = "string" },                   -- std-base64-encoded 256-bit key
-    refresh_window_seconds  = { type = "integer", default = 60 },
-    idle_ttl_seconds        = { type = "integer", minimum = 1, default = 1800 },
   },
 }
 
@@ -246,164 +246,14 @@ local function no_session_response(ctx, conf, scheme, host, uri)
 end
 
 -- ---------------------------------------------------------------------
--- Tolerant sess:{sid} reader
+-- Session resolution (phantom token)
 -- ---------------------------------------------------------------------
 
--- Open a short-lived Redis connection. Timeouts are tight because every
--- /api/** request goes through this path; a sluggish Valkey would
--- otherwise queue requests.
-local function valkey_connect(conf)
-  local red = redis:new()
-  red:set_timeouts(200, 200, 200)  -- connect, send, read (ms)
-  local ok, err = red:connect(conf.valkey_host, conf.valkey_port)
-  if not ok then
-    return nil, err
-  end
-  if conf.valkey_password and conf.valkey_password ~= "" then
-    local _, auth_err = red:auth(conf.valkey_password)
-    if auth_err then
-      return nil, auth_err
-    end
-  end
-  return red
-end
-
-local function valkey_release(red)
-  if not red then return end
-  -- Keep the connection in the pool for reuse; 10s idle, 100 entries.
-  local ok, err = red:set_keepalive(10000, 100)
-  if not ok then
-    -- Pool-set failed (e.g. due to error state); close instead.
-    red:close()
-    core.log.info("bff-session: redis keepalive failed: ", err)
-  end
-end
-
--- Close a connection that must NOT be pooled. After a read error the socket
--- may hold a partial/unread reply; returning it to the keepalive pool would
--- let the next request read those leftover bytes as ITS session payload
--- (cross-session token confusion). Always close, never keepalive, on error.
-local function valkey_discard(red)
-  if not red then return end
-  red:close()
-end
-
--- Returns: access_token, expires_at_iso, absolute_expires_at_iso, err_string
--- err_string nil => success. Any non-nil err_string MUST be treated as
--- "no session" by the caller per SPEC §7.2 rule 4.
-local function read_session(conf, sid)
-  local red, err = valkey_connect(conf)
-  if not red then
-    return nil, nil, nil, "valkey_connect: " .. tostring(err)
-  end
-
-  local res, get_err = red:get("sess:" .. sid)
-  if get_err then
-    -- Close (do not pool) a connection whose read failed — see valkey_discard.
-    valkey_discard(red)
-    return nil, nil, nil, "valkey_get: " .. tostring(get_err)
-  end
-  valkey_release(red)
-  if res == ngx.null or res == nil then
-    return nil, nil, nil, "missing"
-  end
-
-  local payload, parse_err = cjson.decode(res)
-  if not payload then
-    return nil, nil, nil, "json_decode: " .. tostring(parse_err)
-  end
-  -- Tolerant reader: consume only what we need. Anything else is
-  -- ignored — including unknown fields the Auth Service may add later
-  -- under §7.2 rule 2.
-  local access_token = payload.access_token
-  local expires_at   = payload.access_token_expires_at
-  local absolute_expires_at = payload.absolute_expires_at
-  if type(access_token) ~= "string" or access_token == ""
-     or type(expires_at) ~= "string" or expires_at == "" then
-    return nil, nil, nil, "missing_required_field"
-  end
-  if absolute_expires_at ~= nil and type(absolute_expires_at) ~= "string" then
-    return nil, nil, nil, "malformed_absolute_expires_at"
-  end
-  return access_token, expires_at, absolute_expires_at, nil
-end
-
--- ---------------------------------------------------------------------
--- ISO-8601 expiry parser
--- ---------------------------------------------------------------------
-
--- Days since 1970-01-01 for a proleptic-Gregorian date, via Howard
--- Hinnant's days_from_civil algorithm. Pure integer arithmetic: NO
--- os.time / os.date, so the result does not depend on the container's
--- timezone. (A prior version derived a local→UTC offset with
--- os.time(os.date(...)); the offset silently evaluated to zero, parsing
--- every UTC timestamp in the host's local zone. compose pins TZ=UTC,
--- which masked it — but a reference parser must be correct in any zone,
--- so the TZ dependency is removed entirely rather than papered over.)
-local function days_from_civil(y, m, d)
-  if m <= 2 then y = y - 1 end
-  local era = math.floor((y >= 0 and y or y - 399) / 400)
-  local yoe = y - era * 400                                   -- [0, 399]
-  local mp  = (m > 2) and (m - 3) or (m + 9)
-  local doy = math.floor((153 * mp + 2) / 5) + d - 1          -- [0, 365]
-  local doe = yoe * 365 + math.floor(yoe / 4)
-              - math.floor(yoe / 100) + doy                   -- [0, 146096]
-  return era * 146097 + doe - 719468
-end
-
--- Parse a strict ISO-8601 UTC timestamp ("2025-05-25T17:35:00Z" or with
--- a fractional seconds component). Returns an epoch-seconds integer or
--- nil on parse failure. Anything other than UTC is rejected — the Auth
--- Service writes only UTC per §7.2.
-local function parse_iso8601_utc(s)
-  if type(s) ~= "string" then return nil end
-  -- Pattern: YYYY-MM-DDTHH:MM:SS[.frac]Z
-  local y, mo, d, h, mi, se = s:match(
-    "^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)%.?%d*Z$")
-  if not y then return nil end
-  local days = days_from_civil(tonumber(y), tonumber(mo), tonumber(d))
-  return days * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60 + tonumber(se)
-end
-
--- Test hook: parse_iso8601_utc is the only timezone-sensitive logic in the
--- gateway and must hold in ANY container TZ (compose pins TZ=UTC, but the
--- parser must not depend on that pin). Exported so
--- tests/test-iso8601-parse.lua can exercise it under a TZ matrix without an
--- nginx context. Not part of the APISIX plugin contract.
-_M._parse_iso8601_utc = parse_iso8601_utc
-
-local function slide_session_ttl(conf, sid, absolute_expires_at_iso)
-  if not absolute_expires_at_iso then
-    return true
-  end
-  local absolute_expires_at = parse_iso8601_utc(absolute_expires_at_iso)
-  if not absolute_expires_at then
-    return nil, "malformed_absolute_expires_at"
-  end
-  local remaining = absolute_expires_at - ngx_time()
-  if remaining <= 0 then
-    return nil, "absolute_expired"
-  end
-  local ttl = math.min(conf.idle_ttl_seconds, remaining)
-  if ttl <= 0 then
-    return nil, "absolute_expired"
-  end
-
-  local red, err = valkey_connect(conf)
-  if not red then
-    return nil, "valkey_connect: " .. tostring(err)
-  end
-  local ok, expire_err = red:expire("sess:" .. sid, ttl)
-  if expire_err then
-    valkey_discard(red)
-    return nil, "valkey_expire: " .. tostring(expire_err)
-  end
-  valkey_release(red)
-  if ok ~= 1 then
-    return nil, "missing"
-  end
-  return true
-end
+-- The gateway holds NO session store handle. Session lookup, the idle-TTL
+-- slide, and refresh all live behind the Auth Service's POST /internal/resolve,
+-- called from resolve_session() below. There is no Redis/Valkey client here and
+-- no knowledge of the sess:{sid} schema — only the Auth Service touches the
+-- store.
 
 -- ---------------------------------------------------------------------
 -- Signed CSRF validation (mirrors auth-service SignedCsrfSupport)
@@ -635,16 +485,17 @@ local function get_cc_token(conf, force_refresh)
 end
 
 -- ---------------------------------------------------------------------
--- /internal/refresh delegation
+-- /internal/resolve delegation (phantom token)
 -- ---------------------------------------------------------------------
 
--- Returns: status_code, error_string
--- status_code is the upstream /internal/refresh HTTP status (200, 401,
--- 404, 409, 502, or 0 for transport failure).
-local function call_internal_refresh(conf, sid, cc_token)
-  local url = conf.auth_service_base .. "/internal/refresh"
+-- Returns: status_code, body_string, error_string
+-- status_code is the upstream /internal/resolve HTTP status (200, 401,
+-- 404, 409, 502, or 0 for transport failure). body_string carries the
+-- access_token on 200; nil otherwise.
+local function call_internal_resolve(conf, sid, cc_token)
+  local url = conf.auth_service_base .. "/internal/resolve"
   local httpc = http.new()
-  -- Connect 1s + read 5s per SPEC §"Timeouts and circuit breaker".
+  -- Connect 1s + read 5s: resolve may include a Keycloak refresh round-trip.
   httpc:set_timeouts(1000, 5000, 5000)
 
   local res, err = httpc:request_uri(url, {
@@ -657,79 +508,94 @@ local function call_internal_refresh(conf, sid, cc_token)
     },
   })
   if not res then
-    return 0, tostring(err)
+    return 0, nil, tostring(err)
   end
-  return res.status, nil
+  return res.status, res.body, nil
 end
 
--- Drive the full refresh flow per §7.1 Gateway-side response table.
--- Returns: action_string. The caller maps actions to browser responses.
---   "ok"        -> proceed (sess:{sid} has been updated; re-read it)
---   "401_clear" -> 401 to browser + clear cookie (404 / 409 cases)
---   "503"       -> 503 with Retry-After: 1 (502 case; do NOT clear cookie)
---   "502"       -> 502 to browser (after CC-token retry exhausted)
+-- Extract access_token from a /internal/resolve 200 body. nil if missing/malformed.
+local function resolve_token_from_body(body)
+  if type(body) ~= "string" or body == "" then return nil end
+  local parsed = cjson.decode(body)
+  if type(parsed) ~= "table" or type(parsed.access_token) ~= "string"
+     or parsed.access_token == "" then
+    return nil
+  end
+  return parsed.access_token
+end
+
+-- Resolve the sid into the current access token via /internal/resolve, per the
+-- §7.1 Gateway-side response table. Returns: access_token, action_string.
+--   "ok"        -> inject access_token and proceed
+--   "401_clear" -> session gone (404 / 409): clear cookie + no-session response
+--   "503"       -> 503 with Retry-After: 1 (502 / transport; do NOT clear cookie)
+--   "502"       -> 502 to browser (CC-token retry exhausted, or a malformed 200)
 --
--- `deps` (optional) injects the two I/O helpers so the failure-branch
--- decision table can be unit-tested deterministically — forcing a mid-flight
--- 404/409/401/transport failure is not orchestratable against the live stack,
--- so api-gateway/tests/test-refresh-flow.lua drives this with stubs.
--- Production calls refresh_session(conf, sid) with deps=nil and uses the real
--- get_cc_token / call_internal_refresh.
-local function refresh_session(conf, sid, deps)
+-- `deps` (optional) injects the two I/O helpers so the failure-branch decision
+-- table is unit-tested deterministically (api-gateway/tests/test-resolve-flow.lua)
+-- — forcing a mid-flight 404/409/401/transport failure is not orchestratable
+-- against the live stack. Production passes deps=nil and uses the real
+-- get_cc_token / call_internal_resolve.
+local function resolve_session(conf, sid, deps)
   local get_cc = (deps and deps.get_cc_token) or get_cc_token
-  local call_refresh = (deps and deps.call_internal_refresh) or call_internal_refresh
+  local call_resolve = (deps and deps.call_internal_resolve) or call_internal_resolve
 
   local cc_token, cc_err = get_cc(conf, false)
   if not cc_token then
     core.log.error("bff-session: cc token fetch failed: ", cc_err)
-    return "502"
+    return nil, "502"
   end
 
-  local status, transport_err = call_refresh(conf, sid, cc_token)
+  local status, body = call_resolve(conf, sid, cc_token)
   if status == 200 then
-    return "ok"
+    local token = resolve_token_from_body(body)
+    if not token then
+      core.log.error("bff-session: /internal/resolve 200 with no access_token")
+      return nil, "502"
+    end
+    return token, "ok"
   end
   if status == 404 or status == 409 then
     -- Session was logged out, or refresh was rejected by the IdP
-    -- (invalid_grant). Auth Service has
-    -- already deleted sess:{sid} on the 409 path and the cookie is now
-    -- useless. The browser sees 401 and the SPA initiates fresh login.
-    return "401_clear"
+    -- (invalid_grant) and the Auth Service already deleted sess:{sid}. The
+    -- cookie is useless; the browser sees a no-session response.
+    return nil, "401_clear"
   end
   if status == 401 then
-    -- Our own CC token failed at Auth Service. Invalidate cache, fetch
-    -- a fresh one, retry exactly ONCE per §7.1 handling table.
-    core.log.warn("bff-session: auth-service 401 on /internal/refresh; retrying with fresh CC token")
+    -- Our own CC token failed at the Auth Service. Invalidate cache, fetch a
+    -- fresh one, retry exactly ONCE per §7.1 handling table.
+    core.log.warn("bff-session: auth-service 401 on /internal/resolve; retrying with fresh CC token")
     local new_token, new_err = get_cc(conf, true)
     if not new_token then
       core.log.error("bff-session: cc token re-fetch failed: ", new_err)
-      return "502"
+      return nil, "502"
     end
-    local retry_status = call_refresh(conf, sid, new_token)
-    if retry_status == 200 then return "ok" end
-    if retry_status == 404 or retry_status == 409 then return "401_clear" end
+    local retry_status, retry_body = call_resolve(conf, sid, new_token)
+    if retry_status == 200 then
+      local token = resolve_token_from_body(retry_body)
+      if token then return token, "ok" end
+      return nil, "502"
+    end
+    if retry_status == 404 or retry_status == 409 then return nil, "401_clear" end
     -- Second 401 (or any other terminal failure) -> 502 + audit log.
-    core.log.error("bff-session: refresh failed after CC retry; status=", tostring(retry_status))
-    return "502"
+    core.log.error("bff-session: resolve failed after CC retry; status=", tostring(retry_status))
+    return nil, "502"
   end
-  -- 502 or transport failure -> 503 to browser; session still valid.
+  -- 502 or transport failure -> 503 to browser; the session may still be valid.
   if status == 502 or status == 0 then
-    if transport_err then
-      core.log.warn("bff-session: /internal/refresh transport error: ", transport_err)
-    end
-    return "503"
+    return nil, "503"
   end
   -- Unknown status — treat as server fault but do not clear cookie.
-  core.log.error("bff-session: unexpected /internal/refresh status: ", tostring(status))
-  return "503"
+  core.log.error("bff-session: unexpected /internal/resolve status: ", tostring(status))
+  return nil, "503"
 end
 
--- Test hook: the refresh failure-branch decision table (404/409 eviction,
--- 401 CC-token retry, transport→503) cannot be exercised against the live
--- stack because the failures are not deterministically orchestratable.
--- test-refresh-flow.lua drives this with stubbed I/O deps. Not part of the
+-- Test hook: the resolve failure-branch decision table (404/409 eviction, 401
+-- CC-token retry, transport→503) cannot be exercised against the live stack
+-- because the failures are not deterministically orchestratable.
+-- test-resolve-flow.lua drives this with stubbed I/O deps. Not part of the
 -- APISIX plugin contract.
-_M._refresh_session = refresh_session
+_M._resolve_session = resolve_session
 
 -- ---------------------------------------------------------------------
 -- Plugin lifecycle
@@ -784,71 +650,36 @@ function _M.access(conf, ctx)
     return no_session_response(ctx, conf, scheme, host, uri)
   end
 
-  -- Step 3: tolerant Valkey read.
-  local access_token, expires_at_iso, absolute_expires_at_iso, read_err = read_session(conf, sid)
-  if read_err then
-    -- "missing" = no sess record (logged-out / expired); other err
-    -- strings are infra-level. Log only the err class; the sid is not
-    -- a token but is still sensitive enough that we do not log it.
-    if read_err == "missing" or read_err == "missing_required_field"
-       or read_err:sub(1, 12) == "json_decode:" then
-      core.log.info("bff-session: no session for sid (reason=", read_err, ")")
-      expire_session_cookie(scheme)
-      return no_session_response(ctx, conf, scheme, host, uri)
-    end
-    -- Connect/get failure -> 502; the cookie may still be valid.
-    core.log.error("bff-session: valkey failure: ", read_err)
-    return problem_json(502, "Bad Gateway", "session store unavailable")
-  end
-
-  -- Step 4: signed CSRF on state-changing methods. Done before refresh
-  -- so we don't burn a refresh slot on a forged request.
+  -- Step 3: signed CSRF on state-changing methods. Done BEFORE resolve so we
+  -- don't burn a resolve RPC (and its possible refresh) on a forged request.
+  -- CSRF uses the sid from the cookie; no store read.
   local csrf_pass, csrf_reason = csrf_ok(ctx, conf, method, cookies, sid)
   if not csrf_pass then
     core.log.warn("bff-session: csrf reject reason=", tostring(csrf_reason))
     return problem_json(403, "Forbidden", "invalid CSRF token")
   end
 
-  -- Step 5: refresh window.
-  local expires_at = parse_iso8601_utc(expires_at_iso)
-  if not expires_at then
-    -- Malformed expiry => treat as no session per tolerant reader rule.
-    core.log.info("bff-session: malformed access_token_expires_at; treating as no session")
+  -- Step 4: resolve the sid into the current access token via the Auth
+  -- Service. The gateway holds no store handle — /internal/resolve looks up the
+  -- session, slides the idle window, refreshes if near expiry, and returns the
+  -- token. No gateway-side cache, so a server-side session delete is visible on
+  -- the very next request (instant revocation).
+  local access_token, action = resolve_session(conf, sid)
+  if action == "401_clear" then
+    -- 404 (session gone) or 409 (invalidated). Evict the now-useless cookie;
+    -- the browser sees a no-session response (top-level nav -> 302 login,
+    -- XHR -> 401).
     expire_session_cookie(scheme)
     return no_session_response(ctx, conf, scheme, host, uri)
+  elseif action == "503" then
+    core.response.set_header("Retry-After", "1")
+    return problem_json(503, "Service Unavailable", "session resolution temporarily unavailable")
+  elseif action == "502" then
+    return problem_json(502, "Bad Gateway", "session resolution failed")
   end
-  local slide_ok, slide_err = slide_session_ttl(conf, sid, absolute_expires_at_iso)
-  if not slide_ok then
-    if slide_err == "absolute_expired" or slide_err == "missing"
-       or slide_err == "malformed_absolute_expires_at" then
-      core.log.info("bff-session: session ttl slide rejected (reason=", tostring(slide_err), ")")
-      expire_session_cookie(scheme)
-      return no_session_response(ctx, conf, scheme, host, uri)
-    end
-    core.log.error("bff-session: valkey ttl slide failure: ", tostring(slide_err))
-    return problem_json(502, "Bad Gateway", "session store unavailable")
-  end
-  if expires_at - ngx_time() <= conf.refresh_window_seconds then
-    local action = refresh_session(conf, sid)
-    if action == "401_clear" then
-      expire_session_cookie(scheme)
-      return problem_json(401, "Unauthorized", "session ended")
-    elseif action == "503" then
-      core.response.set_header("Retry-After", "1")
-      return problem_json(503, "Service Unavailable", "refresh temporarily unavailable")
-    elseif action == "502" then
-      return problem_json(502, "Bad Gateway", "refresh failed")
-    end
-    -- action == "ok" -> re-read sess:{sid} to pick up rotated token.
-    local new_token, _, _, re_err = read_session(conf, sid)
-    if re_err or not new_token then
-      core.log.error("bff-session: re-read after refresh failed: ", tostring(re_err))
-      return problem_json(502, "Bad Gateway", "session re-read failed")
-    end
-    access_token = new_token
-  end
+  -- action == "ok": access_token holds the bearer to inject.
 
-  -- Step 6: header shaping. Strip inbound Cookie + hop-by-hop, including
+  -- Step 5: header shaping. Strip inbound Cookie + hop-by-hop, including
   -- extension headers named by Connection, then inject the bearer.
   -- core.request.set_header sets BOTH ctx headers (visible to later
   -- plugins) and the upstream request.

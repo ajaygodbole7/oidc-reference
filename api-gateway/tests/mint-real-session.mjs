@@ -6,7 +6,7 @@
  * This exists for the gateway refresh-delegation test. That test must not seed
  * a synthetic sess:{sid} with fake refresh_token material, because the Auth
  * Service correctly delegates refresh to the real IdP. A fake refresh_token
- * produces a 502 from /internal/refresh and proves only that the fixture is
+ * produces a 502 from /internal/resolve and proves only that the fixture is
  * impossible. This helper obtains a real Keycloak refresh token by completing
  * the login flow through APISIX.
  */

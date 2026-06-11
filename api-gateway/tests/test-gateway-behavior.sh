@@ -166,7 +166,7 @@ test_unknown_path_returns_404() {
   assert_status "$name status" 404 "$status"
 }
 
-# The Auth Service /internal/refresh endpoint is the only way to rotate
+# The Auth Service /internal/resolve endpoint is the only way to rotate
 # tokens. It is reachable solely from the gateway -> auth-service direction,
 # over Client Credentials. External clients MUST NOT be able to route to
 # /internal/** through APISIX. This is enforced structurally: apisix.yaml
@@ -175,12 +175,12 @@ test_unknown_path_returns_404() {
 test_internal_path_is_not_routable_through_gateway() {
   name="internal_path_is_not_routable_through_gateway"
 
-  # 1. Bare GET /internal/refresh -> 404 (no route, plugin not invoked).
+  # 1. Bare GET /internal/resolve -> 404 (no route, plugin not invoked).
   status="$(curl -s -o /dev/null -w '%{http_code}' \
-    "$GATEWAY_BASE/internal/refresh" 2>/dev/null || true)"
+    "$GATEWAY_BASE/internal/resolve" 2>/dev/null || true)"
   assert_status "$name bare_get_status" 404 "$status"
 
-  # 2. Real method POST /internal/refresh with JSON body -> 404. This is
+  # 2. Real method POST /internal/resolve with JSON body -> 404. This is
   #    the contract method; rejecting it at the routing layer (not just
   #    the JWT layer downstream) is what keeps /internal off the public
   #    surface.
@@ -188,7 +188,7 @@ test_internal_path_is_not_routable_through_gateway() {
     -X POST \
     -H 'Content-Type: application/json' \
     --data '{"sid":"anything"}' \
-    "$GATEWAY_BASE/internal/refresh" 2>/dev/null || true)"
+    "$GATEWAY_BASE/internal/resolve" 2>/dev/null || true)"
   assert_status "$name post_with_body_status" 404 "$status"
 
   # 3. Even WITH a seeded session cookie, /internal/** must not become
@@ -201,7 +201,7 @@ test_internal_path_is_not_routable_through_gateway() {
     -H "Cookie: __Host-sid=$sid" \
     -H 'Content-Type: application/json' \
     --data "{\"sid\":\"$sid\"}" \
-    "$GATEWAY_BASE/internal/refresh" 2>/dev/null || true)"
+    "$GATEWAY_BASE/internal/resolve" 2>/dev/null || true)"
   assert_status "$name post_with_session_status" 404 "$status"
   clear_session "$sid"
 
@@ -389,7 +389,7 @@ test_refresh_failure_evicts_session_and_clears_cookie() {
   # branches are otherwise only the Lua decision-table unit test. Here we drive
   # the real stack into the 409 branch: mint a real session, corrupt its stored
   # refresh_token, and move the access token into the refresh window. The next
-  # /api call makes the gateway delegate to /internal/refresh; the auth-service
+  # /api call makes the gateway delegate to /internal/resolve; the auth-service
   # sends the bad refresh token to Keycloak, earns invalid_grant, returns 409,
   # and DELETES sess:{sid}. The gateway must surface 401 to the browser AND
   # evict the session cookie.

@@ -27,11 +27,11 @@ require_present "/api/jobs" README.md docs tasks
 require_present "no BFF in path|Client Credentials.*internal RPC|Client Credentials.*RPC|internal RPC.*Client Credentials" README.md docs tasks
 
 # Frame B split: the combined BFF is replaced by an Auth Service plus an
-# APISIX-based API Gateway, with an internal /internal/refresh RPC between
+# APISIX-based API Gateway, with an internal /internal/resolve RPC between
 # them authenticated via Client Credentials.
 require_present "[Aa]uth [Ss]ervice" README.md docs
 require_present "[Aa]pi [Gg]ateway|API Gateway|api-gateway" README.md docs
-require_present "/internal/refresh" README.md docs
+require_present "/internal/resolve" README.md docs
 require_present "[Cc]lient [Cc]redentials" README.md docs
 
 # Live cross-service smoke. With the split topology the Resource Server has

@@ -17,7 +17,7 @@
 --      X-XSRF-TOKEN header value against the XSRF-TOKEN cookie using the
 --      shared signing key (B4).
 --   5. Refresh delegation. When access_token is within the refresh
---      window, POST /internal/refresh on the Auth Service with a Client
+--      window, POST /internal/resolve on the Auth Service with a Client
 --      Credentials bearer for the configured gateway client and
 --      internal-refresh audience; then re-read sess:{sid}.
 --   6. Fetch Metadata classification. Use Sec-Fetch-Mode / Sec-Fetch-Dest

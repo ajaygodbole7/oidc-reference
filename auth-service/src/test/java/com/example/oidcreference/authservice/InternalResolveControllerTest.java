@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -43,17 +42,18 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
- * Coverage for the POST {@code /internal/refresh} contract from SPEC-0001
- * §7.1. Uses {@code @SpringBootTest} so the full Resource-Server filter
- * chain (Order 1) is exercised end-to-end. The {@code jwt()} request
- * post-processor from {@code spring-security-test} installs a pre-built
- * {@code Jwt} principal — that bypasses the real {@link JwtDecoder} (which
- * would otherwise need a live JWKS endpoint) while still letting the
- * controller observe the audience and {@code azp} claims defensively.
+ * Coverage for the POST {@code /internal/resolve} contract from SPEC-0001
+ * §7.1 (the phantom-token session resolution endpoint). The gateway holds
+ * only the opaque sid and introspects it here to obtain the access token it
+ * injects upstream — resolve does lookup, an idle-TTL slide (this call
+ * represents real {@code /api} activity), and a refresh when the access
+ * token is near expiry, then returns the current valid token.
  *
- * <p>The {@link JwtDecoder} bean is stubbed via {@code @Primary} so context
- * refresh does not call out to the (non-existent) Keycloak issuer at bean
- * construction.
+ * <p>Uses {@code @SpringBootTest} so the full Resource-Server filter chain
+ * (Order 1) is exercised end-to-end. The {@code jwt()} post-processor
+ * installs a pre-built {@code Jwt} principal, bypassing the real
+ * {@link JwtDecoder} while still letting the controller observe the
+ * audience and {@code azp} claims defensively.
  */
 @SpringBootTest(properties = {
     "spring.main.allow-bean-definition-overriding=true",
@@ -69,7 +69,7 @@ import org.springframework.test.web.servlet.MockMvc;
 })
 @AutoConfigureMockMvc
 @ExtendWith(OutputCaptureExtension.class)
-class InternalRefreshControllerTest {
+class InternalResolveControllerTest {
 
   private static final String EXPECTED_AUDIENCE = "oidc-reference-auth-internal";
   private static final String EXPECTED_CLIENT_ID = "oidc-reference-api-gateway";
@@ -90,21 +90,18 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshFailsWithoutBearer() throws Exception {
+  void resolveFailsWithoutBearer() throws Exception {
     // The Order-1 chain has oauth2ResourceServer with anyRequest authenticated;
     // anonymous calls are rejected at the filter, never reaching the handler.
-    mockMvc.perform(post("/internal/refresh")
+    mockMvc.perform(post("/internal/resolve")
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"sid-anything\"}"))
         .andExpect(status().isUnauthorized());
   }
 
   @Test
-  void refreshFailsWithWrongAudience() throws Exception {
-    // Bearer is structurally valid but aud=other-api; the controller's
-    // defensive audience check rejects with 401 problem+json even if a
-    // misconfigured filter chain let the call through.
-    mockMvc.perform(post("/internal/refresh")
+  void resolveFailsWithWrongAudience() throws Exception {
+    mockMvc.perform(post("/internal/resolve")
             .with(jwt().jwt(j -> j
                 .audience(List.of("other-api"))
                 .claim("azp", EXPECTED_CLIENT_ID)))
@@ -115,11 +112,10 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshFailsWithoutMatchingClientId() throws Exception {
-    // azp = the Auth Service's own client_id, not the API Gateway's; the
-    // controller must reject because a refresh request can only legitimately
-    // come from the Gateway under its Client Credentials identity.
-    mockMvc.perform(post("/internal/refresh")
+  void resolveFailsWithoutMatchingClientId() throws Exception {
+    // azp = the Auth Service's own client_id, not the API Gateway's; a resolve
+    // request can only legitimately come from the Gateway's CC identity.
+    mockMvc.perform(post("/internal/resolve")
             .with(jwt().jwt(j -> j
                 .audience(List.of(EXPECTED_AUDIENCE))
                 .claim("azp", "oidc-reference-auth")))
@@ -130,8 +126,8 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshReturns400WhenSidMissing(CapturedOutput output) throws Exception {
-    mockMvc.perform(post("/internal/refresh")
+  void resolveReturns400WhenSidMissing(CapturedOutput output) throws Exception {
+    mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
             .contentType(MediaType.APPLICATION_JSON)
             .content("{}"))
@@ -145,8 +141,8 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshReturns404WhenSessionMissing(CapturedOutput output) throws Exception {
-    mockMvc.perform(post("/internal/refresh")
+  void resolveReturns404WhenSessionMissing(CapturedOutput output) throws Exception {
+    mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"sid-does-not-exist\"}"))
@@ -160,11 +156,78 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshReturns200WithRotatedTokenWhenExpiring(CapturedOutput output) throws Exception {
-    // Access token expires in 10 s — well inside the 60 s refresh window —
-    // so the controller will call the refresh client and persist the
-    // rotated tokens. Assert both the 200 contract fields and the
-    // post-write state of sess:{sid}.
+  void resolveReturnsCurrentAccessTokenWhenFresh() throws Exception {
+    // Access token has > 60 s remaining; resolve must NOT call the refresh
+    // client, and it returns the CURRENT access token verbatim (snake_case
+    // body, the headline change vs the old refresh endpoint which returned
+    // only timestamps and made the gateway re-read the store).
+    String sid = "sid-still-fresh";
+    SessionRecord fresh = new SessionRecord(
+        "still-fresh-access",
+        "refresh-token-1",
+        "id-token-1",
+        Instant.now().plusSeconds(600),
+        Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    storeSession(sid, fresh);
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isOk())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+        // SPEC-0001 §7.1: the gateway (Lua, case-sensitive) consumes
+        // `access_token` verbatim; camelCase would be a silent contract break.
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"access_token\"")))
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("still-fresh-access")))
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"access_token_expires_at\"")))
+        .andExpect(content().string(org.hamcrest.Matchers.not(
+            org.hamcrest.Matchers.containsString("\"accessToken\""))));
+
+    verify(tokenRefreshClient.delegate(), never()).refresh(any());
+    SessionRecord untouched = decodeSession(sid);
+    assertThat(untouched.accessToken()).isEqualTo("still-fresh-access");
+    assertThat(untouched.refreshToken()).isEqualTo("refresh-token-1");
+  }
+
+  @Test
+  void resolveSlidesIdleTtlAsApiActivity() throws Exception {
+    // resolve represents a real /api call, so it slides the idle window (the
+    // slide that used to live in the gateway's Lua EXPIRE). Seed a short TTL,
+    // resolve, and assert the TTL grew toward the configured idle. (/auth/me
+    // is a non-extending liveness probe and does NOT slide — proven by the
+    // C9 conformance gate.)
+    String sid = "sid-slide";
+    SessionRecord fresh = new SessionRecord(
+        "fresh-access",
+        "refresh-token-1",
+        "id-token-1",
+        Instant.now().plusSeconds(600),
+        Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    // Deliberately short initial TTL so a slide is observable.
+    stateStore.put("sess:" + sid, TestBeans.JSON.encode(fresh), Duration.ofSeconds(5));
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isOk());
+
+    assertThat(stateStore.expireCalls())
+        .as("resolve must slide the idle TTL on a fresh session")
+        .isGreaterThanOrEqualTo(1);
+    assertThat(stateStore.ttl("sess:" + sid))
+        .as("idle window slid well past the 5s seed toward the configured idle")
+        .isGreaterThan(Duration.ofSeconds(60));
+  }
+
+  @Test
+  void resolveReturns200WithRotatedAccessTokenWhenExpiring(CapturedOutput output) throws Exception {
+    // Access token expires in 10 s — inside the 60 s window — so resolve
+    // refreshes and returns the ROTATED access token. Assert both the body
+    // and the post-write state of sess:{sid}.
     String sid = "sid-expiring";
     SessionRecord expiring = new SessionRecord(
         "stale-access",
@@ -175,21 +238,15 @@ class InternalRefreshControllerTest {
         Map.of("sub", "alice"));
     storeSession(sid, expiring);
 
-    mockMvc.perform(post("/internal/refresh")
+    mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"" + sid + "\"}"))
         .andExpect(status().isOk())
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-        // SPEC-0001 §7.1 pins the response body to snake_case: the API
-        // Gateway consumes these field names verbatim, and the Lua reader
-        // is case-sensitive. camelCase would be a silent contract break.
-        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"refreshed_at\"")))
-        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"access_token_expires_at\"")))
-        .andExpect(content().string(org.hamcrest.Matchers.not(
-            org.hamcrest.Matchers.containsString("\"refreshedAt\""))))
-        .andExpect(content().string(org.hamcrest.Matchers.not(
-            org.hamcrest.Matchers.containsString("\"accessTokenExpiresAt\""))));
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"access_token\"")))
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("refreshed-token")))
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"access_token_expires_at\"")));
 
     assertThat(tokenRefreshClient.refreshCalls()).isEqualTo(1);
     SessionRecord rotated = decodeSession(sid);
@@ -203,41 +260,7 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshReturns200IdempotentWhenStillFresh(CapturedOutput output) throws Exception {
-    // Access token has > 60 s remaining; controller must not call the
-    // refresh client. Idempotent under contention per §7.1 step 5.
-    String sid = "sid-still-fresh";
-    SessionRecord fresh = new SessionRecord(
-        "still-fresh-access",
-        "refresh-token-1",
-        "id-token-1",
-        Instant.now().plusSeconds(600),
-        Instant.now().plusSeconds(1800),
-        Map.of("sub", "alice"));
-    storeSession(sid, fresh);
-
-    mockMvc.perform(post("/internal/refresh")
-            .with(validApiGatewayBearer())
-            .contentType(MediaType.APPLICATION_JSON)
-            .content("{\"sid\":\"" + sid + "\"}"))
-        .andExpect(status().isOk());
-
-    verify(tokenRefreshClient.delegate(), never()).refresh(any());
-    // Session value preserved exactly — no rewrite path runs.
-    SessionRecord untouched = decodeSession(sid);
-    assertThat(untouched.accessToken()).isEqualTo("still-fresh-access");
-    assertThat(untouched.refreshToken()).isEqualTo("refresh-token-1");
-
-    assertThat(output.getOut())
-        .contains("event=refresh_not_needed")
-        .contains("reason=outside_refresh_window");
-  }
-
-  @Test
-  void refreshReturns409OnInvalidRefreshToken(CapturedOutput output) throws Exception {
-    // Refresh-token reuse: Keycloak returns invalid_grant; the refresh
-    // client surfaces that as InvalidRefreshTokenException. Per §7.1 the
-    // controller must: emit the audit event, DEL sess:{sid}, return 409.
+  void resolveReturns409OnInvalidRefreshToken(CapturedOutput output) throws Exception {
     String sid = "sid-reused";
     SessionRecord reused = new SessionRecord(
         "stale-access",
@@ -248,7 +271,7 @@ class InternalRefreshControllerTest {
         Map.of("sub", "alice"));
     storeSession(sid, reused);
 
-    mockMvc.perform(post("/internal/refresh")
+    mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"" + sid + "\"}"))
@@ -256,17 +279,12 @@ class InternalRefreshControllerTest {
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
 
     assertThat(stateStore.get("sess:" + sid)).isEmpty();
-    // The WARN line correlates the event to a session WITHOUT
-    // leaking the raw sid (session credential). It MUST emit sid_hash=
-    // and MUST NOT emit the raw sid string anywhere.
     assertThat(output.getOut())
         .contains("sid_hash=")
         .doesNotContain("sid=" + sid)
         .doesNotContain("sid=" + sid + " ");
-    // C13: invalid_grant has many routine, non-attack causes (expired or
-    // revoked refresh token, SSO max lifespan) and cannot be attributed to
-    // reuse at the RP. The 409 + session-invalidation outcome is correct; the
-    // event MUST be labeled honestly, not asserted as proven reuse.
+    // C13: invalid_grant cannot be attributed to reuse at the RP. The label
+    // MUST stay honest, never asserted as proven reuse.
     assertThat(output.getOut())
         .contains("event=refresh_token_rejected")
         .doesNotContain("event=refresh_token_reuse")
@@ -274,14 +292,11 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshReturns404AndSkipsKeycloakWhenRefreshTokenExpired(CapturedOutput output)
+  void resolveReturns404AndSkipsKeycloakWhenRefreshTokenExpired(CapturedOutput output)
       throws Exception {
-    // C15: the session needs a refresh (access token inside the 60s window)
-    // but its refresh token is already expired. Sending a provably-dead
-    // refresh token to Keycloak would only earn invalid_grant and route a
-    // predictable session end through the refresh-rejected/invalidation path.
-    // The controller MUST short-circuit to a clean "session ended" 404 with no
-    // upstream call and no rejection alarm.
+    // C15: refresh is due (access token inside the window) but the refresh
+    // token is already expired. Short-circuit to a clean "session ended" 404
+    // with no upstream call and no rejection alarm.
     String sid = "sid-refresh-expired";
     SessionRecord expired = new SessionRecord(
         "stale-access",
@@ -292,7 +307,7 @@ class InternalRefreshControllerTest {
         Map.of("sub", "alice"));
     storeSession(sid, expired);
 
-    mockMvc.perform(post("/internal/refresh")
+    mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"" + sid + "\"}"))
@@ -312,11 +327,7 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshReturns502OnKeycloakTransientFailure(CapturedOutput output) throws Exception {
-    // Network blip / Keycloak 5xx: the refresh client throws a generic
-    // RuntimeException. Per §7.1 the controller returns 502 and the
-    // session MUST remain intact — refresh is unavailable, but the user's
-    // session itself has not been compromised.
+  void resolveReturns502OnKeycloakTransientFailure(CapturedOutput output) throws Exception {
     String sid = "sid-transient";
     SessionRecord expiring = new SessionRecord(
         "stale-access",
@@ -327,7 +338,7 @@ class InternalRefreshControllerTest {
         Map.of("sub", "alice"));
     storeSession(sid, expiring);
 
-    mockMvc.perform(post("/internal/refresh")
+    mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"" + sid + "\"}"))
@@ -337,7 +348,6 @@ class InternalRefreshControllerTest {
     assertThat(stateStore.get("sess:" + sid))
         .as("session must NOT be invalidated on transient Keycloak failure")
         .isPresent();
-
     assertThat(output.getOut())
         .contains("event=refresh_failed")
         .contains("status=502")
@@ -345,18 +355,11 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshDeletesSessionWhenRefreshedRecordCrossesAbsoluteTtl(CapturedOutput output)
+  void resolveDeletesSessionWhenRefreshedRecordCrossesAbsoluteTtl(CapturedOutput output)
       throws Exception {
-    // Race window: the pre-refresh absoluteExpired() check at line 95 happens
-    // before tokenRefreshClient.refresh() — which is a NETWORK CALL that can
-    // take hundreds of ms. A session that is barely valid at the start can
-    // have crossed its absolute lifetime by the time the refreshed record
-    // is built. refreshed.nextTtl() then returns Duration.ZERO and the
-    // current code passes that to stateStore.put, whose semantics differ by
-    // backend (Redis rejects EX 0; some Lettuce paths drop the TTL silently
-    // turning the session into a permanent key). The controller MUST instead
-    // delete the session and return 404 — matching the shape of the
-    // pre-refresh check.
+    // Race: the absolute ceiling crosses during the upstream refresh network
+    // call, so refreshed.nextTtl() is ZERO. The controller MUST delete and
+    // 404, never write with Duration.ZERO.
     String sid = "sid-crossed-absolute-during-refresh";
     SessionRecord nearlyExpired = new SessionRecord(
         "stale-access",
@@ -369,7 +372,7 @@ class InternalRefreshControllerTest {
         Map.of("sub", "alice"));
     storeSession(sid, nearlyExpired);
 
-    mockMvc.perform(post("/internal/refresh")
+    mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"" + sid + "\"}"))
@@ -388,14 +391,11 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void refreshDoesNotResurrectASessionDeletedDuringTheUpstreamCall(CapturedOutput output)
+  void resolveDoesNotResurrectASessionDeletedDuringTheUpstreamCall(CapturedOutput output)
       throws Exception {
-    // Resurrection race: the delete paths (POST /auth/logout, back-channel
-    // logout) do NOT take the per-sid refresh lock, so a concurrent logout can
-    // DEL sess:{sid} after this controller has read the session and entered the
-    // IdP round-trip. The post-refresh write must be conditional — if the
-    // session is gone, the refreshed tokens must be discarded, NOT used to
-    // recreate a session the user just logged out of.
+    // Resurrection race: a concurrent logout DELs sess:{sid} mid-refresh. The
+    // post-refresh write must be conditional — discard the rotated tokens, do
+    // not recreate a session the user just logged out of.
     String sid = "sid-deleted-during-refresh";
     SessionRecord expiring = new SessionRecord(
         "stale-access",
@@ -406,11 +406,9 @@ class InternalRefreshControllerTest {
         Map.of("sub", "alice"));
     storeSession(sid, expiring);
 
-    // Simulate the concurrent logout landing mid-refresh: the recording client
-    // deletes sess:{sid} from inside refresh(), i.e. during the upstream call.
     tokenRefreshClient.runDuringRefresh(() -> stateStore.delete("sess:" + sid));
 
-    mockMvc.perform(post("/internal/refresh")
+    mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"" + sid + "\"}"))
@@ -426,12 +424,12 @@ class InternalRefreshControllerTest {
   }
 
   @Test
-  void concurrentRefreshCallsForSameSidSerializeOnLock() throws Exception {
-    // Two simultaneous refresh calls on the same sid — the per-session
-    // lock plus the under-lock re-read of sess:{sid} mean exactly ONE
-    // upstream refresh call should fire. The second caller acquires the
-    // lock after the first has written the rotated tokens, sees expiry is
-    // now > refresh window, and short-circuits to 200.
+  void concurrentResolveCallsForSameSidSerializeOnLock() throws Exception {
+    // Two simultaneous resolves on an expiring sid — the per-session lock plus
+    // the under-lock re-read collapse them to exactly ONE upstream refresh.
+    // The second caller acquires the lock after the first wrote the rotated
+    // tokens, sees expiry now outside the window, and returns 200. This is the
+    // single-instance serialization property the distributed-lock note guards.
     String sid = "sid-concurrent";
     SessionRecord expiring = new SessionRecord(
         "stale-access",
@@ -445,7 +443,7 @@ class InternalRefreshControllerTest {
     tokenRefreshClient.pauseNextRefresh();
     ExecutorService executor = Executors.newFixedThreadPool(2);
     try {
-      Future<Integer> first = executor.submit(() -> mockMvc.perform(post("/internal/refresh")
+      Future<Integer> first = executor.submit(() -> mockMvc.perform(post("/internal/resolve")
               .with(validApiGatewayBearer())
               .contentType(MediaType.APPLICATION_JSON)
               .content("{\"sid\":\"" + sid + "\"}"))
@@ -453,7 +451,7 @@ class InternalRefreshControllerTest {
       assertThat(tokenRefreshClient.awaitRefreshStarted())
           .as("first request should reach the refresh client")
           .isTrue();
-      Future<Integer> second = executor.submit(() -> mockMvc.perform(post("/internal/refresh")
+      Future<Integer> second = executor.submit(() -> mockMvc.perform(post("/internal/resolve")
               .with(validApiGatewayBearer())
               .contentType(MediaType.APPLICATION_JSON)
               .content("{\"sid\":\"" + sid + "\"}"))
@@ -534,10 +532,6 @@ class InternalRefreshControllerTest {
       return new IDTokenValidator(new Issuer("http://idp.example"), new ClientID("oidc-reference-auth"));
     }
 
-    // The prod JwtDecoder bean would call JwtDecoders.fromIssuerLocation()
-    // which hits http://idp.example over the network. Stub it: the
-    // jwt() MockMvc post-processor bypasses the decoder anyway by setting
-    // a pre-built JwtAuthenticationToken on the SecurityContext.
     @Bean
     @Primary
     JwtDecoder internalJwtDecoder() {
@@ -549,15 +543,10 @@ class InternalRefreshControllerTest {
   }
 
   /**
-   * Recording refresh client that lets the test (a) count upstream calls
-   * for the contention test, (b) pause/release in a latch dance to model
-   * concurrent contention, and (c) trigger the two failure paths from
-   * §7.1 (invalid_grant → InvalidRefreshTokenException, transient → other
-   * RuntimeException) via sentinel refresh-token values.
-   *
-   * <p>The {@code delegate()} accessor returns a Mockito spy so tests can
-   * use {@code verify(client, never()).refresh(any())} for the idempotent-
-   * when-fresh path; the spy is wired to the same instance.
+   * Recording refresh client: counts upstream calls, supports a pause/release
+   * latch dance for the contention test, runs a mid-refresh action to model a
+   * concurrent logout, and triggers the §7.1 failure paths via sentinel
+   * refresh-token values.
    */
   static class RecordingTokenRefreshClient implements TokenRefreshClient {
     private final AtomicInteger refreshCalls = new AtomicInteger();
@@ -592,9 +581,6 @@ class InternalRefreshControllerTest {
       }
     }
 
-    // Run an arbitrary action from INSIDE refresh() — i.e. while the upstream
-    // IdP round-trip is notionally in flight — to model a concurrent mutation
-    // (e.g. a logout DEL of sess:{sid}) that lands during the refresh.
     void runDuringRefresh(Runnable action) {
       duringRefresh.set(action);
     }
@@ -639,10 +625,6 @@ class InternalRefreshControllerTest {
           throw new IllegalStateException("Keycloak unreachable");
         }
         if ("expired-after-refresh".equals(session.refreshToken())) {
-          // Simulates the race: refresh succeeded but the session's absolute
-          // ceiling crossed during the network call. The refreshed record's
-          // absoluteExpiresAt is now in the past, so refreshed.nextTtl()
-          // returns Duration.ZERO.
           return new SessionRecord(
               "refreshed-token",
               "rotated-refresh-token",
@@ -665,5 +647,4 @@ class InternalRefreshControllerTest {
       }
     }
   }
-
 }

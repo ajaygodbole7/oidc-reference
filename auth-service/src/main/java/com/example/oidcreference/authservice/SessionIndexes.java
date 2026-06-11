@@ -23,8 +23,8 @@ class SessionIndexes {
   }
 
   // Index TTL is the session's remaining ABSOLUTE lifetime, not the idle
-  // TTL. The gateway slides only sess:{sid} and /internal/refresh rewrites
-  // only the session key; nothing re-extends these index keys. An idle TTL
+  // TTL. The Auth Service slides only sess:{sid} (in /internal/resolve) and
+  // rewrites only the session key; nothing re-extends these index keys. An idle TTL
   // here would expire them after the first idle window, silently turning
   // IdP back-channel logout into a 200 "no_matching_session" for any
   // longer-lived session — the exact stolen-cookie revocation case the

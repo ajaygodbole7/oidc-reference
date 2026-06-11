@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # e2e-c8-altids.sh — SPEC-0001 C8 NON-DEFAULT trust-identity gate (end-to-end).
 #
-# The default-config C8 (in e2e-conformance.sh) proves /internal/refresh enforces
+# The default-config C8 (in e2e-conformance.sh) proves /internal/resolve enforces
 # the SHIPPED trust ids. This gate proves the ENV KNOBS are genuinely read, not
 # constants: it boots the stack with auth-service configured for NON-DEFAULT
 # values and shows the wire behavior flips accordingly.
@@ -14,13 +14,13 @@
 #   GATEWAY_CLIENT_ID=oidc-reference-service
 #   INTERNAL_REFRESH_AUDIENCE=oidc-reference-api
 #
-# Asserts on the wire (POST to auth-service:8081/internal/refresh from inside the
+# Asserts on the wire (POST to auth-service:8081/internal/resolve from inside the
 # compose network, /internal/** is not routable through APISIX by design):
 #   - config reaches the plane: `docker compose config` shows the overrides;
 #   - POSITIVE: a token matching the NON-DEFAULT config (oidc-reference-service)
 #     passes the identity check -> 404 (bogus sid), proving the knobs are read;
 #   - NEGATIVE: the DEFAULT gateway client now MISMATCHES -> 401, proving a
-#     one-sided value change breaks /internal/refresh.
+#     one-sided value change breaks /internal/resolve.
 
 set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -57,7 +57,7 @@ info "tearing down any existing stack for a clean slate"
 sh "$SCRIPT_DIR/down.sh" >/dev/null 2>&1 || true
 
 # Render APISIX with the DEFAULT gateway client: this gate posts to
-# /internal/refresh directly with minted tokens, so the gateway's own client is
+# /internal/resolve directly with minted tokens, so the gateway's own client is
 # irrelevant — only the auth-service env is reconfigured.
 info "rendering APISIX (default gateway client)"
 GATEWAY_CLIENT_SECRET="$DEV_GATEWAY_SECRET" CSRF_SIGNING_KEY="$DEV_CSRF_KEY" \
@@ -109,7 +109,7 @@ post_internal_refresh() { # $1 bearer -> echoes HTTP status
     -H "Authorization: Bearer $1" \
     -H "Content-Type: application/json" \
     --data '{"sid":"c8-altids-nonexistent-sid"}' \
-    http://auth-service:8081/internal/refresh 2>/dev/null
+    http://auth-service:8081/internal/resolve 2>/dev/null
 }
 
 alt_tok="$(mint_cc "$ALT_GATEWAY_CLIENT_ID" "$DEV_SERVICE_SECRET")"

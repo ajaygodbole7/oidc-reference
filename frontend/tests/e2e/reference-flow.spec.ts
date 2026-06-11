@@ -34,7 +34,7 @@
  *   - Token refresh (success + refresh-token-reuse failure): proven by the
  *     gateway seeded-Valkey refresh test
  *     (api-gateway/tests/test-gateway-behavior.sh, RUN_REFRESH_TESTS=1) and by
- *     the Auth Service /internal/refresh tests (AuthControllerTest).
+ *     the Auth Service /internal/resolve tests (AuthControllerTest).
  *   - Browser-binding replay rejection: proven by AuthControllerTest oauth_tx
  *     callback tests — a callback with a valid state but a missing/mismatched
  *     oauth_tx is rejected before token exchange (no __Host-sid, no saved-

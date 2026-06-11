@@ -42,7 +42,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * event=...} line.
  *
  * <p>Refresh-token-reuse audit is covered by {@code
- * InternalRefreshControllerTest.refreshReturns409OnInvalidRefreshToken};
+ * InternalResolveControllerTest.resolveReturns409OnInvalidRefreshToken};
  * see SPEC-0001 §7.1.
  */
 @SpringBootTest(properties = {

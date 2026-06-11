@@ -8,17 +8,17 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.oauth2.jwt.Jwt;
 
-// Proves /internal/refresh's caller-identity checks are config-driven: a
+// Proves /internal/resolve's caller-identity checks are config-driven: a
 // non-default gateway client id / internal audience is honored, and the
 // shipped defaults are NOT special-cased.
-class InternalRefreshIdentityCheckTest {
+class InternalResolveIdentityCheckTest {
 
   @Test
   void audienceCheckHonorsConfiguredValue() {
     Jwt jwt = jwt(j -> j.audience(List.of("custom-internal-aud")).claim("azp", "x"));
 
-    assertThat(InternalRefreshController.hasExpectedAudience(jwt, "custom-internal-aud")).isTrue();
-    assertThat(InternalRefreshController.hasExpectedAudience(jwt, "oidc-reference-auth-internal"))
+    assertThat(InternalResolveController.hasExpectedAudience(jwt, "custom-internal-aud")).isTrue();
+    assertThat(InternalResolveController.hasExpectedAudience(jwt, "oidc-reference-auth-internal"))
         .isFalse();
   }
 
@@ -26,8 +26,8 @@ class InternalRefreshIdentityCheckTest {
   void callerCheckHonorsConfiguredAzp() {
     Jwt jwt = jwt(j -> j.claim("azp", "custom-gateway"));
 
-    assertThat(InternalRefreshController.hasExpectedCaller(jwt, "custom-gateway")).isTrue();
-    assertThat(InternalRefreshController.hasExpectedCaller(jwt, "oidc-reference-api-gateway"))
+    assertThat(InternalResolveController.hasExpectedCaller(jwt, "custom-gateway")).isTrue();
+    assertThat(InternalResolveController.hasExpectedCaller(jwt, "oidc-reference-api-gateway"))
         .isFalse();
   }
 
@@ -35,7 +35,7 @@ class InternalRefreshIdentityCheckTest {
   void callerCheckAlsoMatchesClientIdClaim() {
     Jwt jwt = jwt(j -> j.claim("client_id", "custom-gateway"));
 
-    assertThat(InternalRefreshController.hasExpectedCaller(jwt, "custom-gateway")).isTrue();
+    assertThat(InternalResolveController.hasExpectedCaller(jwt, "custom-gateway")).isTrue();
   }
 
   private static Jwt jwt(Consumer<Jwt.Builder> claims) {

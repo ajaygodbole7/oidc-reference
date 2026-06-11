@@ -156,7 +156,7 @@ class SecurityConfigTest {
     void internalPathRequiresBearer() throws Exception {
       // No Authorization header → the Resource Server filter on the
       // /internal/** chain rejects with 401 before the handler runs.
-      mockMvc.perform(post("/internal/refresh")
+      mockMvc.perform(post("/internal/resolve")
               .contentType(MediaType.APPLICATION_JSON)
               .content("{\"sid\":\"any\"}"))
           .andExpect(status().isUnauthorized());
@@ -176,7 +176,7 @@ class SecurityConfigTest {
       // expectation tightens to 403 from the security chain. Either
       // verdict means "rejected" — both are accepted here so the test
       // pins the behavior, not the exact enforcement path.
-      mockMvc.perform(post("/internal/refresh")
+      mockMvc.perform(post("/internal/resolve")
               .with(jwt().jwt(j -> j
                   // wrong azp: bearer issued to the Auth Service itself,
                   // not the API Gateway

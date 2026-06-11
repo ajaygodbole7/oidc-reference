@@ -54,7 +54,7 @@ class SecurityConfig {
         .build();
   }
 
-  // Audience binding is enforced here (filter layer). InternalRefreshController
+  // Audience binding is enforced here (filter layer). InternalResolveController
   // re-asserts aud + azp/client_id defensively before doing any session work.
   // ConditionalOnMissingBean lets tests inject a stub JwtDecoder without the
   // prod bean racing to do an HTTP discovery call to the (mocked) issuer.

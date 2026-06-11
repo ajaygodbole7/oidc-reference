@@ -48,7 +48,7 @@ e2e-auth:
 e2e-portability:
     sh scripts/e2e-portability.sh
 
-# Non-default internal trust-id proof for /internal/refresh.
+# Non-default internal trust-id proof for /internal/resolve.
 e2e-c8-altids:
     sh scripts/e2e-c8-altids.sh
 

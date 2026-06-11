@@ -14,11 +14,11 @@ spring:
       port: ${REDIS_PORT:6379}
       # Bound the Redis leg. Lettuce defaults to a 60s command timeout and a
       # 10s connect timeout, so a partitioned/wedged Valkey would hang each
-      # /internal/refresh and /auth/me on its session GET/PUT for up to a
+      # /internal/resolve and /auth/me on its session GET/PUT for up to a
       # minute (the IdP HTTP path is already bounded by IdpHttp; this is the
       # matching bound for the store leg). Valkey is local on the compose
       # network (sub-ms normally) and the gateway only waits 5s on
-      # /internal/refresh, so a 1s ceiling fails fast well inside that budget
+      # /internal/resolve, so a 1s ceiling fails fast well inside that budget
       # with ample headroom over normal latency. Tune per-deploy.
       timeout: ${REDIS_TIMEOUT:1s}
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
@@ -51,7 +51,7 @@ app:
   # Internal trust identifiers — deployment topology, not per-provider OIDC
   # values (real IdPs assign client ids you don't choose). The gateway's
   # confidential client id and the audience its CC token must carry for
-  # /internal/refresh. Defaults are this reference's local Keycloak values.
+  # /internal/resolve. Defaults are this reference's local Keycloak values.
   gateway-client-id: ${GATEWAY_CLIENT_ID:oidc-reference-api-gateway}
   internal-audience: ${INTERNAL_REFRESH_AUDIENCE:oidc-reference-auth-internal}
   session-refresh-window: 60s

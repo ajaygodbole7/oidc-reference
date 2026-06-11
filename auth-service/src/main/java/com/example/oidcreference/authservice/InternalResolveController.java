@@ -1,5 +1,6 @@
 package com.example.oidcreference.authservice;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
@@ -22,29 +23,43 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Phantom-token session resolution. The API Gateway holds only the opaque
+ * sid; it introspects it here to obtain the access token it injects upstream.
+ * This is the single place that reads the session store on the bearer-
+ * injection path — the gateway has no Redis client and no knowledge of the
+ * {@code sess:{sid}} schema (SPEC-0001 §7.1).
+ *
+ * <p>{@code resolve} represents a real {@code /api} request, so it slides the
+ * idle window. The common case (token still fresh) is lock-free: read, slide,
+ * return the current token. Only a near-expiry refresh takes the per-session
+ * lock, exactly as the old {@code /internal/refresh} did.
+ */
 @RestController
 @RequestMapping("/internal")
-class InternalRefreshController {
-  private static final Logger log = LoggerFactory.getLogger(InternalRefreshController.class);
+class InternalResolveController {
+  private static final Logger log = LoggerFactory.getLogger(InternalResolveController.class);
 
   private final StateStore stateStore;
   private final JsonCodec json;
   private final TokenRefreshClient tokenRefreshClient;
   private final AuthProperties props;
-  // SINGLE-INSTANCE LOCK. This serializes concurrent refreshes for one sid
-  // within THIS JVM only — it is a per-process ReentrantLock map, not a
-  // distributed lock. That is correct for the single-instance reference. Run
-  // two or more Auth Service instances and two of them can refresh the same
-  // session concurrently: both send the same refresh token to the IdP, and
-  // with this realm's refresh-token rotation + reuse detection the second is
-  // rejected as invalid_grant and the session is invalidated — i.e. naive
-  // horizontal scaling logs active users out. Before scaling out, add a
-  // distributed lock (SET NX PX refresh_lock:{sid} + compare-and-delete
-  // release); see docs/operations/production-hardening.md "Distributed refresh
-  // lock". Deliberately in-process here, not a bug.
+  // SINGLE-INSTANCE LOCK. Serializes concurrent refreshes for one sid within
+  // THIS JVM only — a per-process ReentrantLock map, not a distributed lock.
+  // Correct for the single-instance reference. With two or more Auth Service
+  // instances, two of them can refresh the same session concurrently: both
+  // send the same refresh token to the IdP, and with this realm's rotation +
+  // reuse detection the second is rejected as invalid_grant and the session is
+  // invalidated — naive horizontal scaling logs active users out. The phantom-
+  // token shape puts this endpoint on the hot path (every /api call), so
+  // scaling the Auth Service is more likely; the distributed lock (SET NX PX
+  // refresh_lock:{sid} + compare-and-delete release) becomes a more pressing
+  // production requirement. See docs/operations/production-hardening.md and
+  // docs/architecture/phantom-token-session-resolution.md. Deliberately
+  // in-process here, not a bug.
   private final ConcurrentHashMap<String, LockRef> locksPerSid = new ConcurrentHashMap<>();
 
-  InternalRefreshController(
+  InternalResolveController(
       StateStore stateStore,
       JsonCodec json,
       TokenRefreshClient tokenRefreshClient,
@@ -55,9 +70,9 @@ class InternalRefreshController {
     this.props = props;
   }
 
-  @PostMapping(path = "/refresh", consumes = MediaType.APPLICATION_JSON_VALUE)
-  ResponseEntity<?> refresh(
-      @RequestBody RefreshRequest req,
+  @PostMapping(path = "/resolve", consumes = MediaType.APPLICATION_JSON_VALUE)
+  ResponseEntity<?> resolve(
+      @RequestBody ResolveRequest req,
       @AuthenticationPrincipal Jwt callerJwt,
       HttpServletRequest request) {
     if (callerJwt == null) {
@@ -80,7 +95,27 @@ class InternalRefreshController {
       SecurityAudit.event(request, 404, "refresh_rejected", "no_such_session");
       return problem(404, "no such session");
     }
+    var session = json.decode(raw.get(), SessionRecord.class);
 
+    // Absolute-TTL ceiling. nextTtl() returns Duration.ZERO once the ceiling is
+    // past, which would make a write/slide evict the key. Refuse here instead,
+    // with the same shape AuthController uses on /auth/me.
+    if (session.absoluteExpired()) {
+      SecurityAudit.event(
+          request, 404, "refresh_rejected", "session_absolute_expired", subjectClaim(session));
+      stateStore.delete(sessKey);
+      return problem(404, "session past absolute TTL");
+    }
+
+    // Hot path: token still fresh. Lock-free — slide the idle window and return
+    // the current access token. No per-request audit (this fires on every /api
+    // call; a security-audit line per request would be pure noise).
+    if (!session.requiresRefresh(props.sessionRefreshWindow())) {
+      slideIdle(sessKey, session);
+      return ok(session);
+    }
+
+    // Refresh due: serialize under the per-session lock.
     LockRef lockRef = acquireRefreshLock(req.sid());
     Lock lock = lockRef.lock();
     lock.lock();
@@ -90,43 +125,29 @@ class InternalRefreshController {
         SecurityAudit.event(request, 404, "refresh_rejected", "no_such_session");
         return problem(404, "no such session");
       }
-      var session = json.decode(raw.get(), SessionRecord.class);
-
-      // Absolute-TTL ceiling. AuthController.session() refuses sessions
-      // past their hard cap on /auth/me, but the gateway calling
-      // /internal/refresh has no equivalent check — and the body of
-      // this method ends with stateStore.put(sessKey, ..., refreshed.
-      // nextTtl()). nextTtl returns Duration.ZERO once
-      // absoluteExpiresAt is past, which makes the write evict the key
-      // immediately. The caller would then succeed once and 404 on
-      // every subsequent call, producing a re-login loop. Refuse here
-      // instead, with the same shape AuthController uses for the
-      // analogous condition on /auth/me.
+      session = json.decode(raw.get(), SessionRecord.class);
       if (session.absoluteExpired()) {
         SecurityAudit.event(
-            request, 404, "refresh_rejected", "session_absolute_expired",
-            subjectClaim(session));
+            request, 404, "refresh_rejected", "session_absolute_expired", subjectClaim(session));
         stateStore.delete(sessKey);
         return problem(404, "session past absolute TTL");
       }
 
-      var windowToExpiry = Duration.between(Instant.now(), session.expiresAt());
-      if (windowToExpiry.compareTo(props.sessionRefreshWindow()) > 0) {
-        SecurityAudit.event(
-            request, 200, "refresh_not_needed", "outside_refresh_window",
-            subjectClaim(session));
-        return ResponseEntity.ok(new RefreshResponse(Instant.now(), session.expiresAt()));
+      // Another caller may have refreshed while we waited for the lock; the
+      // token is now fresh. Slide and return it, no second upstream call. This
+      // is what collapses concurrent resolves on one sid to a single refresh.
+      if (!session.requiresRefresh(props.sessionRefreshWindow())) {
+        slideIdle(sessKey, session);
+        return ok(session);
       }
 
-      // A refresh is due, but the refresh token is already past its own
-      // expiry. Sending it to Keycloak would only earn invalid_grant —
-      // a predictable, routine session end, not a rejection to route through
-      // the invalidation/alarm path below. Short-circuit to a clean "session
-      // ended" 404 with no upstream call. Distinct, non-alarming audit reason.
+      // A refresh is due, but the refresh token is already past its own expiry.
+      // Sending it to Keycloak would only earn invalid_grant — a predictable,
+      // routine session end. Short-circuit to a clean "session ended" 404 with
+      // no upstream call and a non-alarming audit reason.
       if (session.refreshTokenExpired()) {
         SecurityAudit.event(
-            request, 404, "refresh_rejected", "refresh_token_expired",
-            subjectClaim(session));
+            request, 404, "refresh_rejected", "refresh_token_expired", subjectClaim(session));
         stateStore.delete(sessKey);
         return problem(404, "session ended, re-login required");
       }
@@ -135,21 +156,16 @@ class InternalRefreshController {
       try {
         refreshed = tokenRefreshClient.refresh(session);
       } catch (InvalidRefreshTokenException e) {
-        // Keycloak returned invalid_grant on the refresh grant. RFC 6749 §5.2
-        // collapses many causes under this one code — refresh token expired or
-        // revoked, SSO session past its max lifespan, client/user disabled, AND
-        // genuine refresh-token reuse — and Keycloak only distinguishes them in
-        // the free-text error_description (which we deliberately do not parse).
-        // So we CANNOT attribute this to reuse at the RP. The fail-closed
-        // outcome (invalidate + 409) is correct; the label must stay honest, or
-        // routine long-session expiries drown the genuine reuse signal in noise.
-        // sid is a session credential — never log the raw value; hash it the
-        // same way SecurityAudit hashes `sub` for correlation.
+        // Keycloak invalid_grant. RFC 6749 §5.2 collapses many causes (expired
+        // or revoked refresh token, SSO max lifespan, AND genuine reuse) under
+        // one code, distinguishable only in the free-text error_description we
+        // do not parse. The fail-closed outcome (invalidate + 409) is correct;
+        // the label stays honest. sid is a session credential — never log it
+        // raw; hash it the same way SecurityAudit hashes sub for correlation.
         log.warn("refresh rejected by authorization server (invalid_grant); "
             + "session invalidated for sid_hash={}", SecurityAudit.hashSid(req.sid()));
         SecurityAudit.event(
-            request, 409, "refresh_token_rejected", "session_invalidated",
-            subjectClaim(session));
+            request, 409, "refresh_token_rejected", "session_invalidated", subjectClaim(session));
         stateStore.delete(sessKey);
         return problem(409, "refresh token rejected, session invalidated");
       } catch (RuntimeException e) {
@@ -161,40 +177,48 @@ class InternalRefreshController {
 
       Duration nextTtl = refreshed.nextTtl(props.sessionIdleTtl());
       if (nextTtl.isZero() || nextTtl.isNegative()) {
-        // The pre-refresh absoluteExpired() check at line 95 passed, but the
-        // upstream refresh call (a network round-trip to Keycloak) took long
-        // enough that the session crossed its absolute ceiling while we
-        // waited. Writing with Duration.ZERO has backend-defined semantics:
-        // Redis rejects EX 0 outright; some Lettuce code paths drop the TTL
-        // silently turning the session into a permanent key. Fail closed,
-        // matching the shape the pre-refresh check uses for the analogous
-        // condition.
+        // Pre-refresh absoluteExpired() passed, but the upstream network call
+        // took long enough to cross the absolute ceiling. Writing Duration.ZERO
+        // has backend-defined semantics; fail closed instead.
         SecurityAudit.event(
             request, 404, "refresh_rejected", "session_absolute_expired_post_refresh",
             subjectClaim(refreshed));
         stateStore.delete(sessKey);
         return problem(404, "session past absolute TTL");
       }
-      // Conditional write: only persist the rotated tokens if sess:{sid} still
-      // exists. A concurrent logout / back-channel logout can DEL the session
-      // during the upstream refresh round-trip above — those delete paths do
-      // NOT take this per-sid lock — and an unconditional SET would resurrect a
-      // session the user just terminated. SET ... XX makes the write a no-op in
-      // that race; we then fail closed (404) and discard the orphaned tokens
-      // (the IdP session is being torn down by the logout anyway).
+      // Conditional write: persist the rotated tokens only if sess:{sid} still
+      // exists. A concurrent logout (which does NOT take this lock) can DEL the
+      // session during the upstream round-trip; an unconditional SET would
+      // resurrect it. SET ... XX makes the write a no-op and we fail closed.
       if (!stateStore.putIfPresent(sessKey, json.encode(refreshed), nextTtl)) {
         SecurityAudit.event(
             request, 404, "refresh_rejected", "session_deleted_during_refresh",
             subjectClaim(refreshed));
         return problem(404, "session ended, re-login required");
       }
-      SecurityAudit.event(
-          request, 200, "refresh_succeeded", "ok", subjectClaim(refreshed));
-      return ResponseEntity.ok(new RefreshResponse(Instant.now(), refreshed.expiresAt()));
+      SecurityAudit.event(request, 200, "refresh_succeeded", "ok", subjectClaim(refreshed));
+      return ok(refreshed);
     } finally {
       lock.unlock();
       releaseRefreshLock(req.sid(), lockRef);
     }
+  }
+
+  // Slide the idle window on the live key. This is the slide that used to be a
+  // Lua EXPIRE in the gateway; it now lives with the sole store reader. EXPIRE
+  // on a key a concurrent logout just removed is a harmless no-op.
+  private void slideIdle(String sessKey, SessionRecord session) {
+    Duration nextTtl = session.nextTtl(props.sessionIdleTtl());
+    if (nextTtl.isZero() || nextTtl.isNegative()) {
+      // absoluteExpired() was already checked above, so this is defensive.
+      stateStore.delete(sessKey);
+      return;
+    }
+    stateStore.expire(sessKey, nextTtl);
+  }
+
+  private ResponseEntity<ResolveResponse> ok(SessionRecord session) {
+    return ResponseEntity.ok(new ResolveResponse(session.accessToken(), session.expiresAt()));
   }
 
   private LockRef acquireRefreshLock(String sid) {
@@ -261,14 +285,14 @@ class InternalRefreshController {
     return sub == null ? null : sub.toString();
   }
 
-  record RefreshRequest(String sid) {}
-  // Wire shape MUST be snake_case per SPEC-0001 §7.1 — the API Gateway
-  // (Lua, case-sensitive) consumes these field names verbatim. Java fields
-  // stay camelCase for readability; @JsonProperty pins the wire name.
-  record RefreshResponse(
-      @com.fasterxml.jackson.annotation.JsonProperty("refreshed_at") Instant refreshedAt,
-      @com.fasterxml.jackson.annotation.JsonProperty("access_token_expires_at")
-          Instant accessTokenExpiresAt) {}
+  record ResolveRequest(String sid) {}
+
+  // Wire shape MUST be snake_case per SPEC-0001 §7.1 — the API Gateway (Lua,
+  // case-sensitive) reads `access_token` verbatim and injects it as the
+  // upstream bearer. Java fields stay camelCase; @JsonProperty pins the wire name.
+  record ResolveResponse(
+      @JsonProperty("access_token") String accessToken,
+      @JsonProperty("access_token_expires_at") Instant accessTokenExpiresAt) {}
 
   private static final class LockRef {
     private final ReentrantLock lock = new ReentrantLock();

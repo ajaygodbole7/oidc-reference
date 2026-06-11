@@ -44,7 +44,7 @@ require_present "oidc-reference-api-gateway" README.md docs
 require_present "auth\\.internal" README.md docs
 require_present "oidc-reference-auth-internal" README.md docs
 require_present "oidc-reference-auth" README.md docs
-require_present "/internal/refresh" README.md docs
+require_present "/internal/resolve" README.md docs
 
 # Deprecated identifiers — must stay out of active docs.
 old_spa_client='oidc-reference-''spa'
@@ -92,7 +92,7 @@ require_present "/auth/callback" "$auth_controller"
 require_present "bff-session" api-gateway/apisix.yaml.template
 require_present "/api/" "$spa_app"
 
-# /internal/refresh is the gateway → Auth Service back-channel.
-require_present "/internal/refresh" "$gateway_plugin"
+# /internal/resolve is the gateway → Auth Service back-channel.
+require_present "/internal/resolve" "$gateway_plugin"
 
 echo "contract-string checks passed"
