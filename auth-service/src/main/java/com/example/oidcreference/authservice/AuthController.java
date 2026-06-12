@@ -504,11 +504,16 @@ class AuthController {
     if (md.endSessionEndpoint() == null) {
       return "/";
     }
+    // No `state` on the end-session redirect. OIDC RP-Initiated Logout 1.0
+    // allows a `state` round-trip, but only if it is validated on return.
+    // post_logout_redirect_uri lands at the public "/" with no callback to
+    // check it, so emitting `state` here would be emit-and-ignore — a hollow
+    // gesture toward the spec, not the control it implies. We omit it rather
+    // than ship an unvalidated token.
     UriComponentsBuilder builder = UriComponentsBuilder
         .fromUri(md.endSessionEndpoint())
         .queryParam("post_logout_redirect_uri", baseUrl(request) + "/")
-        .queryParam("client_id", md.clientId())
-        .queryParam("state", CryptoSupport.randomUrlToken(32));
+        .queryParam("client_id", md.clientId());
     idTokenHint
         .filter(idToken -> !idToken.isBlank())
         .ifPresent(idToken -> builder.queryParam("id_token_hint", idToken));

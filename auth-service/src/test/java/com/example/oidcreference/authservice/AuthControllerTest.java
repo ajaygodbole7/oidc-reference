@@ -878,11 +878,14 @@ class AuthControllerTest {
     String handle = m.group(1);
 
     // First navigation: server emits the IdP end-session 302 with id_token_hint.
+    // The redirect carries NO `state` param (B7): an unvalidated state round-trip
+    // is emit-and-ignore, so we omit it rather than imply a control we don't run.
     mockMvc.perform(get("/auth/logout/continue").param("lc", handle))
         .andExpect(status().isFound())
         .andExpect(header().string(HttpHeaders.LOCATION, org.hamcrest.Matchers.allOf(
             org.hamcrest.Matchers.startsWith("http://idp.example/logout?"),
-            org.hamcrest.Matchers.containsString("id_token_hint=id-token-1"))))
+            org.hamcrest.Matchers.containsString("id_token_hint=id-token-1"),
+            org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("state=")))))
         .andExpect(header().string("Referrer-Policy", "no-referrer"));
 
     // Single-use: replaying the handle no longer yields the IdP URL.

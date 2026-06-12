@@ -26,6 +26,19 @@ import org.slf4j.LoggerFactory;
 // Callers MUST NOT pass tokens, sids, cookie values, or secrets.
 final class SecurityAudit {
   private static final Logger LOG = LoggerFactory.getLogger("security.audit");
+
+  // The audit wire format, declared in ONE place. The ~20 test assertions that
+  // pin substrings like "event=" / "reason=" and any downstream log-pipeline
+  // grammar depend on this shape; changing the wire format (e.g. moving to JSON
+  // structured logging) means editing these two constants and the single
+  // SecurityAuditTest that owns the rendered-shape invariant, not 20 call sites.
+  // The placeholders are SLF4J {} parameter slots filled, in order, by the
+  // event(...) methods below.
+  static final String FORMAT =
+      "security_audit event={} status={} method={} path={} reason={} remote={}";
+  static final String FORMAT_WITH_SUBJECT =
+      "security_audit event={} status={} method={} path={} reason={} sub_hash={} remote={}";
+
   // 24 hex chars = 96 bits. The previous 16-char (64-bit) hash hit
   // birthday-bound collision at ~4B subjects, which would complicate
   // incident-response correlation in a tenant with millions of users.
@@ -37,7 +50,7 @@ final class SecurityAudit {
 
   static void event(HttpServletRequest request, int status, String event, String reason) {
     LOG.info(
-        "security_audit event={} status={} method={} path={} reason={} remote={}",
+        FORMAT,
         event,
         status,
         method(request),
@@ -49,7 +62,7 @@ final class SecurityAudit {
   static void event(
       HttpServletRequest request, int status, String event, String reason, String sub) {
     LOG.info(
-        "security_audit event={} status={} method={} path={} reason={} sub_hash={} remote={}",
+        FORMAT_WITH_SUBJECT,
         event,
         status,
         method(request),

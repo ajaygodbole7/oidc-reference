@@ -209,6 +209,46 @@ class SecurityAuditTest {
         .doesNotContain("sub=alice");
   }
 
+  // -- wire-format invariant -----------------------------------------------
+
+  // This single test OWNS the exact rendered audit shape. The ~20 substring
+  // assertions elsewhere in the suite ("event=", "reason=") survive a format
+  // change because they pin fragments; this one pins the full line, so a
+  // future move (e.g. to JSON structured logging) updates SecurityAudit.FORMAT
+  // + SecurityAudit.FORMAT_WITH_SUBJECT and THIS test, not 20 sites.
+  @Test
+  void wireFormatRendersExactShape(CapturedOutput output) {
+    org.springframework.mock.web.MockHttpServletRequest request =
+        new org.springframework.mock.web.MockHttpServletRequest();
+    request.setMethod("POST");
+    request.setRequestURI("/auth/logout");
+    request.setRemoteAddr("198.51.100.7");
+
+    SecurityAudit.event(request, 403, "auth_denied", "csrf_invalid");
+
+    assertThat(output.getOut())
+        .contains(
+            "security_audit event=auth_denied status=403 method=POST "
+                + "path=/auth/logout reason=csrf_invalid remote=198.51.100.7");
+  }
+
+  @Test
+  void wireFormatWithSubjectRendersExactShape(CapturedOutput output) {
+    org.springframework.mock.web.MockHttpServletRequest request =
+        new org.springframework.mock.web.MockHttpServletRequest();
+    request.setMethod("POST");
+    request.setRequestURI("/auth/logout");
+    request.setRemoteAddr("198.51.100.7");
+
+    SecurityAudit.event(request, 302, "logout_succeeded", "ok", "alice");
+
+    assertThat(output.getOut())
+        .contains(
+            "security_audit event=logout_succeeded status=302 method=POST "
+                + "path=/auth/logout reason=ok sub_hash=" + sha256Prefix("alice")
+                + " remote=198.51.100.7");
+  }
+
   // -- helpers --------------------------------------------------------------
 
   // Same fixed cookie/hash pair as AuthControllerTest so happy-path

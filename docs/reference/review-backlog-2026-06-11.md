@@ -42,10 +42,9 @@ The still-valid items from that file are carried forward below and marked `[carr
 ### A3 — Add a cross-language contract test for the idle-TTL sliding math — **[done]** (obsolete after phantom-token)
 **Resolved by `b93454e`.** The duplication this item targeted no longer exists. Phantom-token deleted the Lua `slide_session_ttl` from the gateway; the idle-TTL slide now lives in exactly one place — `SessionRecord.nextTtl`, applied by the Auth Service inside `/internal/resolve`. There is no second-language implementation to drift against, so no cross-language contract test is needed. `SessionRecord.nextTtl`'s own unit tests (the `remaining < idle` cap and the zero/expired case) remain the coverage.
 
-### A4 — Make `RedisStateStore.addToSet` atomic (SADD + EXPIRE) — `REF`, Low
-**Why.** `addToSet` issues `SADD` then `EXPIRE` as two round-trips. The rest of the store is meticulous about atomicity (`GETDEL`, `SET XX`); this is the one non-atomic op. A failed/reordered `EXPIRE` can leave a `sub_sessions:` set with no TTL (leaked key) or a wrong one. Impact is low (leaked index keys are explicitly tolerated), but it's an inconsistency with the store's own standard.
-**What's needed.** Make it a single `MULTI`/pipeline or a small Lua `redis.call` script.
-**Where.** `auth-service/.../RedisStateStore.java` `addToSet`; caller `SessionIndexes.addSubjectSession`.
+### A4 — Make `RedisStateStore.addToSet` atomic (SADD + EXPIRE) — **[done]**
+**Resolved.** `addToSet` now runs a single server-side Lua script (`SADD` + `PEXPIRE`, TTL in ms) via a static `DefaultRedisScript<Long>` + `redis.execute(...)`, one round-trip — no window for a TTL-less `sub_sessions:` set. `StateStore.addToSet` signature unchanged; `SessionIndexesTest` green; exercised live by the e2e refresh/session-creation path.
+**Where.** `auth-service/.../RedisStateStore.java`.
 
 ### A5 — Consider splitting `AuthController` — `REF`, Low
 **Why.** At ~720 LOC it owns login, callback, logout, logout-continue, `/auth/me`, cookie minting, base-URL computation, and saved-request validation — the one cohesion outlier in an otherwise single-responsibility codebase. Not a defect; it's where the next contributor will struggle.
@@ -90,10 +89,9 @@ The still-valid items from that file are carried forward below and marked `[carr
 **What's needed.** Configure Keycloak to emit `typ=at+JWT` (per-client mapper, realm-file change) and add a `typ` header validator at the RS. Or document that the audience pin already covers the threat.
 **Where.** `authorization-server/realm/...`; `backend-resource-server/.../SecurityConfig.java`.
 
-### B7 — OIDC RP-Initiated Logout `state` round-trip — Low `[carried]`
-**Why.** A random `state` is generated for the logout redirect but never validated on return; `post_logout_redirect_uri` lands at public `/`, so there's no exploit today, but the pattern is incomplete vs the OIDC RP-Initiated Logout 1.0 SHOULD.
-**What's needed.** Either stop emitting `state` on logout (cleaner than emit-and-ignore), or add a `/auth/post-logout-callback` that validates `state` against a short-TTL entry then redirects.
-**Where.** `AuthController` logout path.
+### B7 — OIDC RP-Initiated Logout `state` round-trip — **[done]**
+**Resolved.** Took the cleaner option: stopped emitting the unused `state` on the logout redirect (it was generated but never validated on return). `id_token_hint`, `post_logout_redirect_uri`, `client_id`, `Referrer-Policy: no-referrer`, and cookie eviction are unchanged. `AuthControllerTest` now asserts the logout redirect carries no `state=`.
+**Where.** `AuthController` logout path; `AuthControllerTest`.
 
 ---
 
@@ -123,10 +121,9 @@ The still-valid items from that file are carried forward below and marked `[carr
 **What's needed.** Extract the pure functions (or use the existing `_M._*` test hooks) and add isolated tests via `busted`/`resty.test`. Leave the Valkey + HTTP paths to integration.
 **Where.** `bff-session.lua`; new Lua test files under `api-gateway/tests/`.
 
-### C6 — Decouple tests from the SLF4J audit wire format — Low `[carried]`
-**Why.** ~20 assertions pin the exact `event=… reason=…` log string; moving to JSON structured logging would break all of them at once.
-**What's needed.** Introduce a `SecurityAuditFormat` constant referenced by both the emitter and the tests, so a format change updates one place. Keep one focused `SecurityAuditTest` that owns the wire-format invariant.
-**Where.** `SecurityAudit.java`; the audit-asserting tests.
+### C6 — Decouple tests from the SLF4J audit wire format — **[done]**
+**Resolved.** `SecurityAudit` now holds the wire format in two `static final` constants (`FORMAT`, `FORMAT_WITH_SUBJECT`); both `event(...)` overloads reference them (format byte-identical). Two focused `SecurityAuditTest` cases own the rendered-shape invariant. A future format change updates the two constants + the one owning test, not the ~20 substring assertions (left passing). Partial by design — full decoupling of all 20 sites was over-investment for a Low item.
+**Where.** `SecurityAudit.java`, `SecurityAuditTest.java`.
 
 ---
 
