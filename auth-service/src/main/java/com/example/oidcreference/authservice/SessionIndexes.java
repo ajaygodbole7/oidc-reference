@@ -13,6 +13,9 @@ class SessionIndexes {
   private static final String IDP_SID_PREFIX = "idp_sid:";
   private static final String SUBJECT_SESSIONS_PREFIX = "sub_sessions:";
   private static final String LOGOUT_HINT_PREFIX = "logout_hint:";
+  // Forward-pointer left by a sid rotation (A6, set by InternalResolveController).
+  // A logout follows it so it cannot be outrun by a concurrent refresh-rotation.
+  private static final String ROTATED_PREFIX = "rotated:";
 
   private final StateStore stateStore;
   private final JsonCodec json;
@@ -119,6 +122,16 @@ class SessionIndexes {
         .flatMap(this::tryDecode);
     stateStore.delete(SESSION_PREFIX + localSid);
     stateStore.delete(LOGOUT_HINT_PREFIX + localSid);
+    // Follow a rotation breadcrumb: if this sid rotated to a new sid mid-flight (a
+    // concurrent refresh-rotation), the LIVE session is now under the new sid — so
+    // a logout that reached only the old sid must delete the new one too, or a
+    // subject-wide logout (deleteBySubject, not lock-serialized) could be undone by
+    // the rotation re-adding the new sid to sub_sessions. getAndDelete consumes the
+    // breadcrumb, so a rotation chain terminates. (A residual sub-millisecond
+    // window remains between the rotation's session move and its breadcrumb write;
+    // closing it fully needs a single atomic move+breadcrumb, a Do-Later for HA.)
+    stateStore.getAndDelete(ROTATED_PREFIX + localSid)
+        .ifPresent(this::deleteLocalSession);
     if (session.isEmpty()) {
       return false;
     }

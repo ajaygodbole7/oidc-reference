@@ -127,4 +127,86 @@ class SessionIndexesTest {
     assertThat(store.get("sess:local-sid-2")).isEmpty();
     assertThat(store.members("sub_sessions:alice")).isEmpty();
   }
+
+  // --- A6: sid rotation (rotate) + the breadcrumb-follow on logout -----------
+
+  @Test
+  void rotateRepointsAllThreeIndexesWhenIdpSidMatches() {
+    InMemoryStateStore store = new InMemoryStateStore();
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord session = sessionWithIdpSid("alice", "kc-1");
+    indexes.index("old", session);
+    assertThat(store.get("idp_sid:kc-1")).contains("old");
+
+    boolean rotated = indexes.rotate("old", "new", session);
+
+    assertThat(rotated).isTrue();
+    assertThat(store.get("idp_sid:kc-1")).as("idp_sid repointed").contains("new");
+    assertThat(store.members("sub_sessions:alice")).containsExactly("new");
+    assertThat(store.get("logout_hint:new")).isPresent();
+    assertThat(store.get("logout_hint:old")).isEmpty();
+  }
+
+  @Test
+  void rotateWithoutIdpSidStillSucceedsAndMovesSubjectIndex() {
+    // No id_token / sid claim (a portability shape) -> no idp_sid CAS to engage;
+    // rotation must still proceed and move the subject index.
+    InMemoryStateStore store = new InMemoryStateStore();
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord session = sessionForSubject("alice"); // idToken == null
+    indexes.index("old", session);
+
+    boolean rotated = indexes.rotate("old", "new", session);
+
+    assertThat(rotated).isTrue();
+    assertThat(store.members("sub_sessions:alice")).containsExactly("new");
+  }
+
+  @Test
+  void rotateFailsClosedWhenIdpSidClearedByConcurrentLogout() {
+    // A concurrent back-channel logout cleared idp_sid before the rekey CAS runs.
+    InMemoryStateStore store = new InMemoryStateStore();
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord session = sessionWithIdpSid("alice", "kc-1");
+    indexes.index("old", session);
+    store.delete("idp_sid:kc-1"); // logout already cleared it
+
+    boolean rotated = indexes.rotate("old", "new", session);
+
+    assertThat(rotated).as("CAS fails -> rotation aborts").isFalse();
+    assertThat(store.get("idp_sid:kc-1")).as("not resurrected by the rotation").isEmpty();
+  }
+
+  @Test
+  void deleteLocalSessionFollowsTheRotationBreadcrumb() {
+    // Subject-path logout race: a logout reaching only the OLD sid must also
+    // delete the session that rotated out from under it (sess:{new}), via the
+    // rotated:{old} breadcrumb.
+    InMemoryStateStore store = new InMemoryStateStore();
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    store.put("sess:new", JSON.encode(sessionForSubject("alice")), Duration.ofMinutes(30));
+    indexes.index("new", sessionForSubject("alice"));
+    store.put("rotated:old", "new", Duration.ofSeconds(30));
+
+    indexes.deleteLocalSession("old"); // logout reached the old sid only
+
+    assertThat(store.get("sess:new")).as("rotated-to session killed via breadcrumb").isEmpty();
+    assertThat(store.get("rotated:old")).as("breadcrumb consumed").isEmpty();
+    assertThat(store.members("sub_sessions:alice")).isEmpty();
+  }
+
+  private static String jwtWithSid(String idpSid) {
+    var enc = java.util.Base64.getUrlEncoder().withoutPadding();
+    var utf8 = java.nio.charset.StandardCharsets.UTF_8;
+    return enc.encodeToString("{\"alg\":\"HS256\"}".getBytes(utf8)) + "."
+        + enc.encodeToString(("{\"sid\":\"" + idpSid + "\"}").getBytes(utf8)) + ".sig";
+  }
+
+  private static SessionRecord sessionWithIdpSid(String sub, String idpSid) {
+    Instant now = Instant.now();
+    return new SessionRecord(
+        "access-token", "refresh-token", jwtWithSid(idpSid),
+        now.plusSeconds(300), now.plusSeconds(1800), now,
+        now.plusSeconds(28800), now, Map.of("sub", sub));
+  }
 }

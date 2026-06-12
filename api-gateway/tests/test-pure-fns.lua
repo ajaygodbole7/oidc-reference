@@ -72,6 +72,40 @@ check("bare sid accepted when allowed", gsc({ ["sid"] = "s1" }, true), "s1")
 check("bare sid REJECTED by default", gsc({ ["sid"] = "s1" }, false), nil)
 check("no cookie -> nil", gsc({}, true), nil)
 
+-- build_rotation_cookies (A6): the Set-Cookie strings re-issued on rotation. The
+-- PROD branch (__Host-sid + Secure) is never reached by the plain-HTTP live e2e,
+-- and SameSite parity with the login cookies (sid=Lax, XSRF-TOKEN=Strict) is what
+-- lets a later logout's clearCookie evict them.
+local brc = plugin._build_rotation_cookies
+assert(type(brc) == "function",
+    "bff-session.lua must export _build_rotation_cookies for tests")
+local function has(s, sub) return s ~= nil and string.find(s, sub, 1, true) ~= nil end
+local function checkc(label, cond) check(label, cond and true or false, true) end
+
+-- Prod: HTTPS, allow_insecure_sid = false
+local prod = brc("rsid", "val.hmac", 3600, false)
+checkc("prod sid is __Host-sid", has(prod[1], "__Host-sid=rsid"))
+checkc("prod sid HttpOnly", has(prod[1], "; HttpOnly"))
+checkc("prod sid SameSite=Lax", has(prod[1], "; SameSite=Lax"))
+checkc("prod sid Secure", has(prod[1], "; Secure"))
+checkc("prod sid Max-Age", has(prod[1], "; Max-Age=3600"))
+checkc("prod xsrf present", prod[2] ~= nil)
+checkc("prod xsrf name", has(prod[2], "XSRF-TOKEN=val.hmac"))
+checkc("prod xsrf SameSite=Strict", has(prod[2], "; SameSite=Strict"))
+checkc("prod xsrf Secure", has(prod[2], "; Secure"))
+checkc("prod xsrf NOT HttpOnly", not has(prod[2], "HttpOnly"))
+
+-- Local: HTTP, allow_insecure_sid = true
+local dev = brc("dsid", "val.hmac", 1800, true)
+checkc("dev sid is bare sid", has(dev[1], "sid=dsid") and not has(dev[1], "__Host-"))
+checkc("dev sid no Secure", not has(dev[1], "Secure"))
+checkc("dev xsrf no Secure", not has(dev[2], "Secure"))
+checkc("dev xsrf SameSite=Strict", has(dev[2], "; SameSite=Strict"))
+
+-- No CSRF -> only the sid cookie is emitted
+local nocsrf = brc("nsid", nil, 100, false)
+checkc("no-csrf -> single cookie", nocsrf[2] == nil)
+
 if failures > 0 then
   io.stderr:write(string.format("test-pure-fns: %d FAIL\n", failures))
   os.exit(1)

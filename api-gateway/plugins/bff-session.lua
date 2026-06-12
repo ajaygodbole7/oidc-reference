@@ -244,6 +244,33 @@ local function expire_session_cookie(scheme)
   core.response.set_header("Set-Cookie", name .. "=" .. attrs)
 end
 
+-- Build the Set-Cookie strings re-issued on a sid rotation (A6). Pure (string
+-- building) so it is unit-tested directly. Mirrors the Auth Service login
+-- cookies EXACTLY so a later logout's clearCookie evicts them:
+--   sid        : HttpOnly, SameSite=Lax       (AuthController.sidCookie)
+--   XSRF-TOKEN : NOT HttpOnly (SPA reads it), SameSite=Strict (AuthController.xsrfCookie)
+-- __Host-sid + Secure unless allow_insecure_sid (local HTTP) -> bare sid, no
+-- Secure. The name/Secure decision keys on the route flag, NOT the spoofable
+-- forwarded scheme. Max-Age = the session's remaining absolute lifetime.
+local function build_rotation_cookies(rotated_sid, csrf, max_age, allow_insecure_sid)
+  local secure = not allow_insecure_sid
+  local sid_name = secure and "__Host-sid" or "sid"
+  local max_age_attr = ""
+  if type(max_age) == "number" and max_age > 0 then
+    max_age_attr = "; Max-Age=" .. math.floor(max_age)
+  end
+  local secure_attr = secure and "; Secure" or ""
+  local cookies = {
+    sid_name .. "=" .. rotated_sid
+      .. "; Path=/; HttpOnly; SameSite=Lax" .. max_age_attr .. secure_attr,
+  }
+  if csrf and csrf ~= "" then
+    cookies[#cookies + 1] = "XSRF-TOKEN=" .. csrf
+      .. "; Path=/; SameSite=Strict" .. max_age_attr .. secure_attr
+  end
+  return cookies
+end
+
 -- Build a same-origin redirect URL for the no-session navigation case.
 -- We URL-encode the original path+query so saved_request survives the
 -- round-trip through the AS unchanged.
@@ -658,6 +685,11 @@ _M._constant_time_equals = constant_time_equals
 -- part of the APISIX plugin contract.
 _M._get_session_cookie = get_session_cookie
 
+-- Test hook: the sid-rotation Set-Cookie builder (A6). Pure string building, so
+-- test-pure-fns.lua exercises the prod __Host-sid/Secure branch that the live
+-- HTTP e2e never reaches, and the SameSite parity with the login cookies.
+_M._build_rotation_cookies = build_rotation_cookies
+
 -- ---------------------------------------------------------------------
 -- Plugin lifecycle
 -- ---------------------------------------------------------------------
@@ -809,23 +841,9 @@ function _M.header_filter(conf, ctx)
   -- path), and Max-Age = the session's remaining absolute lifetime so rotation
   -- never shortens persistence. Invisible to the SPA beyond the cookie swap.
   if ctx.bff_rotated_sid then
-    local secure = not ctx.bff_allow_insecure_sid
-    local sid_name = secure and "__Host-sid" or "sid"
-    local max_age_attr = ""
-    if type(ctx.bff_rotated_max_age) == "number" and ctx.bff_rotated_max_age > 0 then
-      max_age_attr = "; Max-Age=" .. math.floor(ctx.bff_rotated_max_age)
-    end
-    local secure_attr = secure and "; Secure" or ""
-    local set_cookies = {
-      sid_name .. "=" .. ctx.bff_rotated_sid
-        .. "; Path=/; HttpOnly; SameSite=Lax" .. max_age_attr .. secure_attr,
-    }
-    if ctx.bff_rotated_csrf then
-      -- NOT HttpOnly: the SPA reads XSRF-TOKEN and echoes it as X-XSRF-TOKEN.
-      set_cookies[#set_cookies + 1] = "XSRF-TOKEN=" .. ctx.bff_rotated_csrf
-        .. "; Path=/; SameSite=Lax" .. max_age_attr .. secure_attr
-    end
-    ngx.header["Set-Cookie"] = set_cookies
+    ngx.header["Set-Cookie"] = build_rotation_cookies(
+      ctx.bff_rotated_sid, ctx.bff_rotated_csrf,
+      ctx.bff_rotated_max_age, ctx.bff_allow_insecure_sid)
   end
 end
 
