@@ -1091,6 +1091,7 @@ class AuthControllerTest {
         Instant.now().plusSeconds(1800),
         createdAt,
         createdAt.plus(Duration.ofHours(12)),
+        createdAt,
         Map.of("sub", "alice"));
     stateStore.put("sess:" + sid, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     new SessionIndexes(stateStore, TestBeans.JSON).index(sid, session);
@@ -1107,6 +1108,7 @@ class AuthControllerTest {
         Instant.now().plusSeconds(1800),
         Instant.now().minus(Duration.ofHours(13)),
         Instant.now().minusSeconds(1),
+        Instant.now().minus(Duration.ofHours(13)),
         Map.of("sub", "alice"));
     stateStore.put("sess:" + sid, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     return new Cookie("sid", sid);

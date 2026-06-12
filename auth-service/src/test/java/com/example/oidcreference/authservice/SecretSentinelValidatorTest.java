@@ -128,6 +128,7 @@ class SecretSentinelValidatorTest {
         Duration.ofSeconds(60),
         Duration.ofSeconds(1800),
         Duration.ofSeconds(28800),
+        null,                                     // max-refresh-token-age (unset)
         URI.create("http://idp.example"),
         null,
         null,

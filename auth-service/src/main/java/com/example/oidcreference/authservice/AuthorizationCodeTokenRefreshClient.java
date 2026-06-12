@@ -108,6 +108,9 @@ class AuthorizationCodeTokenRefreshClient implements TokenRefreshClient {
         refreshExpiresIn == null ? null : Instant.now().plusSeconds(refreshExpiresIn),
         session.createdAt(),
         session.absoluteExpiresAt(),
+        // Rotation re-mints the refresh token; re-stamp the age baseline so
+        // refreshMintedAt always tracks the live refresh token (B5).
+        Instant.now(),
         newClaims);
   }
 

@@ -28,6 +28,7 @@ class SessionIndexesTest {
         now.plusSeconds(1800),
         now,
         now.plusSeconds(28800),
+        now,
         Map.of("sub", sub));
   }
 

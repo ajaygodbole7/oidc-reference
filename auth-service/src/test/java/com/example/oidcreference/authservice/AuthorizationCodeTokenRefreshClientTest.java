@@ -49,6 +49,7 @@ class AuthorizationCodeTokenRefreshClientTest {
         now.plusSeconds(1800),
         now,
         now.plusSeconds(43200),
+        now,
         Map.of("sub", "alice"));
   }
 
@@ -59,6 +60,7 @@ class AuthorizationCodeTokenRefreshClientTest {
         java.time.Duration.ofSeconds(60),
         java.time.Duration.ofSeconds(1800),
         java.time.Duration.ofSeconds(28800),
+        null,
         URI.create("http://idp.example"),
         null,
         null,
@@ -132,6 +134,7 @@ class AuthorizationCodeTokenRefreshClientTest {
         now.plusSeconds(1800),
         now,
         now.plusSeconds(43200),
+        now,
         Map.of("sub", "alice", "roles", roles));
   }
 

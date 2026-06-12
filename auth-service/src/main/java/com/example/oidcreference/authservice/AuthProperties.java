@@ -41,6 +41,19 @@ public record AuthProperties(
      * IdP SSO max session lifespan.
      */
     @NotNull @DefaultValue("28800s") Duration sessionAbsoluteTtl,
+    /**
+     * Optional IdP-independent ceiling on how long a single refresh token may
+     * keep refreshing a session, measured from when that token was minted
+     * (initial code exchange or the most recent rotation). Unset by default
+     * (null): behavior is exactly the IdP-supplied {@code refresh_expires_in}.
+     *
+     * <p>Many IdPs (Okta, Auth0, Entra) never emit {@code refresh_expires_in},
+     * so {@code SessionRecord.refreshExpiresAt} is null and the only brake on a
+     * non-rotating {@code sid} session is the absolute TTL. Setting this knob
+     * (e.g. {@code 1h}) bounds refresh-token age regardless of the IdP value.
+     * Independent of, and additive to, {@link #sessionAbsoluteTtl}.
+     */
+    Duration maxRefreshTokenAge,
     @NotNull URI issuerUri,
     URI authorizationUri,
     URI tokenUri,

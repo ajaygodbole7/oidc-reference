@@ -369,6 +369,7 @@ class InternalResolveControllerTest {
         Instant.now().plusSeconds(1800),
         Instant.now().minusSeconds(60),
         Instant.now().plusSeconds(60),            // valid now, but refresh returns past
+        Instant.now().minusSeconds(60),
         Map.of("sub", "alice"));
     storeSession(sid, nearlyExpired);
 
@@ -633,6 +634,7 @@ class InternalResolveControllerTest {
               Instant.now().plusSeconds(1800),
               session.createdAt(),
               Instant.now().minusSeconds(1),
+              Instant.now(),
               session.claims());
         }
         return new SessionRecord(
@@ -643,6 +645,7 @@ class InternalResolveControllerTest {
             Instant.now().plusSeconds(1800),
             session.createdAt(),
             session.absoluteExpiresAt(),
+            Instant.now(),
             session.claims());
       }
     }

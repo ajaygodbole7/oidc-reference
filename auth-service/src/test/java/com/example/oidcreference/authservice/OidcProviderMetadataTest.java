@@ -27,6 +27,7 @@ class OidcProviderMetadataTest {
           java.time.Duration.ofSeconds(60),
           java.time.Duration.ofSeconds(1800),
           java.time.Duration.ofSeconds(28800),
+          null,
           java.net.URI.create("http://127.0.0.1:" + hung.getLocalPort()),
           null,
           null,

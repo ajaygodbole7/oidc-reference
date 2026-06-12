@@ -226,6 +226,9 @@ class AuthController {
         session.refreshExpiresAt(),
         createdAt,
         createdAt.plus(props.sessionAbsoluteTtl()),
+        // The refresh token was just minted by the code exchange; stamp its
+        // age baseline so app.max-refresh-token-age (if set) measures from here.
+        createdAt,
         session.claims());
 
     Duration sessionTtl = session.nextTtl(props.sessionIdleTtl());

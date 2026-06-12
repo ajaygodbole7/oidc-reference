@@ -19,6 +19,12 @@ record SessionRecord(
     @JsonProperty("refresh_token_expires_at") Instant refreshExpiresAt,
     @JsonProperty("created_at") Instant createdAt,
     @JsonProperty("absolute_expires_at") Instant absoluteExpiresAt,
+    // When the CURRENT refresh token was minted: set on the initial code
+    // exchange and re-stamped on every rotation, so it always reflects the
+    // live refresh token's age. Nullable for backward compatibility — sessions
+    // and fixtures written before this field deserialize fine and simply skip
+    // the optional age check (see refreshTokenExpired(Duration)).
+    @JsonProperty("refresh_minted_at") Instant refreshMintedAt,
     @JsonProperty("claims") Map<String, Object> claims) {
   private static final Duration ABSOLUTE_TTL = Duration.ofHours(8);
   static final Duration SESSION_IDLE_TTL = Duration.ofMinutes(30);
@@ -38,6 +44,7 @@ record SessionRecord(
         refreshExpiresAt,
         Instant.now(),
         Instant.now().plus(ABSOLUTE_TTL),
+        Instant.now(),
         claims);
   }
 
@@ -62,7 +69,32 @@ record SessionRecord(
    * with no stored refresh expiry is never treated as expired on this basis.
    */
   boolean refreshTokenExpired() {
-    return refreshExpiresAt != null && !refreshExpiresAt.isAfter(Instant.now());
+    return refreshTokenExpired(null);
+  }
+
+  /**
+   * As {@link #refreshTokenExpired()}, but with an optional IdP-independent
+   * ceiling on refresh-token age ({@code app.max-refresh-token-age}).
+   *
+   * <p>Many IdPs (Okta, Auth0, Entra) never emit {@code refresh_expires_in},
+   * so {@link #refreshExpiresAt} is null and the IdP-derived check below can
+   * never fire — the only brake on a non-rotating {@code sid} session is then
+   * the absolute TTL. When {@code maxRefreshTokenAge} is configured AND this
+   * session records when its current refresh token was minted, a refresh token
+   * older than that ceiling is treated as expired regardless of the IdP value.
+   *
+   * @param maxRefreshTokenAge independent age ceiling, or {@code null}/unset to
+   *     disable it — when null, behavior is identical to the IdP-only check.
+   */
+  boolean refreshTokenExpired(Duration maxRefreshTokenAge) {
+    if (refreshExpiresAt != null && !refreshExpiresAt.isAfter(Instant.now())) {
+      return true;
+    }
+    if (maxRefreshTokenAge != null && refreshMintedAt != null) {
+      Duration age = Duration.between(refreshMintedAt, Instant.now());
+      return age.compareTo(maxRefreshTokenAge) > 0;
+    }
+    return false;
   }
 
   /**

@@ -49,6 +49,66 @@ class SessionRecordTest {
         .isFalse();
   }
 
+  // --- B5: optional IdP-independent refresh-token-age ceiling ---------------
+  // refresh_expires_in is a Keycloak-ism; Okta/Auth0/Entra omit it, so
+  // refreshExpiresAt is null and the IdP-derived check can never fire. The
+  // app.max-refresh-token-age knob bounds refresh-token age regardless,
+  // measured from refreshMintedAt.
+
+  @Test
+  void maxRefreshTokenAgeExceededTreatsRefreshAsExpired() {
+    // No IdP refresh expiry (Okta/Auth0/Entra shape), refresh token minted 2h
+    // ago, ceiling 1h -> expired on the age check alone.
+    SessionRecord session = sessionMintedAgo(Duration.ofHours(2), null);
+
+    assertThat(session.refreshTokenExpired(Duration.ofHours(1)))
+        .as("refresh token older than the configured max age is expired")
+        .isTrue();
+  }
+
+  @Test
+  void maxRefreshTokenAgeWithinCeilingIsNotExpired() {
+    SessionRecord session = sessionMintedAgo(Duration.ofMinutes(10), null);
+
+    assertThat(session.refreshTokenExpired(Duration.ofHours(1)))
+        .as("refresh token younger than the configured max age is not expired")
+        .isFalse();
+  }
+
+  @Test
+  void unconfiguredMaxAgeFallsBackToIdpRefreshExpiry() {
+    // maxRefreshTokenAge null -> behavior is exactly the IdP-only check.
+    SessionRecord live = sessionWithRefreshExpiry(Instant.now().plusSeconds(60));
+    SessionRecord expired = sessionWithRefreshExpiry(Instant.now().minusSeconds(1));
+    SessionRecord noExpiry = sessionWithRefreshExpiry(null);
+
+    assertThat(live.refreshTokenExpired(null)).isFalse();
+    assertThat(expired.refreshTokenExpired(null)).isTrue();
+    assertThat(noExpiry.refreshTokenExpired(null))
+        .as("null IdP expiry + unconfigured max age -> never expired")
+        .isFalse();
+  }
+
+  @Test
+  void maxAgeCheckSkippedWhenRefreshMintedAtIsNull() {
+    // Backward compatibility: an old session/fixture with no refreshMintedAt
+    // deserializes fine and simply skips the age check even when configured.
+    SessionRecord legacy = new SessionRecord(
+        "access",
+        "refresh",
+        "id",
+        Instant.now().plusSeconds(300),
+        null, // no IdP refresh expiry
+        Instant.now().minus(Duration.ofHours(13)),
+        Instant.now().plus(Duration.ofHours(8)),
+        null, // no refreshMintedAt (legacy)
+        Map.of("sub", "alice"));
+
+    assertThat(legacy.refreshTokenExpired(Duration.ofHours(1)))
+        .as("missing refreshMintedAt skips the age check (back-compat)")
+        .isFalse();
+  }
+
   private static SessionRecord sessionWithRefreshExpiry(Instant refreshExpiresAt) {
     return new SessionRecord(
         "access",
@@ -56,6 +116,22 @@ class SessionRecordTest {
         "id",
         Instant.now().plusSeconds(300),
         refreshExpiresAt,
+        Map.of("sub", "alice"));
+  }
+
+  // A session whose current refresh token was minted `mintedAgo` in the past,
+  // with the given IdP refresh expiry (null = IdP omitted refresh_expires_in).
+  private static SessionRecord sessionMintedAgo(Duration mintedAgo, Instant refreshExpiresAt) {
+    Instant now = Instant.now();
+    return new SessionRecord(
+        "access",
+        "refresh",
+        "id",
+        now.plusSeconds(300),
+        refreshExpiresAt,
+        now.minus(Duration.ofHours(1)),
+        now.plus(Duration.ofHours(7)),
+        now.minus(mintedAgo),
         Map.of("sub", "alice"));
   }
 }

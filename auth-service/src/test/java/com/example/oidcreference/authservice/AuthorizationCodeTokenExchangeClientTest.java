@@ -84,6 +84,7 @@ class AuthorizationCodeTokenExchangeClientTest {
     return new AuthProperties(
         "idp", "", java.time.Duration.ofSeconds(60),
         java.time.Duration.ofSeconds(1800), java.time.Duration.ofSeconds(28800),
+        null,
         URI.create("http://idp.example"), null, null, null, null,
         "oidc-reference-auth", "test-secret", Set.of("openid"),
         List.of("realm_access", "roles"),

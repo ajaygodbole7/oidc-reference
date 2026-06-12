@@ -77,6 +77,7 @@ class BackChannelLogoutControllerTest {
         createdAt.plusSeconds(1800),
         createdAt,
         createdAt.plusSeconds(3600),
+        createdAt,
         Map.of("sub", "alice"));
     stateStore.put("sess:local-sid-1", TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     new SessionIndexes(stateStore, TestBeans.JSON)
@@ -173,6 +174,7 @@ class BackChannelLogoutControllerTest {
         createdAt.plusSeconds(1800),
         createdAt,
         createdAt.plusSeconds(3600),
+        createdAt,
         Map.of("sub", sub));
   }
 

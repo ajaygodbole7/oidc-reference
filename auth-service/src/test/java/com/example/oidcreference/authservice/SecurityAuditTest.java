@@ -283,6 +283,7 @@ class SecurityAuditTest {
         created.plusSeconds(1800),
         created,
         created.plus(Duration.ofHours(12)),
+        created,
         Map.of("sub", "alice"));
     stateStore.put("sess:" + sidValue, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     return new Cookie("sid", sidValue);

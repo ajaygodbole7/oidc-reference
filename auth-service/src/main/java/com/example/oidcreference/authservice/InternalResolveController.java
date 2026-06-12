@@ -139,11 +139,14 @@ class InternalResolveController {
       return ok(session);
     }
 
-    // A refresh is due, but the refresh token is already past its own expiry.
-    // Sending it to Keycloak would only earn invalid_grant — a predictable,
-    // routine session end. Short-circuit to a clean "session ended" 404 with
-    // no upstream call and a non-alarming audit reason.
-    if (session.refreshTokenExpired()) {
+    // A refresh is due, but the refresh token is already past its own expiry —
+    // either the IdP-supplied refresh_expires_in, or the optional
+    // app.max-refresh-token-age ceiling (which bounds refresh-token age even
+    // when the IdP omits refresh_expires_in). Sending it to Keycloak would only
+    // earn invalid_grant — a predictable, routine session end. Short-circuit to
+    // a clean "session ended" 404 with no upstream call and a non-alarming
+    // audit reason.
+    if (session.refreshTokenExpired(props.maxRefreshTokenAge())) {
       SecurityAudit.event(
           request, 404, "refresh_rejected", "refresh_token_expired", subjectClaim(session));
       stateStore.delete(sessKey);
