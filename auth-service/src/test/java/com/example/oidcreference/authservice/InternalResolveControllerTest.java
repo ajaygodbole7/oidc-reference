@@ -405,6 +405,15 @@ class InternalResolveControllerTest {
     String newSid = (String) body.get("rotated_sid");
     assertThat(stateStore.get("rotated:" + sid))
         .as("breadcrumb present during the grace window").contains(newSid);
+    // Pin the grace VALUE, not just its presence: the breadcrumb TTL must be the
+    // short rotation grace (~10s / ROTATION_GRACE), NOT the idle (1800s) or
+    // absolute (28800s) session TTL. Without this the test would still pass if
+    // ROTATION_GRACE were widened to the absolute ceiling — the exact regression
+    // it names — because the hand-deleted breadcrumb below masks the TTL.
+    assertThat(stateStore.ttl("rotated:" + sid))
+        .as("the old sid must die within the SHORT rotation grace, not live for hours")
+        .isPositive()
+        .isLessThanOrEqualTo(Duration.ofSeconds(10));
 
     // While the breadcrumb lives, an in-flight request on the old sid still resolves.
     mockMvc.perform(post("/internal/resolve")

@@ -41,7 +41,11 @@ max-age" while the wire name is `rotated_sid_max_age`. Cross-check the gateway-r
 contract in §A.2 mentions consuming them.
 **Where.** `docs/specs/SPEC-0001-core-oidc-flows.md` §7.1 success-response block.
 
-### P2 — C1 "old-sid-dies" test has a teeth gap — `REF`, **Low–Medium**
+### P2 — C1 "old-sid-dies" test has a teeth gap — `REF`, **Low–Medium** — DONE 2026-06-12
+**Fixed.** The C1 test now asserts `ttl(rotated:{sid})` is positive AND `<= 10s` right
+after the rotation (before the hand-delete), so a mutation of `ROTATION_GRACE` to the
+idle/absolute TTL fails the Java suite. Teeth proven by widening the constant to 1800s
+(test went red on the grace pin), then reverted.
 **Why.** `InternalResolveControllerTest` (the old-sid-after-grace test, ~`:416-417`)
 deletes the breadcrumb **by hand** instead of letting its TTL lapse, so it proves
 (a) old sid resolves while the breadcrumb lives, (b) 404s once it's gone, (c) the new
