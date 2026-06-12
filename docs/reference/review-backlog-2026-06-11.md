@@ -101,10 +101,9 @@ The still-valid items from that file are carried forward below and marked `[carr
 
 ## C. Testing
 
-### C1 — Directly assert the gateway's bearer injection — High
-**Why.** The gateway's single most important security function — translating the opaque session cookie into the correct upstream `Authorization: Bearer <access_token>`, and *not* leaking/duplicating it — is only ever verified by inference (the RS didn't 401). The existing test seeds a non-JWT and checks forwarding heuristically; the echo test asserts the cookie is *stripped* but never asserts the bearer value. A bug injecting the wrong token, an empty bearer, or the raw cookie as a bearer would pass.
-**What's needed.** Using the echo endpoint, seed a real (or known) access token in `sess:{sid}` and assert the upstream received `Authorization: Bearer <exact token>` and that the cookie/CSRF values appear in no forwarded header.
-**Where.** `api-gateway/tests/test-gateway-behavior.sh` (the `test_valid_session_returns_200_with_bearer_injected` TODO at the seam); `GatewayTestEchoController`.
+### C1 — Directly assert the gateway's bearer injection — **[done]**
+**Resolved.** `GatewayTestEchoController` now reflects every inbound header (not a fixed allowlist), and the new live test `test_valid_session_injects_exact_bearer_and_strips_credentials` seeds a real access token, then asserts the upstream received `Authorization: Bearer <that exact token>`, the cookie was stripped, and neither the `sid` nor the CSRF value reached the RS in any header. Verified red→green against the live stack (passes on the correct gateway; fails with an exact-bearer mismatch + 401 when the injection is tampered). The earlier inference-only `test_valid_session_returns_200_with_bearer_injected` is kept for the tolerant-reader/forward path.
+**Where.** `api-gateway/tests/test-gateway-behavior.sh`; `backend-resource-server/.../GatewayTestEchoController.java`.
 
 ### C2 — Reconcile SPEC-0002 C2/C3 "live matrix" claims with reality — Med
 **Why.** SPEC-0002 states every matrix behavior MUST also have a live assertion against the running stack ("not a fabricated Jwt"). C2 (ID-token negatives) and C3 (RS negatives *through the gateway*) have only synthetic-token unit tests (excellent, but unit-layer); the one live RS-negative hits the RS directly, not through the gateway, and is gated behind an env flag. The behavior is well-tested; it is not tested the way the spec claims.

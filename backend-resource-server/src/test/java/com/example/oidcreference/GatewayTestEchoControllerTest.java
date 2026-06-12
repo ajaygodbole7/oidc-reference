@@ -25,17 +25,23 @@ class GatewayTestEchoControllerTest {
   private MockMvc mockMvc;
 
   @Test
-  void echoEndpointReflectsOnlyGatewayHarnessFields() throws Exception {
+  void echoReflectsEveryRequestHeaderLowerCased() throws Exception {
+    // The controller reflects ALL inbound headers (not a fixed allowlist) so the
+    // live gateway suite can assert the exact injected Authorization and that no
+    // credential leaked into any header. Lock that capability here: an arbitrary
+    // probe header is reflected, keys are lower-cased, and the query string and
+    // harness headers round-trip.
     mockMvc.perform(get("/api/_test/echo?alpha=1&encoded=ab")
             .header("Cookie", "__Host-sid=test")
             .header("Connection", "keep-alive")
             .header("X-Should-Strip", "remove-me")
+            .header("X-Echo-Probe", "probe-value")
             .with(jwt()))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.queryString").value("alpha=1&encoded=ab"))
         .andExpect(jsonPath("$.headers.cookie").value("__Host-sid=test"))
         .andExpect(jsonPath("$.headers.connection").value("keep-alive"))
         .andExpect(jsonPath("$.headers.x-should-strip").value("remove-me"))
-        .andExpect(jsonPath("$.headers.authorization").doesNotExist());
+        .andExpect(jsonPath("$.headers.x-echo-probe").value("probe-value"));
   }
 }

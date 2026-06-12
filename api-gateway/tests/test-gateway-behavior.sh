@@ -288,6 +288,61 @@ test_valid_session_returns_200_with_bearer_injected() {
   clear_session "$sid"
 }
 
+# C1 — the gateway's single most important security function: translate the
+# opaque session cookie into the EXACT upstream Authorization: Bearer <token>
+# (from /internal/resolve), and leak no credential. Earlier tests only inferred
+# this (the RS didn't 401); this asserts the injected bearer value directly via
+# the echo upstream, and that neither the sid nor the CSRF token reaches the RS
+# in any header. A wrong/empty/duplicated bearer, or the raw cookie as bearer,
+# fails here.
+test_valid_session_injects_exact_bearer_and_strips_credentials() {
+  name="valid_session_injects_exact_bearer_and_strips_credentials"
+  sid="echo-bearer-1"
+  csrf_sentinel="csrf-must-not-leak-deadbeefcafe"
+
+  # Seed the session with a real, RS-acceptable access token (fresh: 300s, so
+  # /internal/resolve returns it verbatim with no refresh). The exact value is
+  # what we expect the gateway to inject.
+  if ! access_token="$(mint_service_access_token 2>"$BODY_TMP")"; then
+    detail="$(cat "$BODY_TMP" 2>/dev/null || true)"
+    printf '[FAIL] %s could not mint service token: %s\n' "$name" "$detail"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+  if [ -z "$access_token" ]; then
+    printf '[FAIL] %s minted empty service token\n' "$name"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+  setup_session "$sid" "$access_token" 300
+
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid; XSRF-TOKEN=$csrf_sentinel; other=strip-me" \
+    "$GATEWAY_BASE/api/_test/echo" 2>/dev/null || true)"
+
+  # 1. RS accepted the injected bearer -> a VALID token was injected (not
+  #    garbage, not empty).
+  assert_status "$name status" 200 "$status"
+
+  # 2. The upstream Authorization is EXACTLY the resolved access token: not a
+  #    wrong token, not empty, not duplicated ("Bearer X, Bearer X"), not the
+  #    raw cookie.
+  upstream_auth="$(json_get "$BODY_TMP" "headers.authorization")"
+  assert_status "$name exact_bearer_injected" "Bearer $access_token" "$upstream_auth"
+
+  # 3. The session cookie is stripped from the upstream request.
+  upstream_cookie="$(json_get "$BODY_TMP" "headers.cookie")"
+  assert_status "$name cookie_stripped" "" "$upstream_cookie"
+
+  # 4. Neither the sid nor the CSRF token value appears in ANY forwarded header
+  #    (the echo reflects every inbound header, so this covers all of them).
+  echo_body="$(cat "$BODY_TMP" 2>/dev/null || true)"
+  assert_not_contains "$name no_sid_leak_to_upstream"  "$echo_body" "$sid"
+  assert_not_contains "$name no_csrf_leak_to_upstream" "$echo_body" "$csrf_sentinel"
+
+  clear_session "$sid"
+}
+
 test_canonical_fixture_payload_parses_through_plugin() {
   # B8: the gateway's tolerant reader MUST parse the canonical
   # schema/sess-payload.example.json fixture and extract access_token +
@@ -676,6 +731,7 @@ test_x_forwarded_proto_drives_secure_cookie_handling || true
 test_unknown_path_returns_404                       || true
 test_internal_path_is_not_routable_through_gateway  || true
 test_valid_session_returns_200_with_bearer_injected || true
+test_valid_session_injects_exact_bearer_and_strips_credentials || true
 test_canonical_fixture_payload_parses_through_plugin || true
 test_session_with_extra_fields_is_tolerated         || true
 test_expiring_session_triggers_refresh_delegation   || true
