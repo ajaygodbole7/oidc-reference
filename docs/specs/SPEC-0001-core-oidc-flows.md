@@ -1212,8 +1212,10 @@ What does NOT change:
 - All Java code in `auth-service/src/main/java/` and `backend-resource-server/src/main/java/`.
 - All Lua code in `api-gateway/plugins/bff-session.lua`.
 - All frontend code in `frontend/src/`.
-- The cross-component contracts: `schema/sess-payload.example.json`,
-  `schema/csrf-fixture.json`, SPEC-0001 §7.1/§7.2/§7.3.
+- The cross-component contracts: `schema/csrf-fixture.json`, SPEC-0001 §7.1
+  (`/internal/resolve` RPC) and §7.3 (signed CSRF). (`schema/sess-payload.example.json`
+  is the Auth Service's private session schema per §7.2 — not a cross-component
+  contract, since the gateway no longer reads `sess:{sid}`.)
 - The BFF session shape (sliding 30m, absolute 8h, sid in HttpOnly cookie,
   signed CSRF, oauth_tx browser binding).
 
@@ -1271,11 +1273,13 @@ What does NOT change:
 Both sides talk Valkey via RESP today. To swap:
 
 - Auth Service: replace `RedisStateStore` with an implementation of the
-  `StateStore` interface (`put`, `get`, `getAndDelete`, `delete`,
-  `expire`). The interface is vendor-neutral.
-- API Gateway plugin: replace the `resty.redis` block in
-  `bff-session.lua`'s `read_session` with the equivalent client for the
-  target store. The JSON payload shape stays identical.
+  `StateStore` interface (`put`, `get`, `getAndDelete`, `delete`, `expire`,
+  `rotateIfPresent`, `compareAndSwap`, and the set operations). The interface
+  is vendor-neutral, and it is the **only** place a store client lives.
+- API Gateway: nothing changes. Under the phantom-token split (§7.1, §A.2)
+  the gateway holds no store handle — it calls `/internal/resolve` and never
+  touches the state store. Swapping the store is an Auth-Service-only change.
 
-The `schema/sess-payload.example.json` contract stays the same. It is a
-JSON-level contract that does not depend on the store.
+The `schema/sess-payload.example.json` schema is unaffected: it is the Auth
+Service's private session shape (§7.2), serialized to whatever store backs
+`StateStore`, not a wire format the gateway depends on.

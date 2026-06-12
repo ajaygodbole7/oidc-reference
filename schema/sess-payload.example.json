@@ -1,5 +1,5 @@
 {
-  "$comment": "Canonical sess:{sid} payload per SPEC-0001 §7.2. The Auth Service is the sole writer; the API Gateway is a tolerant reader. Both sides MUST agree on field NAMES, TYPES, and TIMESTAMP FORMAT (ISO-8601 UTC, RFC 3339 profile, Zulu suffix). Field additions are allowed for the writer; readers MUST ignore unknown fields. Field removals or renames are breaking and require coordinated changes on both sides. The cross-component contract tests load this fixture into the Java SessionRecord and the Lua plugin's parser.",
+  "$comment": "Canonical sess:{sid} payload per SPEC-0001 §7.2. Under the phantom-token split (§7.1) the Auth Service is the SOLE reader AND writer of this key — the API Gateway holds no session-store handle and never parses sess:{sid}. This schema is therefore Auth-Service-private, not a cross-component wire contract. The 'required_fields_reader' subset (access_token + access_token_expires_at) is what the gateway ultimately consumes, but it receives those fields in the /internal/resolve response body, NOT by reading this key. SessSchemaContractTest pins the writer's Jackson binding (a rename/type-change guard) against this fixture; there is no Lua-side parser.",
   "spec": "docs/specs/SPEC-0001-core-oidc-flows.md#72-session-schema-contract",
   "required_fields_writer": [
     "access_token",

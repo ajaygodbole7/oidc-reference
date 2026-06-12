@@ -11,13 +11,14 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * SPEC-0001 §7.2: the sess:{sid} schema contract is the only thing the Auth
- * Service (writer) and API Gateway (tolerant reader) share. This test pins
- * the writer side: every field listed in {@code required_fields_writer} of
+ * SPEC-0001 §7.2: under the phantom-token split (§7.1) the Auth Service is the
+ * sole reader and writer of sess:{sid} — the API Gateway holds no store handle
+ * and never parses this key, so the schema is Auth-Service-private, not a
+ * cross-component wire contract. This test pins the writer side: every field
+ * listed in {@code required_fields_writer} of
  * {@code schema/sess-payload.example.json} must round-trip through
  * {@link SessionRecord}'s Jackson binding, and the payload itself must
- * deserialize into a SessionRecord with the documented field values. The
- * Lua-side reader has its own check (see api-gateway integration tests).
+ * deserialize into a SessionRecord with the documented field values.
  *
  * <p>A field rename or type change on the Java record will fail this test —
  * the fixture is intentionally separate from the SessionRecord source so a

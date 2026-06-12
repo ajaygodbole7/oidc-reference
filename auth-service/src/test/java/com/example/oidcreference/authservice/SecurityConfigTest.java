@@ -37,10 +37,10 @@ import org.springframework.test.web.servlet.MockMvc;
  *       relies on to issue 302 vs 401.
  *   <li><strong>Order-1 chain for {@code /internal/**}</strong> — per
  *       SPEC-0001 §7.1, an unauthenticated call returns 401, and a Bearer
- *       lacking the required authorization signal (audience+azp under the
- *       current implementation, or {@code SCOPE_internal.refresh} if scope-
- *       based authz is enabled per §7.1) is rejected with 401 or 403.
- *       A misconfigured chain would let either case hit the handler.
+ *       lacking the required authorization signal (the configured
+ *       internal-refresh audience plus the gateway {@code azp}/{@code client_id})
+ *       is rejected with 401 or 403. A misconfigured chain would let either
+ *       case hit the handler.
  * </ol>
  *
  * <p>The security-chain tests are grouped into a {@code @Nested} class so
@@ -163,32 +163,26 @@ class SecurityConfigTest {
     }
 
     @Test
-    void internalPathRejectsBearerWithoutInternalRefreshScope() throws Exception {
-      // Per SPEC-0001 §7.1: a Bearer that is structurally valid but lacks
-      // the required authorization signal (scope=internal.refresh OR the
-      // expected audience+azp, depending on the enforcement mechanism)
-      // must be rejected.
-      //
-      // The current SecurityConfig enforces audience binding at the filter
-      // layer and re-asserts audience+azp in the controller; a Bearer with
-      // wrong azp must be rejected with 401 (controller re-assertion). If
-      // scope-based authorization is added per §7.1, this test's
-      // expectation tightens to 403 from the security chain. Either
-      // verdict means "rejected" — both are accepted here so the test
-      // pins the behavior, not the exact enforcement path.
+    void internalPathRejectsBearerWithWrongCaller() throws Exception {
+      // Per SPEC-0001 §7.1: a Bearer that is structurally valid (correct
+      // internal-refresh audience) but is NOT the gateway — wrong azp/client_id
+      // — must be rejected. SecurityConfig enforces audience binding at the
+      // filter layer and InternalResolveController re-asserts audience+azp; a
+      // Bearer with the wrong azp is rejected with 401 (controller re-assertion)
+      // or 403 (filter chain). Both verdicts mean "rejected"; both are accepted
+      // here so the test pins the behavior, not the exact enforcement path.
       mockMvc.perform(post("/internal/resolve")
               .with(jwt().jwt(j -> j
                   // wrong azp: bearer issued to the Auth Service itself,
                   // not the API Gateway
                   .claim("azp", "oidc-reference-auth")
-                  .audience(List.of("oidc-reference-auth-internal"))
-                  .claim("scope", "some.other.scope")))
+                  .audience(List.of("oidc-reference-auth-internal"))))
               .contentType(MediaType.APPLICATION_JSON)
               .content("{\"sid\":\"any\"}"))
           .andExpect(result -> {
             int s = result.getResponse().getStatus();
             assertThat(s)
-                .as("bearer without internal.refresh authorization must be rejected (401 or 403)")
+                .as("bearer with wrong caller (azp) must be rejected (401 or 403)")
                 .isIn(401, 403);
           });
     }

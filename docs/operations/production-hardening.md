@@ -115,6 +115,16 @@ stateless and need no sticky sessions or session affinity at the load balancer.
 The state lives in one place by design — that place just has to be made highly
 available.
 
+The phantom-token split adds a second hot-path dependency: the **Auth Service is
+now itself a hard SPOF for all `/api` traffic**, because every `/api/**` request
+calls `/internal/resolve`. Pre-split, a gateway holding a cached session and a
+still-valid token could serve `/api` even while the Auth Service was down;
+post-split it cannot. Auth Service HA is therefore now as load-bearing as Valkey
+HA (previously it mattered only at login frequency) — run it replicated, and front
+`/internal/resolve` with HTTP connection pooling (the gateway currently opens a
+fresh connection per request) and a circuit breaker so a slow Auth Service fails
+fast instead of stalling the whole `/api` surface.
+
 Before a real deployment:
 
 - Run a replicated topology (Sentinel or Cluster, or a managed

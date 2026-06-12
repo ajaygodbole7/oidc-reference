@@ -89,7 +89,7 @@ Appendix A and `provider-adapters.md` §"Portability scope" enumerate every knob
 |---|---|
 | `frontend/` | React + TypeScript SPA. Cookie-authenticated. No OIDC client library in the browser. |
 | `auth-service/` | Confidential OIDC client (Nimbus `oauth2-oidc-sdk`). Owns `/auth/*`, the OAuth round-trip, session storage, and `/internal/resolve`. |
-| `api-gateway/` | APISIX standalone + custom Lua plugin (`bff-session`). Owns `/api/**` allowlist, `sess:{sid}` lookup, bearer injection, signed-CSRF validation, and refresh delegation. |
+| `api-gateway/` | APISIX standalone + custom Lua plugin (`bff-session`). Owns `/api/**` allowlist, sid resolution via `/internal/resolve` (holds no session-store handle), bearer injection, and signed-CSRF validation. |
 | `backend-resource-server/` | JWT validation only; never sees session cookies. |
 | `authorization-server/` | Keycloak realm + Compose service. |
 
