@@ -26,6 +26,20 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
+/**
+ * Browser-facing OIDC endpoints under {@code /auth} (login, callback, me,
+ * logout, logout/continue).
+ *
+ * <p>Design decision (O5/A5): this controller is deliberately kept cohesive
+ * rather than split per-endpoint. All of its handlers share one tightly-coupled
+ * core — the {@code oauth_tx} browser-binding cookie, the {@code sess:{sid}}
+ * lifecycle, and the strict token-isolation invariant (no access/refresh/id
+ * token ever reaches the browser). Splitting along HTTP routes would scatter
+ * that shared state and its invariants across files and invite a future change
+ * to satisfy one route while breaking the isolation contract on another. The
+ * cohesion is the safer default here; revisit only if the shared core is
+ * genuinely factored out.
+ */
 @RestController
 @RequestMapping("/auth")
 class AuthController {

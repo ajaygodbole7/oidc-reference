@@ -94,28 +94,29 @@ sub` (optionally that the IdP `sid` is unchanged); on mismatch throw
 
 ## Other open reference items (Low / Info)
 
-- **O1 — `RS is cookieless` as an explicit SPEC invariant.** `REF`, Low. On rotation
-  the gateway sets `Set-Cookie`, which in APISIX replaces any upstream Set-Cookie —
-  fine because the RS is cookieless, but currently implicit. State it in SPEC §7 (RS
-  contract): "the Resource Server MUST NOT set cookies; the gateway owns the cookie
-  jar." Any gateway impl then inherits it. (Was N6.)
+- **O1 — `RS is cookieless` as an explicit SPEC invariant.** `REF`, Low. **DONE 2026-06-12.**
+  SPEC "Resource Server / API Behavior" now states the MUST invariant ("the Resource Server
+  MUST NOT set cookies — the API Gateway owns the cookie jar"), with the rationale that the
+  rotation `Set-Cookie` replaces any upstream one and is safe only because the RS emits none;
+  cross-referenced to §7.1 and §A.2 so any gateway impl inherits it. (Was N6.)
 - **O2 — 502/503 consistency on the CC-retry path.** `REF`, Low. A transport failure
   on the CC-token retry maps to 502 while the same failure on the first attempt maps
   to 503 (`bff-session.lua` resolve path) — the §7.1 status table says 503. Make the
   retry branch match the documented contract. (Impl-vs-own-SPEC drift; the contract is
   reference-level even though the impl is in the swappable gateway.) (Was N7.)
-- **O3 — `rotateIfPresent` overwrite-on-collision note.** `REF`, Info. The rotate
-  primitive `SET`s the new key unconditionally after the EXISTS-gate; safe only
-  because `newSid` is a 256-bit token. One-line threat-model note that safety rests
-  on newSid entropy. (Was N8.)
+- **O3 — `rotateIfPresent` overwrite-on-collision note.** `REF`, Info. **DONE 2026-06-12.**
+  Added a threat-model note on the `ROTATE_IF_PRESENT` Lua comment in `RedisStateStore`:
+  the `SET` of the new key is unconditional after the EXISTS-gate, so safety against
+  clobbering a live `sess:{new}` rests entirely on `newSid` being a fresh 256-bit token. (Was N8.)
 - **O4 — Audit-format constant not referenced by its test.** `REF`, Low. **DONE 2026-06-12.**
   Both wire-shape tests now build the expected line from `SecurityAudit.FORMAT` /
   `FORMAT_WITH_SUBJECT` via SLF4J `MessageFormatter` (the renderer the logger uses), so the
   wire literal lives in one place; a format change updates the constant only. Still pins
   event()'s arg order + the subject-hashing (teeth proven: logging raw `sub` → red). (Was C6/B1.)
 - **O5 — Record the "keep AuthController un-split" decision in code/ADR.** `REF`, Low.
-  The decision currently lives only in a (now-deleted) backlog; add a one-line class
-  note or ADR entry so it survives. (Was A5/B2.)
+  **DONE 2026-06-12.** Added a class-level Javadoc on `AuthController` recording the deliberate
+  "kept cohesive, not split" decision and its rationale (shared `oauth_tx`/`sess:{sid}` core +
+  token-isolation invariant a per-route split would scatter). (Was A5/B2.)
 - **O6 — Final sweep relocating agent-process docs off the published surface.** `REF`,
   Low. Mostly done (`.agents/` gitignored, `AGENTS.md` cleaned, `CONTRIBUTING.md`
   added); confirm nothing left in the published tree describes the internal authoring

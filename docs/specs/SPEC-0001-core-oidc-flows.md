@@ -486,8 +486,14 @@ format, validation algorithm, and signing-key handling.
 
 ### API Behavior
 
-- Stateless. No sessions, no cookies. CORS denies browser origins (defense
-  in depth; the browser is never expected to reach the RS directly).
+- Stateless. No sessions. **Invariant: the Resource Server MUST NOT set cookies
+  — the API Gateway owns the cookie jar** (`__Host-sid`, `XSRF-TOKEN`). On a sid
+  rotation the gateway re-issues those via `Set-Cookie` on the proxied response,
+  which **replaces** (not appends) any upstream `Set-Cookie`; that replacement is
+  safe only because the RS emits none. Any gateway implementation inherits this
+  invariant (§7.1 success-response, §A.2 wire contract #1). CORS denies browser
+  origins (defense in depth; the browser is never expected to reach the RS
+  directly).
 - Bound to an internal Compose network in the canonical stack.
 - Errors as RFC 7807 `application/problem+json` via Spring `ProblemDetail`.
 - Audit log for denied access and validation failures, non-secret metadata

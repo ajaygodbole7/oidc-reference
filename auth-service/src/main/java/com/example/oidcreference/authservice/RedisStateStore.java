@@ -32,6 +32,11 @@ class RedisStateStore implements StateStore {
   // written in the SAME script as the move (N3) so a concurrent subject-wide
   // logout can never observe sess:{new} without the breadcrumb that lets it
   // follow through — closing the revocation window.
+  //
+  // Threat-model note (O3): the SET of KEYS[2] is UNCONDITIONAL after the gate —
+  // a pre-existing sess:{new} would be clobbered. Safety rests entirely on newSid
+  // being a fresh 256-bit CryptoSupport.randomUrlToken, so a collision with a live
+  // sid is cryptographically impossible; there is no compare-before-write guard.
   private static final RedisScript<Long> ROTATE_IF_PRESENT = new DefaultRedisScript<>(
       "if redis.call('EXISTS', KEYS[1]) == 1 then "
           + "redis.call('SET', KEYS[2], ARGV[1], 'PX', tonumber(ARGV[2])); "
