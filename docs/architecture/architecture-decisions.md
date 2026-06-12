@@ -147,8 +147,7 @@ deployments at meaningful scale almost always separate the OAuth surface
 from the API-gateway surface. They differ on three axes:
 
 - Different teams: identity vs. platform.
-- Different scaling characteristics: auth is low-frequency, big payload;
-  API is high-frequency, small payload.
+- Different expected load profiles, so each can scale independently.
 - Different operational concerns.
 
 A reference that ships the split shape is one production readers recognize.

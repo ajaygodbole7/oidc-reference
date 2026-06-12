@@ -59,6 +59,43 @@ if grep -E -q 'valkey_host|valkey_port|valkey_password|idle_ttl_seconds' "$apisi
   fail "$apisix_yaml still wires Valkey into the bff-session plugin — remove valkey_*/idle_ttl_seconds"
 fi
 
+# ---- Sentinel guard (render-apisix-config.sh fails closed on dev secrets) ----
+# REQUIRE_NONDEV_SECRETS=1 must REFUSE a dev-sentinel GATEWAY_CLIENT_SECRET /
+# CSRF_SIGNING_KEY — the gateway's render-time analogue of the Auth Service's
+# SecretSentinelValidator (APISIX check_schema cannot fail a route load, so the
+# Lua guard only WARNs). The refuse path exits before envsubst, so this gate
+# needs no envsubst: we assert rc==3 for sentinels and rc!=3 for real secrets.
+render_local="api-gateway/apisix.yaml.local"
+guard_backup=
+[ -f "$render_local" ] && { guard_backup="$(mktemp)"; cp "$render_local" "$guard_backup"; }
+
+assert_render_rc() { # label  eq|ne  expected_rc  ENV=VAL...
+  arc_label="$1"; arc_cmp="$2"; arc_rc="$3"; shift 3
+  arc_got=0
+  env "$@" sh scripts/render-apisix-config.sh >/dev/null 2>&1 || arc_got=$?
+  case "$arc_cmp" in
+    eq) [ "$arc_got" -eq "$arc_rc" ] || fail "sentinel-guard $arc_label: want rc=$arc_rc got $arc_got" ;;
+    ne) [ "$arc_got" -ne "$arc_rc" ] || fail "sentinel-guard $arc_label: want rc!=$arc_rc got $arc_got" ;;
+  esac
+}
+
+DEV_GW='LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY'
+DEV_CSRF='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+REAL_GW='render-test-nondev-gateway-placeholder'
+REAL_CSRF='render-test-nondev-csrf-placeholder'
+
+assert_render_rc "refuses dev gateway secret" eq 3 \
+  REQUIRE_NONDEV_SECRETS=1 GATEWAY_CLIENT_SECRET="$DEV_GW" CSRF_SIGNING_KEY="$REAL_CSRF"
+assert_render_rc "refuses dev csrf key" eq 3 \
+  REQUIRE_NONDEV_SECRETS=1 GATEWAY_CLIENT_SECRET="$REAL_GW" CSRF_SIGNING_KEY="$DEV_CSRF"
+assert_render_rc "allows real secrets under prod flag" ne 3 \
+  REQUIRE_NONDEV_SECRETS=1 GATEWAY_CLIENT_SECRET="$REAL_GW" CSRF_SIGNING_KEY="$REAL_CSRF"
+assert_render_rc "dev path unaffected (no prod flag)" ne 3 \
+  GATEWAY_CLIENT_SECRET="$DEV_GW" CSRF_SIGNING_KEY="$DEV_CSRF"
+
+if [ -n "$guard_backup" ]; then mv "$guard_backup" "$render_local"; else rm -f "$render_local"; fi
+echo "sentinel-guard checks passed"
+
 # ---- Live check (opt-in) ----
 
 if [ "${RUN_LIVE_API_GATEWAY:-0}" = "1" ]; then

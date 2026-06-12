@@ -53,8 +53,7 @@ OIDC deployments at scale separate the OAuth surface from the API-gateway
 surface:
 
 - different teams own them (identity vs. platform);
-- different scaling profiles (auth is low-frequency, big-payload; API is
-  high-frequency, small-payload);
+- different expected load profiles, so each can scale independently;
 - different operational concerns.
 
 The "BFF" name (Sam Newman, 2015) originally meant a per-frontend API
@@ -287,7 +286,7 @@ sequenceDiagram
 | `redirect_uri` pinned via `app.base-url` (defeats Host-header injection) | — | `AuthController#baseUrl` |
 | Per-session refresh lock (Java); `lua-resty-lock` around CC-token fetch (Lua) | — | `InternalRefreshController`, `bff-session.lua` |
 | Rate-limit on `/auth/login` + `/auth/callback/idp` (APISIX `limit-req`) | — | `apisix.yaml.template` |
-| Boot-time sentinel guard refusing default dev secrets in `prod` profile | — | `SecretSentinelValidator` (Java), `bff-session.lua` |
+| Sentinel guard refusing default dev secrets | — | `SecretSentinelValidator` (Java, fail-closed at boot for the auth secret + cookie key); `render-apisix-config.sh` (`REQUIRE_NONDEV_SECRETS`, fail-closed at render for the gateway secret + CSRF key); `bff-session.lua` `warn_on_dev_sentinels` (WARN-only at gateway load) |
 
 ## What's deliberately not here
 

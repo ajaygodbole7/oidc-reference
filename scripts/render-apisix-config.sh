@@ -57,6 +57,32 @@ if [ -n "$missing" ]; then
   exit 2
 fi
 
+# Fail-closed sentinel guard for the gateway's secrets. The Auth Service has
+# SecretSentinelValidator, which refuses to BOOT on a dev sentinel; the gateway
+# has no equivalent, because APISIX's plugin check_schema cannot safely fail a
+# route load, so the Lua guard only WARNs. Render time is the one place we can
+# fail closed for GATEWAY_CLIENT_SECRET (which authenticates the gateway ->
+# /internal/resolve call made on every /api request) and the CSRF signing key.
+# Opt-in: a non-dev deploy sets REQUIRE_NONDEV_SECRETS=1 so a copied artifact
+# that forgot to rotate these refuses to render instead of mounting a gateway
+# that trusts a publicly-known dev secret. Default off -> dev render unchanged.
+DEV_CSRF_KEY_SENTINEL='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+if [ "${REQUIRE_NONDEV_SECRETS:-0}" = "1" ]; then
+  sentinels=
+  case "$GATEWAY_CLIENT_SECRET" in
+    *CHANGE_BEFORE_DEPLOY*) sentinels="$sentinels GATEWAY_CLIENT_SECRET" ;;
+  esac
+  if [ "$CSRF_SIGNING_KEY" = "$DEV_CSRF_KEY_SENTINEL" ]; then
+    sentinels="$sentinels CSRF_SIGNING_KEY"
+  fi
+  if [ -n "$sentinels" ]; then
+    printf 'fatal: REQUIRE_NONDEV_SECRETS=1 but dev sentinel secret(s) present:%s\n' \
+      "$sentinels" >&2
+    printf 'hint: rotate these to real secrets before rendering for a non-dev deploy.\n' >&2
+    exit 3
+  fi
+fi
+
 # envsubst is the cleanest tool: substitutes ${VAR} and $VAR only,
 # leaves Lua/YAML alone. Restrict it to the names we expect so a stray
 # $foo in a comment doesn't get clobbered by the host env.

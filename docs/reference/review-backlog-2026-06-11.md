@@ -61,10 +61,9 @@ The still-valid items from that file are carried forward below and marked `[carr
 
 ## B. Security
 
-### B1 — Close the gateway-client-secret sentinel gap (or disclose it precisely) — High
-**Why.** `SecretSentinelValidator` (Java) fails closed only for `AUTH_CLIENT_SECRET` and `APP_COOKIE_SIGNING_KEY`. `GATEWAY_CLIENT_SECRET` lives only in the APISIX plugin config, and the Lua guard (`warn_on_dev_sentinels`) only logs a WARN — `check_schema` still returns `true`. A deploy that rotates the auth secret + cookie key but forgets the gateway CC secret boots cleanly with the dev sentinel. That secret authenticates the gateway→`/internal/resolve` path (called on every `/api/**` request). README's "sentinel guard … `SecretSentinelValidator` (Java), `bff-session.lua`" implies a parity that does not exist. `REF` for the disclosure fix; the fail-closed mechanism is partly `PROD`.
-**What's needed.** Minimum (`REF`): correct README/SECURITY D-1 to state the gateway secret is WARN-only at the gateway and not covered by the Java fail-closed guard. Better: have `render-apisix-config.sh` (or an init step) refuse the `CHANGE_BEFORE_DEPLOY` sentinel when a prod flag is set, since APISIX `check_schema` can't safely fail the route load.
-**Where.** `SecretSentinelValidator.java`, `bff-session.lua` (`warn_on_dev_sentinels`), `SECURITY.md` D-1, README "Security controls" note, `scripts/render-apisix-config.sh`.
+### B1 — Close the gateway-client-secret sentinel gap (or disclose it precisely) — **[done]**
+**Resolved.** Added a render-time fail-closed guard: `render-apisix-config.sh` refuses to emit the route file when `REQUIRE_NONDEV_SECRETS=1` and `GATEWAY_CLIENT_SECRET`/`CSRF_SIGNING_KEY` are still dev sentinels — the gateway secret never reaches the Java `SecretSentinelValidator`, and APISIX `check_schema` can't fail a route load, so the Lua guard stays WARN-only and render time is the place to fail closed. Disclosure corrected: README's security-controls row and `SECURITY.md` D-1 + the `GATEWAY_CLIENT_SECRET` row now name the three distinct guards (Java fail-closed at boot; render fail-closed for the gateway secret + CSRF key; Lua WARN-only). Covered by `verify-api-gateway.sh` (rc==3 on sentinels, rc!=3 on real secrets), red→green verified.
+**Where.** `scripts/render-apisix-config.sh`, `scripts/verify-api-gateway.sh`, `README.md`, `SECURITY.md`.
 
 ### B2 — Name the Resource Server's east-west exposure as a load-bearing control — Med
 **Why.** The RS authorizes purely on `aud=oidc-reference-api` + scope/roles; it has no notion that a request came from the BFF gateway. Any holder of a token with that audience (e.g. the `oidc-reference-service` client, or a server-side-exfiltrated user token) that gains network reachability can call the RS directly. The browser-token boundary protects the *browser*, not the RS's east-west surface. The threat model never lists "valid token from a non-gateway caller," and frames the route allowlist (which constrains *paths*, not *callers*) as the RS's protection. Network isolation is the real control. `REF` (disclosure); the fix (DPoP/mTLS) is `PROD`.
@@ -136,20 +135,14 @@ The still-valid items from that file are carried forward below and marked `[carr
 ### D1 — Remove the phantom `internal.refresh` scope check from the docs — **[done]**
 **Resolved by `b93454e`.** The phantom-token §7.1 rewrite dropped the `scope contains "internal.refresh"` line. The endpoint is now `/internal/resolve`, and §7.1 documents exactly what the code enforces: Bearer signature + `iss` + `exp` + `aud` contains the configured internal-refresh audience + `azp`/`client_id` equals the gateway client id — no scope check. Re-grep `internal.refresh` if reviving any related doc to confirm it stays gone.
 
-### D2 — Fix the Referrer-Policy coverage claim — Low
-**Why.** RFC9700-compliance.md / SECURITY / ADR say `Referrer-Policy: no-referrer` is set on the logout 302 and callback *error* responses, "other responses use Spring defaults" — but the code also sets it on the callback *success* 302 (`AuthController.java`). The "success uses defaults" statement is inaccurate.
-**What's needed.** Note that the callback success redirect also carries `no-referrer`.
-**Where.** `RFC9700-compliance.md` §4.2.4; `SECURITY.md`.
+### D2 — Fix the Referrer-Policy coverage claim — **[done]**
+**Resolved.** `RFC9700-compliance.md` §4.2.4 now states `Referrer-Policy: no-referrer` is set on the logout 302 and on **both** the callback success and callback error redirects (verified against the three set-points in `AuthController.java`). The inaccurate claim existed only in RFC9700-compliance.md; SECURITY.md carried no contradicting version.
 
-### D3 — Trim unsupported superlatives and post-hoc rationale — Low
-**Why.** "uniquely sophisticated" (Nimbus, ADR), "production-grade" (APISIX), and the asserted-as-fact "auth is low-frequency big-payload, API is high-frequency small-payload" scaling rationale read as marketing in a reference. The "Why split BFF" justification is near-duplicated between README and ADR §A6.
-**What's needed.** Cut the empty superlatives; state the split rationale once and cross-reference; drop or caveat the unsupported scaling-asymmetry claim.
-**Where.** `docs/architecture/architecture-decisions.md` (A6/A7); README §"Why this shape".
+### D3 — Trim unsupported superlatives and post-hoc rationale — **[done]**
+**Resolved.** The asserted-as-fact scaling-asymmetry claim ("auth low-frequency big-payload, API high-frequency small-payload") is reframed as a design expectation — "different expected load profiles, so each can scale independently" — in both `architecture-decisions.md` and README §"Why this shape". The "uniquely sophisticated" / "production-grade" superlatives were already gone (no occurrences remain).
 
-### D4 — Resolve SPEC-0001's "Status: Draft" vs "the build contract" — Low
-**Why.** README/AGENTS/start-here call SPEC-0001 "the build contract" / "single source of truth" while SPEC-0001 itself is marked "Status: Draft." The label undercuts every doc that cites it as authoritative.
-**What's needed.** Promote SPEC-0001 to a non-draft status, or stop calling it the single source of truth.
-**Where.** `docs/specs/SPEC-0001-core-oidc-flows.md` §Status.
+### D4 — Resolve SPEC-0001's "Status: Draft" vs "the build contract" — **[done]** (already resolved)
+**Resolved.** No "Status: Draft" label exists in `SPEC-0001-core-oidc-flows.md` (a prior pass removed it; its header already reads "This spec is the build contract"). Verified by grep for "Draft" / "Status:" — no contradiction remains. No edit needed.
 
 ### D5 — Relocate the agent-process docs out of the reference surface — Low (mostly done)
 **Why.** `AGENTS.md` "Mandatory Turn Protocol" describes an internal authoring workflow, not the BFF reference. It adds surface a consumer must wade past.

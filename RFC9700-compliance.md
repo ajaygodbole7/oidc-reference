@@ -110,7 +110,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 4.2.4 | No third-party resources on authz pages (`SHOULD NOT`) | ✅ | Keycloak login page is self-hosted. SPA loads no third-party scripts. |
-| 4.2.4 | `Referrer-Policy` header | 🟡 | `Referrer-Policy: no-referrer` set on every Auth Service response via the security filter chain (`SecurityConfig`), and explicitly on the logout 302 (id_token_hint carries PII) and callback error responses. Resource Server / gateway responses use defaults. |
+| 4.2.4 | `Referrer-Policy` header | 🟡 | `Referrer-Policy: no-referrer` set on every Auth Service response via the security filter chain (`SecurityConfig`), and explicitly on the logout 302 (id_token_hint carries PII) and on both the callback success and callback error redirects. Resource Server / gateway responses use defaults. |
 | 4.2.4 | Code response type over access-token types | ✅ | Covered. |
 | 4.2.4 | Code bound to client or PKCE | ✅ | Confidential client + PKCE. |
 | 4.2.4 | Code invalidated on first use (`MUST`) | ✅ | Keycloak default. |
