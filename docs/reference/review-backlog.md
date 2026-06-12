@@ -23,7 +23,11 @@ plus Low comment/test/doc-hygiene.
 
 ## Priority — reference fixes for the next agent
 
-### P1 — SPEC §7.1 `/internal/resolve` success-response omits the rotation fields — `REF`, **Medium**
+### P1 — SPEC §7.1 `/internal/resolve` success-response omits the rotation fields — `REF`, **Medium** — DONE 2026-06-12
+**Fixed.** Added `rotated_sid` / `rotated_sid_max_age` / `rotated_csrf` (marked "present
+only on rotation," authoritative snake_case) to the §7.1 success-response block, with the
+gateway's MUST-re-issue-both-cookies obligation; updated the §7.1 gateway-handling table
+(200 row), pseudocode step 11, and the §A.2 gateway-swap wire contract #1 to match.
 **Why.** The contract block in SPEC-0001 §7.1 (~`:690-692`) documents the 200 body as
 only `access_token` + `access_token_expires_at`, but the actual `ResolveResponse`
 (`InternalResolveController.java`, `record ResolveResponse`) emits **five** fields:

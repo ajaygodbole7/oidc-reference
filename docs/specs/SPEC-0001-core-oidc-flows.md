@@ -689,11 +689,28 @@ Success response:
   Content-Type: application/json
   {
     "access_token": "<current access token JWT>",
-    "access_token_expires_at": "<ISO-8601 UTC>"
+    "access_token_expires_at": "<ISO-8601 UTC>",
+
+    // The next three fields are PRESENT ONLY when this resolve rotated the sid
+    // (i.e. a refresh occurred — the near-expiry path, §A6). They are OMITTED
+    // entirely on a fresh-path resolve. Snake_case wire names are authoritative.
+    "rotated_sid":         "<new opaque sid>",
+    "rotated_sid_max_age": <int seconds — Max-Age for the new sid cookie>,
+    "rotated_csrf":        "<new signed CSRF token, HMAC-bound to rotated_sid>"
   }
   The gateway injects access_token as the upstream Authorization: Bearer. The
   token travels gateway <- Auth Service over the internal RPC only; it is never
   logged (the audit hashes sid/sub) and never reaches the browser.
+
+  ROTATION (when rotated_sid is present): the gateway MUST, on THIS response,
+  re-issue BOTH the session cookie (__Host-sid=<rotated_sid>; Max-Age=
+  <rotated_sid_max_age>) AND the XSRF-TOKEN cookie (=<rotated_csrf>), so the
+  browser switches to the new sid and its bound CSRF token. A gateway that
+  ignores these fields keeps presenting the old sid cookie — breaking A6 sid
+  rotation — and the next state-changing request fails CSRF, because the CSRF
+  token is HMAC-bound to the sid. (Note: the prose elsewhere calls
+  rotated_sid_max_age "the cookie max-age"; the wire field name is the
+  authoritative spelling.)
 
 Error responses:
   HTTP/1.1 401 Unauthorized
@@ -736,9 +753,13 @@ Auth Service preconditions and behavior:
      reuse — RFC 6749 §5.2 does not distinguish them, and the RP cannot attribute
      the cause): emit refresh_token_rejected / session_invalidated, DEL
      sess:{sid}, release lock, return 409.
- 11. On success: validate rotation (new refresh token differs from old), update
-     sess:{sid} with the new tokens and access_token_expires_at, release lock,
-     return 200 with the new access_token.
+ 11. On success: validate rotation (new refresh token differs from old), then
+     rotate the sid (§A6) — mint sid', ATOMICALLY move sess:{sid} -> sess:{sid'}
+     with the new tokens + access_token_expires_at AND write the rotated:{sid}
+     breadcrumb in one op, repoint the idp_sid:/sub_sessions:/logout_hint:
+     indexes, release lock, return 200 with the new access_token plus
+     rotated_sid / rotated_sid_max_age / rotated_csrf so the gateway re-issues
+     the cookies.
  12. On other Keycloak failure: release lock, return 502.
 ```
 
@@ -746,7 +767,7 @@ Auth Service preconditions and behavior:
 
 | Status | Gateway action |
 |---|---|
-| 200 | Inject the returned `access_token` as `Authorization: Bearer` and proxy the request upstream. No store read — the token is in the response body. |
+| 200 | Inject the returned `access_token` as `Authorization: Bearer` and proxy the request upstream. No store read — the token is in the response body. **If the body carries `rotated_sid`** (the resolve rotated the sid on a refresh), also re-issue the `__Host-sid` cookie (`=rotated_sid`, `Max-Age=rotated_sid_max_age`) and the `XSRF-TOKEN` cookie (`=rotated_csrf`) on this response — see §7.1 success-response. Omitting this keeps the stale sid cookie and breaks the next state-changing request's CSRF. |
 | 401 | The Gateway's own Client Credentials token failed validation at Auth Service. Invalidate the Gateway's cached service token, fetch a new one from Keycloak, retry the resolve call **once**. If the second attempt also returns 401, return `502` to the browser and emit a Gateway-side security audit event — the Gateway's identity is misconfigured or its Keycloak client has been disabled. |
 | 404 | Session was logged out concurrently, expired, or hit the absolute ceiling. Return `401` to the browser, expire `__Host-sid`, and rely on the SPA to trigger a fresh login on the next top-level navigation. This is the instant-revocation path: a server-side `DEL sess:{sid}` makes the very next resolve a 404. |
 | 409 | Refresh rejected by Keycloak (`invalid_grant`) — Auth Service has invalidated `sess:{sid}` and emitted the `refresh_token_rejected` audit event (the cause may be reuse, but is not provable at the RP). Return `401` to the browser, expire `__Host-sid`, and emit a Gateway-side audit event for trace correlation. |
@@ -1236,9 +1257,13 @@ Wire contracts the alternate gateway MUST satisfy:
    bearer (carrying the configured internal-refresh audience and
    `azp=<configured gateway client id>`) and the sid from the cookie. Read
    `access_token` from the 200 body; handle the §7.1 status table (404/409 →
-   401 + cookie clear, 401 → CC retry, 502 → 503). The gateway has no
-   Redis/Valkey client — lookup, idle slide, and refresh all happen in the
-   Auth Service.
+   401 + cookie clear, 401 → CC retry, 502 → 503). **On a 200 that carries
+   `rotated_sid`** (the resolve rotated the sid on a refresh, §A6), re-issue the
+   `__Host-sid` cookie (`=rotated_sid`, `Max-Age=rotated_sid_max_age`) and the
+   `XSRF-TOKEN` cookie (`=rotated_csrf`) on that response — a gateway that drops
+   these keeps the stale sid and fails the next state-changing request's CSRF.
+   The gateway has no Redis/Valkey client — lookup, idle slide, and refresh all
+   happen in the Auth Service.
 2. **Bearer injection.** Strip the inbound `Cookie` and `Authorization`
    headers (and the rest of HOP_BY_HOP); set `Authorization: Bearer
    <resolved access_token>`.
