@@ -59,6 +59,19 @@ local long = string.rep("a", 63) .. "b"
 check("long identical", eq(long, long), true)
 check("long one-byte differ", eq(long, string.rep("a", 63) .. "c"), false)
 
+-- get_session_cookie: __Host-sid is honored unconditionally; the bare `sid`
+-- fallback is accepted ONLY when allow_insecure_sid is true (B3 — not inferred
+-- from a spoofable scheme). The strings below are the cookie VALUES returned.
+local gsc = plugin._get_session_cookie
+assert(type(gsc) == "function",
+    "bff-session.lua must export _get_session_cookie for tests")
+check("__Host-sid honored (flag off)", gsc({ ["__Host-sid"] = "h1" }, false), "h1")
+check("__Host-sid honored (flag on)", gsc({ ["__Host-sid"] = "h1" }, true), "h1")
+check("__Host-sid wins over bare sid", gsc({ ["__Host-sid"] = "h1", ["sid"] = "s1" }, false), "h1")
+check("bare sid accepted when allowed", gsc({ ["sid"] = "s1" }, true), "s1")
+check("bare sid REJECTED by default", gsc({ ["sid"] = "s1" }, false), nil)
+check("no cookie -> nil", gsc({}, true), nil)
+
 if failures > 0 then
   io.stderr:write(string.format("test-pure-fns: %d FAIL\n", failures))
   os.exit(1)

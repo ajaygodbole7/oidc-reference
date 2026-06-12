@@ -66,6 +66,10 @@ local schema = {
     gateway_client_id       = { type = "string" },
     gateway_client_secret   = { type = "string" },
     cookie_signing_key      = { type = "string" },                   -- std-base64-encoded 256-bit key
+    -- Accept the bare `sid` cookie (no __Host- prefix). ONLY for local HTTP,
+    -- where __Host- cookies (Secure-required) can't be set. Default false:
+    -- production honors __Host-sid only and never a spoofable bare sid. (B3)
+    allow_insecure_sid      = { type = "boolean", default = false },
   },
 }
 
@@ -159,13 +163,18 @@ local function parse_cookies(cookie_header)
   return out
 end
 
-local function get_session_cookie(cookies, scheme)
-  -- Prefer __Host-sid when present (production / HTTPS), but accept
-  -- bare `sid` in local HTTP mode per SPEC §"Session Cookie".
+local function get_session_cookie(cookies, allow_insecure_sid)
+  -- __Host-sid (Secure-bound) is honored unconditionally. The bare `sid`
+  -- fallback exists only for local HTTP, where __Host- cookies (which require
+  -- Secure) can't be set. It is accepted ONLY when the route explicitly opts in
+  -- via allow_insecure_sid — NOT inferred from a client-supplied
+  -- X-Forwarded-Proto, which a caller could spoof to coax the gateway into
+  -- honoring a bare sid where only a bare sid is present (e.g. a TLS-terminating
+  -- LB forwarding plaintext). Production leaves the flag off: __Host-sid only. (B3)
   if cookies["__Host-sid"] then
     return cookies["__Host-sid"]
   end
-  if cookies["sid"] and scheme == "http" then
+  if cookies["sid"] and allow_insecure_sid then
     return cookies["sid"]
   end
   return nil
@@ -629,6 +638,11 @@ _M._resolve_session = resolve_session
 -- exercises its correctness directly in bare LuaJIT. Not part of the contract.
 _M._constant_time_equals = constant_time_equals
 
+-- Test hook: session-cookie selection. Pure (table lookups), so test-pure-fns.lua
+-- exercises the __Host-sid-vs-bare-sid + allow_insecure_sid gate directly. Not
+-- part of the APISIX plugin contract.
+_M._get_session_cookie = get_session_cookie
+
 -- ---------------------------------------------------------------------
 -- Plugin lifecycle
 -- ---------------------------------------------------------------------
@@ -677,7 +691,7 @@ function _M.access(conf, ctx)
   local cookies       = parse_cookies(cookie_header)
 
   -- Step 1 + 2: session cookie present?
-  local sid = get_session_cookie(cookies, scheme)
+  local sid = get_session_cookie(cookies, conf.allow_insecure_sid)
   if not sid or sid == "" then
     return no_session_response(ctx, conf, scheme, host, uri)
   end

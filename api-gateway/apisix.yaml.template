@@ -88,6 +88,10 @@ plugin_configs:
         gateway_client_id: ${GATEWAY_CLIENT_ID}
         gateway_client_secret: ${GATEWAY_CLIENT_SECRET}
         cookie_signing_key: ${CSRF_SIGNING_KEY}
+        # Local dev is plain HTTP, so the session cookie is the bare `sid`
+        # (__Host- requires Secure). Opt in to accepting it. A production render
+        # (HTTPS, __Host-sid) MUST drop this line — the bare-sid path is then off.
+        allow_insecure_sid: true
 
 routes:
   # ---- /api/** allowlist ----
