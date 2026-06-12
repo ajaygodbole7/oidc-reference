@@ -91,8 +91,10 @@ exists so a reader does not assume omission is oversight.
   without requiring TLS termination locally.
 
 - **Distributed per-session refresh lock across HA Auth Service
-  instances.** `InternalRefreshController.locksPerSid` is a JVM-local
-  `ConcurrentHashMap`. A second `auth-service` instance breaks the
+  instances.** The default `RefreshLock`, `InProcessRefreshLock` (used by
+  `InternalResolveController`), holds a JVM-local `ConcurrentHashMap`; a
+  distributed impl swaps in behind the same interface. A second
+  `auth-service` instance breaks the
   serialization guarantee: two concurrent refresh calls on the same
   session can hit different instances, both submit the same refresh
   token, one succeeds and the other triggers Keycloak's reuse detection

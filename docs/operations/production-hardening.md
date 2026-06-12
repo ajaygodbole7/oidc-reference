@@ -32,9 +32,11 @@ architecture is meant to be copied and hardened for a specific platform.
 
 ### Distributed refresh lock (required before running more than one instance)
 
-`InternalRefreshController` serializes concurrent refreshes for one session with
-a process-local `ReentrantLock`. That is correct for a single Auth Service
-instance only.
+`InProcessRefreshLock` — the default `RefreshLock` behind `InternalResolveController`
+— serializes concurrent refreshes for one session with a process-local
+`ReentrantLock`. That is correct for a single Auth Service instance only. The
+`RefreshLock` interface is the swap point: a distributed implementation drops in
+without touching the resolve path.
 
 With two or more instances, two can refresh the same session at the same time.
 Both present the same refresh token to the IdP. The reference realm enables

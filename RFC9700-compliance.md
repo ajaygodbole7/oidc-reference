@@ -204,8 +204,8 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 4.14 | Rotation with reuse detection | ✅ | Realm: `revokeRefreshToken: true`, `refreshTokenMaxReuse: 0`. `AuthorizationCodeTokenRefreshClient` surfaces Keycloak's `invalid_grant` as `InvalidRefreshTokenException`; `InternalRefreshController` deletes `sess:{sid}` and returns 409. Per-session refresh serialized via `ReentrantLock` keyed on `sid`. Asserted by `InternalRefreshControllerTest`. |
-| 4.14 | Audit on refresh rejection (incl. reuse) | ✅ | `InternalRefreshController` emits `SecurityAudit.event(... "refresh_token_rejected", "session_invalidated", subjectClaim)` with `sid_hash` (never the raw sid) before the 409. `invalid_grant` is not provably reuse at the RP (RFC 6749 §5.2), so the event is labeled honestly; reuse still invalidates the session. |
+| 4.14 | Rotation with reuse detection | ✅ | Realm: `revokeRefreshToken: true`, `refreshTokenMaxReuse: 0`. `AuthorizationCodeTokenRefreshClient` surfaces Keycloak's `invalid_grant` as `InvalidRefreshTokenException`; `InternalResolveController` deletes `sess:{sid}` and returns 409. Per-session refresh serialized via `ReentrantLock` keyed on `sid`. Asserted by `InternalResolveControllerTest`. |
+| 4.14 | Audit on refresh rejection (incl. reuse) | ✅ | `InternalResolveController` emits `SecurityAudit.event(... "refresh_token_rejected", "session_invalidated", subjectClaim)` with `sid_hash` (never the raw sid) before the 409. `invalid_grant` is not provably reuse at the RP (RFC 6749 §5.2), so the event is labeled honestly; reuse still invalidates the session. |
 
 ## §4.15 — Client Impersonating Resource Owner
 

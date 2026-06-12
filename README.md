@@ -284,7 +284,7 @@ sequenceDiagram
 | `oauth_tx` browser-binding cookie | — | `OAuthTxBinding` |
 | RP-initiated logout with `id_token_hint` | OIDC RP-Initiated Logout 1.0 | `AuthController#logout` |
 | `redirect_uri` pinned via `app.base-url` (defeats Host-header injection) | — | `AuthController#baseUrl` |
-| Per-session refresh lock (Java); `lua-resty-lock` around CC-token fetch (Lua) | — | `InternalRefreshController`, `bff-session.lua` |
+| Per-session refresh lock (Java, `RefreshLock`/`InProcessRefreshLock`); `lua-resty-lock` around CC-token fetch (Lua) | — | `InProcessRefreshLock`, `InternalResolveController`, `bff-session.lua` |
 | Rate-limit on `/auth/login` + `/auth/callback/idp` (APISIX `limit-req`) | — | `apisix.yaml.template` |
 | Sentinel guard refusing default dev secrets | — | `SecretSentinelValidator` (Java, fail-closed at boot for the auth secret + cookie key); `render-apisix-config.sh` (`REQUIRE_NONDEV_SECRETS`, fail-closed at render for the gateway secret + CSRF key); `bff-session.lua` `warn_on_dev_sentinels` (WARN-only at gateway load) |
 
