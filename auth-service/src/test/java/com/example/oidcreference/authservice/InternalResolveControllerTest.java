@@ -303,6 +303,76 @@ class InternalResolveControllerTest {
   }
 
   @Test
+  void resolveReturns404WhenBreadcrumbPointsToAGoneSession(CapturedOutput output)
+      throws Exception {
+    // A6 breadcrumb branch (resolveViaBreadcrumb, raw.isEmpty): rotated:{old}
+    // exists, but the forwarded sess:{new} is itself gone — a concurrent logout
+    // deleted it, or its grace window outlived the session. The breadcrumb must
+    // NOT manufacture a session; resolveViaBreadcrumb returns null and the
+    // endpoint 404s, exactly as a genuinely missing session. No refresh, no slide.
+    String oldSid = "sid-old-gone";
+    String newSid = "sid-new-gone";
+    stateStore.put("rotated:" + oldSid, newSid, Duration.ofSeconds(30));
+    // sess:{newSid} intentionally NOT seeded.
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + oldSid + "\"}"))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+
+    assertThat(tokenRefreshClient.refreshCalls())
+        .as("the breadcrumb path never refreshes").isZero();
+    assertThat(stateStore.expireCalls())
+        .as("a gone forwarded session must not be slid").isZero();
+    assertThat(output.getOut())
+        .contains("event=refresh_rejected")
+        .contains("status=404")
+        .contains("reason=no_such_session");
+  }
+
+  @Test
+  void resolveReturns404WhenBreadcrumbPointsToAnAbsoluteExpiredSession(CapturedOutput output)
+      throws Exception {
+    // A6 breadcrumb branch (resolveViaBreadcrumb, absoluteExpired): rotated:{old}
+    // forwards to sess:{new}, but that session is already past its absolute
+    // ceiling. The breadcrumb must not resurrect a session the absolute-TTL
+    // ceiling has ended — return null -> 404, with NO idle slide and NO token,
+    // even though the access token itself is still fresh.
+    String oldSid = "sid-old-expired";
+    String newSid = "sid-new-expired";
+    SessionRecord pastCeiling = new SessionRecord(
+        "fresh-access",
+        "fresh-refresh",
+        "id-token-1",
+        Instant.now().plusSeconds(300),      // access token still fresh...
+        Instant.now().plusSeconds(1800),
+        Instant.now().minusSeconds(36000),   // createdAt long ago
+        Instant.now().minusSeconds(60),      // ...but the absolute ceiling is past
+        Instant.now().minusSeconds(36000),
+        Map.of("sub", "alice"));
+    storeSession(newSid, pastCeiling);
+    stateStore.put("rotated:" + oldSid, newSid, Duration.ofSeconds(30));
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + oldSid + "\"}"))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+
+    assertThat(tokenRefreshClient.refreshCalls()).isZero();
+    assertThat(stateStore.expireCalls())
+        .as("an absolute-expired forwarded session must not be slid (returns before the slide)")
+        .isZero();
+    assertThat(output.getOut())
+        .contains("event=refresh_rejected")
+        .contains("status=404")
+        .contains("reason=no_such_session");
+  }
+
+  @Test
   void concurrentLogoutDuringRefreshIsNotResurrectedByRotation(CapturedOutput output)
       throws Exception {
     // Review FINDING 2: a back-channel logout that clears idp_sid mid-refresh must
