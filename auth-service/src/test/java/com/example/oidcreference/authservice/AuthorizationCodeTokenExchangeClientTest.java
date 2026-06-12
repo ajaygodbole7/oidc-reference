@@ -3,6 +3,8 @@ package com.example.oidcreference.authservice;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.nimbusds.oauth2.sdk.OAuth2Error;
+import com.nimbusds.oauth2.sdk.TokenErrorResponse;
 import com.nimbusds.oauth2.sdk.TokenRequest;
 import com.nimbusds.oauth2.sdk.TokenResponse;
 import com.nimbusds.oauth2.sdk.token.AccessToken;
@@ -64,6 +66,26 @@ class AuthorizationCodeTokenExchangeClientTest {
 
     assertThatThrownBy(() -> client.exchange("code", "state", "http://app/cb", tx))
         .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
+  void exchangeFailsClosedWhenTokenEndpointRejectsTheCode() {
+    // A PKCE-verifier mismatch (or a reused / expired code) makes the token
+    // endpoint return 400 invalid_grant. The exchange MUST fail closed — never
+    // reach id_token validation or create a session — exactly as a live PKCE
+    // mismatch against Keycloak would. (C4: unit complement to the live
+    // happy-path PKCE round-trip in e2e-auth.)
+    var client = new AuthorizationCodeTokenExchangeClient(metadata(), rejectingValidator(), props()) {
+      @Override
+      TokenResponse parse(TokenRequest tokenRequest) {
+        return new TokenErrorResponse(OAuth2Error.INVALID_GRANT);
+      }
+    };
+    var tx = new OAuthTransaction(
+        "0123456789012345678901234567890123456789012", "nonce-123", "/", Instant.now(), "tx-hash");
+
+    assertThatThrownBy(() -> client.exchange("code", "state", "http://app/cb", tx))
+        .isInstanceOf(IllegalStateException.class);
   }
 
   private static AccessToken accessToken(String value) {
