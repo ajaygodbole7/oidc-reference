@@ -1132,6 +1132,13 @@ real Keycloak error responses, not fabricated JWTs. Each negative is a distinct
 named assertion with its expected status code (and audit event where one
 applies), seen to fail the right way when the guard is removed.
 
+ID-token-validation and Resource-Server `iss`/`aud`/signature negatives are
+covered at the unit layer with synthetic JWTs (the Auth Service ID-token tests
+and `JwtDecoderNegativeTest`) — the precise, fast home for token-shape negatives.
+The live suites below complement them: they assert the happy path end-to-end and
+drive the trust-boundary (C8), session-window (C9), and logout negatives against
+the running stack with real tokens. The two layers are deliberate, not a gap.
+
 - `e2e-auth` — login → callback → `/auth/me` → `/api/**` → role enforcement →
   RP-initiated logout, plus the token-isolation assertion (no access / refresh /
   id token in `localStorage`, `sessionStorage`, `document.cookie`, or IndexedDB).
