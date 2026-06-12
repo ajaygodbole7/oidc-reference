@@ -45,10 +45,12 @@ The still-valid items from that file are carried forward below and marked `[carr
 **Resolved.** `addToSet` now runs a single server-side Lua script (`SADD` + `PEXPIRE`, TTL in ms) via a static `DefaultRedisScript<Long>` + `redis.execute(...)`, one round-trip — no window for a TTL-less `sub_sessions:` set. `StateStore.addToSet` signature unchanged; `SessionIndexesTest` green; exercised live by the e2e refresh/session-creation path.
 **Where.** `auth-service/.../RedisStateStore.java`.
 
-### A5 — Consider splitting `AuthController` — `REF`, Low
-**Why.** At ~720 LOC it owns login, callback, logout, logout-continue, `/auth/me`, cookie minting, base-URL computation, and saved-request validation — the one cohesion outlier in an otherwise single-responsibility codebase. Not a defect; it's where the next contributor will struggle.
-**What's needed.** Optional: extract a `CookieFactory` and/or a `LogoutController`. Only if it improves readability without inventing indirection.
-**Where.** `auth-service/.../AuthController.java`.
+### A5 — Consider splitting `AuthController` — **[done]** (decided: keep)
+**Decision: keep `AuthController` cohesive; do not split.** The two candidate extractions were evaluated against the backlog's own bar ("only if it improves readability without inventing indirection") and both fail it for a *reference*:
+- **`CookieFactory`** — the five cookie factories (`sidCookie`, `oauthTxCookie`, `clearOauthTxCookie`, `xsrfCookie`, `clearCookie`) are already a cohesively grouped ~90-line block at the end of the file, not scattered. Moving them to a separate class buys little and costs locality-of-behavior: a reader following the callback flow would have to jump files to see exactly how `__Host-sid`/`XSRF-TOKEN` are shaped. For a teaching reference, cookie minting next to the flow that mints it aids comprehension.
+- **`LogoutController`** — login/callback/logout/`/auth/me` are one responsibility (the OAuth-client/BFF surface) over shared session + cookie + base-URL machinery; splitting by verb scatters that shared state across controllers, the definition of inventing indirection.
+The size (~720 LOC) is real but is cohesion, not a god-class. Revisit only if a genuinely independent concern (e.g. a second protocol surface) lands.
+**Where.** `auth-service/.../AuthController.java` (unchanged).
 
 ### A6 — Rotate `sid` on refresh-token rotation — `REF`, Med `[carried]`
 **Why.** A once-observed `sid` stays valid across N token rotations for the full 8h absolute window (SECURITY.md S-5 discloses this). RFC 6265bis §8.6 and standard session practice favor rotating the session id on privilege/credential boundary changes; refresh rotation is the natural boundary here.
