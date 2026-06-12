@@ -127,9 +127,12 @@ class SessionIndexes {
     // a logout that reached only the old sid must delete the new one too, or a
     // subject-wide logout (deleteBySubject, not lock-serialized) could be undone by
     // the rotation re-adding the new sid to sub_sessions. getAndDelete consumes the
-    // breadcrumb, so a rotation chain terminates. (A residual sub-millisecond
-    // window remains between the rotation's session move and its breadcrumb write;
-    // closing it fully needs a single atomic move+breadcrumb, a Do-Later for HA.)
+    // breadcrumb, so a rotation chain terminates. The rotation writes sess:{new}
+    // AND this breadcrumb in ONE atomic op (StateStore.rotateIfPresent, N3), so
+    // there is no window where the new session exists without a breadcrumb to
+    // follow: a concurrent logout sees either sess:{old} (and the rotation's
+    // EXISTS-gate then fails closed) or sess:{new}+breadcrumb (and this follow
+    // kills it) — never an in-between state.
     stateStore.getAndDelete(ROTATED_PREFIX + localSid)
         .ifPresent(this::deleteLocalSession);
     if (session.isEmpty()) {

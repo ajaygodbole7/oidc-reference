@@ -57,7 +57,11 @@ only by the code literal at `InternalResolveController.java:233`.
 the grace value to the idle/absolute TTL fails the Java suite.
 **Where.** `auth-service/.../InternalResolveControllerTest.java`.
 
-### P3 — Stale comment contradicts the shipped N3 fix — `REF`, **Low**
+### P3 — Stale comment contradicts the shipped N3 fix — `REF`, **Low** — DONE 2026-06-12
+**Fixed.** Reworded the `SessionIndexes.deleteLocalSession` breadcrumb-follow comment: the
+"residual sub-millisecond window … Do-Later for HA" sentence (made false by `2951672`) is
+gone, replaced by the accurate statement that the move + breadcrumb are one atomic op
+(`rotateIfPresent`), so there is no window where `sess:{new}` exists without a breadcrumb.
 **Why.** `SessionIndexes.java:130-132` still reads *"A residual sub-millisecond window
 remains between the rotation's session move and its breadcrumb write; closing it
 fully needs a single atomic move+breadcrumb, a Do-Later for HA."* Commit `2951672`
