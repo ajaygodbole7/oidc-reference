@@ -72,11 +72,56 @@ export async function fetchMe(signal?: AbortSignal): Promise<User | null> {
   return sanitizeUser(body);
 }
 
-export async function callApi(path: string, navigate: Navigate = browserNavigate): Promise<Response> {
-  const res = await fetch(path, {
-    credentials: "include",
-    headers: { Accept: "application/json" }
-  });
+export type CallApiOptions = {
+  readonly method?: string;
+  readonly body?: unknown;
+  readonly headers?: Readonly<Record<string, string>>;
+};
+
+// Methods that never carry a CSRF requirement at the gateway (RFC 7231 safe /
+// idempotent reads). Anything else is "unsafe" and must echo the double-submit
+// XSRF-TOKEN cookie as X-XSRF-TOKEN, or the gateway rejects it.
+const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
+
+// Thin client for /api/** through the gateway. GET by default — backward
+// compatible with bare `callApi(path)` callers. For unsafe methods (POST/PUT/
+// PATCH/DELETE/...) it attaches the double-submit CSRF header from the existing
+// XSRF-TOKEN cookie, and JSON-encodes an object body with Content-Type set.
+export async function callApi(
+  path: string,
+  options: CallApiOptions = {},
+  navigate: Navigate = browserNavigate
+): Promise<Response> {
+  const method = (options.method ?? "GET").toUpperCase();
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    ...options.headers
+  };
+
+  let body: BodyInit | undefined;
+  if (options.body !== undefined) {
+    if (typeof options.body === "string" || options.body instanceof FormData) {
+      body = options.body;
+    } else {
+      body = JSON.stringify(options.body);
+      headers["Content-Type"] = "application/json";
+    }
+  }
+
+  if (!SAFE_METHODS.has(method)) {
+    // Double-submit CSRF: echo the cookie value the gateway minted. Unsafe
+    // methods without this header are rejected by the gateway CSRF contract.
+    headers["X-XSRF-TOKEN"] = readCsrfCookie();
+  }
+
+  const init: RequestInit = { credentials: "include", headers };
+  // Omit `method` for the GET default so the bare-GET request shape stays
+  // identical to fetch's own default (method defaults to GET); only set it
+  // for explicit non-GET methods.
+  if (method !== "GET") init.method = method;
+  if (body !== undefined) init.body = body;
+
+  const res = await fetch(path, init);
   if (res.status === 401) {
     // Per contract: a 401 from /api/** must NOT navigate to the API URL.
     // It triggers a top-level navigation to /auth/login?return_to=<current route>.

@@ -6,22 +6,94 @@ describe("BFF auth client", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses same-origin credentials and navigates to /auth/login?return_to=<current route> on API 401", async () => {
+  it("GET (default) uses same-origin credentials, sends NO CSRF header, and navigates to /auth/login?return_to=<current route> on API 401", async () => {
     const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
       new Response(null, { status: 401 })
     );
     const navigate = vi.fn();
 
     // jsdom default location is http://localhost/, so current route is "/".
-    const res = await callApi("/api/user-data", navigate);
+    // Backward-compat: the navigate callback is now the THIRD arg; options
+    // defaults to {} so a default GET is unchanged for existing callers.
+    const res = await callApi("/api/user-data", {}, navigate);
 
     expect(res.status).toBe(401);
+    // Default GET omits `method` (fetch defaults to GET), matching the
+    // original bare-GET request shape exactly.
     expect(fetchSpy).toHaveBeenCalledWith("/api/user-data", {
       credentials: "include",
       headers: { Accept: "application/json" }
     });
+    // A safe method must NEVER carry the CSRF header.
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).not.toHaveProperty("X-XSRF-TOKEN");
+    expect(init).not.toHaveProperty("body");
     // The 401 must NOT navigate to the API URL — it must navigate to the
     // login entry carrying the URL-encoded current route as return_to.
+    expect(navigate).toHaveBeenCalledWith(
+      `/auth/login?return_to=${encodeURIComponent("/")}`
+    );
+  });
+
+  it("bare callApi(path) still works (no options, no navigate) and issues a default GET", async () => {
+    const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
+      Response.json({ ok: true })
+    );
+
+    const res = await callApi("/api/user-data");
+
+    expect(res.ok).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledWith("/api/user-data", {
+      credentials: "include",
+      headers: { Accept: "application/json" }
+    });
+  });
+
+  it("POST attaches X-XSRF-TOKEN equal to the XSRF-TOKEN cookie and JSON-encodes an object body", async () => {
+    document.cookie = "XSRF-TOKEN=csrf-abc";
+    const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
+      Response.json({ created: true }, { status: 201 })
+    );
+    const navigate = vi.fn();
+
+    const res = await callApi(
+      "/api/user-data",
+      { method: "POST", body: { note: "hello" } },
+      navigate
+    );
+
+    expect(res.status).toBe(201);
+    expect(fetchSpy).toHaveBeenCalledWith("/api/user-data", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-XSRF-TOKEN": "csrf-abc"
+      },
+      body: JSON.stringify({ note: "hello" })
+    });
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("the 401-no-navigate-to-API contract holds for unsafe methods too", async () => {
+    document.cookie = "XSRF-TOKEN=csrf-abc";
+    const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(null, { status: 401 })
+    );
+    const navigate = vi.fn();
+
+    const res = await callApi(
+      "/api/user-data",
+      { method: "DELETE" },
+      navigate
+    );
+
+    expect(res.status).toBe(401);
+    // Unsafe method still carries the CSRF header...
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["X-XSRF-TOKEN"]).toBe("csrf-abc");
+    // ...and a 401 still routes to /auth/login, NEVER to the API URL.
     expect(navigate).toHaveBeenCalledWith(
       `/auth/login?return_to=${encodeURIComponent("/")}`
     );

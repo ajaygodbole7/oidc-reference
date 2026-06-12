@@ -151,10 +151,9 @@ The still-valid items from that file are carried forward below and marked `[carr
 **What's needed.** Decide `AGENTS.md`'s fate — keep it (it is the canonical agent-context file many tools auto-read) or fold its consumer-irrelevant process content under `docs/contributing/` and keep `CONTRIBUTING.md`.
 **Where.** `AGENTS.md`.
 
-### D6 — Generalize the SPA `callApi` (CSRF for unsafe methods) — Low `[carried]`
-**Why.** `frontend/src/auth.ts` `callApi` is GET-only with no method/body and no `X-XSRF-TOKEN`; any future state-changing call routed through it would be silently rejected by the gateway CSRF contract. Not a live bug (the only mutating call, `signOut`, handles CSRF correctly) — a dead-end waiting for the first POST-through-`/api`.
-**What's needed.** Generalize to `callApi(path, { method, body })` and attach `readCsrfCookie()` as `X-XSRF-TOKEN` for unsafe methods, when the first mutating `/api` use case lands.
-**Where.** `frontend/src/auth.ts`.
+### D6 — Generalize the SPA `callApi` (CSRF for unsafe methods) — **[done]**
+**Resolved.** `callApi(path, { method, body, headers }?, navigate?)` — GET stays the default with a byte-identical request shape; unsafe methods (not GET/HEAD/OPTIONS) attach `X-XSRF-TOKEN` from `readCsrfCookie()`, object bodies are JSON-encoded with `Content-Type: application/json`, and the 401-never-navigates-to-the-API contract holds for all methods. Backward-compatible with existing GET call sites. Covered by 4 vitest cases (GET no-CSRF, bare GET, POST CSRF+JSON, unsafe+401); suite 29/29 green.
+**Where.** `frontend/src/auth.ts`, `frontend/src/auth.test.ts`.
 
 ---
 
