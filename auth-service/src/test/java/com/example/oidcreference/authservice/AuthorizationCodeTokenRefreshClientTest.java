@@ -186,6 +186,22 @@ class AuthorizationCodeTokenRefreshClientTest {
     assertThat(refreshed.idToken()).isEqualTo("new-id-token");
   }
 
+  @Test
+  void refreshThatChangesTheSubjectIsRejected() {
+    // P4: a refresh must NOT change the session's identity. If the IdP returns an
+    // id_token whose `sub` differs from the session's (a misbehaving or
+    // compromised IdP), fail closed — do not silently re-index the session under
+    // a new subject. Same exception as invalid_grant, so the controller
+    // invalidates the session rather than carrying a hijacked identity forward.
+    var differentSubject = Map.<String, Object>of("sub", "mallory");
+    var tokens = tokensWithIdToken("new-id-token", "brand-new-refresh-token");
+    var client = clientReturning(tokens, true, validatorReturning(differentSubject));
+
+    assertThatThrownBy(() -> client.refresh(oldSession())) // oldSession sub = alice
+        .isInstanceOf(InvalidRefreshTokenException.class)
+        .hasMessageContaining("sub");
+  }
+
   // ----- refresh_expires_in handling (IdP portability) -----
 
   @Test

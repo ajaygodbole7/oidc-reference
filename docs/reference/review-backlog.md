@@ -16,8 +16,8 @@ Envoy/mesh), so we disclose infra requirements in `production-hardening.md` and 
 
 **Status of the codebase:** no High/Critical issues in the copyable surface. The
 sid-rotation revocation race (N3) is fixed and verified; all prior security
-controls and doc-drift fixes held. What remains is one Medium contract-doc drift
-plus Low comment/test/doc-hygiene.
+controls and doc-drift fixes held. **P1–P4 are all DONE (2026-06-12);** what
+remains is the Low/Info O-items (comment/test/doc-hygiene) below.
 
 ---
 
@@ -73,7 +73,12 @@ after the move the breadcrumb is guaranteed present until consumed by the owning
 sid's delete path; this follow is what kills the rotated-to session.
 **Where.** `auth-service/.../SessionIndexes.java:130-132`.
 
-### P4 — Pin the refreshed identity to the original session — `REF`, **Low/Info**
+### P4 — Pin the refreshed identity to the original session — `REF`, **Low/Info** — DONE 2026-06-12
+**Fixed.** `AuthorizationCodeTokenRefreshClient.refresh()` now asserts the refreshed `sub`
+equals the session's `sub` (when both present; a no-id_token refresh reuses prior claims so
+it's a no-op) and throws `InvalidRefreshTokenException` on mismatch — the controller then
+fails the session closed (409). TDD red→green: the mismatch test was red (no throwable) before
+the guard, green after.
 **Why.** On refresh, `sub`/`sid` are taken from the refresh response and re-indexed
 (`AuthorizationCodeTokenRefreshClient` + `SessionIndexes.rotate`) without asserting
 the refreshed `sub` equals the original session's `sub`. Low exploitability (the

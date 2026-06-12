@@ -91,6 +91,23 @@ class AuthorizationCodeTokenRefreshClient implements TokenRefreshClient {
       newClaims = session.claims();
     }
 
+    // Pin the refreshed identity to the session (P4). A refresh must not change
+    // WHO the session belongs to: if the IdP returns an id_token whose `sub`
+    // differs from the session's, fail closed — surfaced as the same
+    // InvalidRefreshTokenException as invalid_grant, so the controller
+    // invalidates the session rather than silently re-indexing it under a new
+    // subject. Low exploitability (the refresh leg is client-authenticated,
+    // server-to-server — not attacker-reachable without IdP/channel compromise),
+    // but a cheap fail-closed guard worth showing. Only enforced when both subs
+    // are present; a no-id_token refresh reuses the prior claims, so `sub` is
+    // unchanged by construction and this is a no-op.
+    Object priorSub = session.claims() == null ? null : session.claims().get("sub");
+    Object refreshedSub = newClaims == null ? null : newClaims.get("sub");
+    if (priorSub != null && refreshedSub != null && !priorSub.equals(refreshedSub)) {
+      throw new InvalidRefreshTokenException(
+          "refreshed identity (sub) does not match the session");
+    }
+
     long lifetime = oidcTokens.getAccessToken().getLifetime();
     Instant accessExpiresAt = lifetime > 0
         ? Instant.now().plusSeconds(lifetime)
