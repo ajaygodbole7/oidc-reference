@@ -456,6 +456,59 @@ test_expiring_session_triggers_refresh_delegation() {
       "$name" "$new_sid" "$before_expiry" "$after_expiry"
     FAILED=$((FAILED + 1))
   fi
+
+  # CSRF-on-rotation (review FINDING 1): the XSRF-TOKEN is HMAC-signed over
+  # value:sid, so it MUST be re-issued alongside the rotated sid — otherwise the
+  # browser keeps a token signed for the old sid and every write 403s after a
+  # refresh. Extract the re-issued XSRF-TOKEN from the SAME rotation response
+  # ($HEADERS_TMP, before any further curl), then prove a POST with the rotated
+  # sid + rotated CSRF is NOT csrf-rejected by the gateway.
+  new_csrf="$(grep -iE '^set-cookie:' "$HEADERS_TMP" \
+    | sed -E -n 's/^[Ss]et-[Cc]ookie:[[:space:]]*XSRF-TOKEN=([^;[:space:]]+).*/\1/p' \
+    | head -1)"
+  if [ -n "$new_csrf" ]; then
+    printf '[PASS] %s xsrf_token_reissued_on_rotation\n' "$name"
+    PASSED=$((PASSED + 1))
+  else
+    printf '[FAIL] %s no XSRF-TOKEN re-issued on rotation — every write 403s after a refresh\n' "$name"
+    FAILED=$((FAILED + 1))
+  fi
+  if [ -n "$new_sid" ] && [ -n "$new_csrf" ]; then
+    # Contrast (keeps the valid-token check below non-vacuous): a TAMPERED CSRF
+    # for the rotated sid must be rejected with the gateway's detail.
+    curl -s -o "$BODY_TMP" -w '%{http_code}' \
+      -X POST \
+      -H "Cookie: __Host-sid=$new_sid; XSRF-TOKEN=${new_csrf}x" \
+      -H "X-XSRF-TOKEN: ${new_csrf}x" \
+      "$GATEWAY_BASE/api/admin" >/dev/null 2>&1 || true
+    if grep -q "invalid CSRF token" "$BODY_TMP"; then
+      printf '[PASS] %s tampered_csrf_rejected_after_rotation\n' "$name"
+      PASSED=$((PASSED + 1))
+    else
+      printf '[FAIL] %s tampered CSRF NOT rejected after rotation\n' "$name"
+      FAILED=$((FAILED + 1))
+    fi
+    # The gateway's CSRF reject is problem+json with detail "invalid CSRF token"
+    # (bff-session.lua). A forwarded request to /api/admin by alice gets an RS
+    # role-403 (also problem+json in Spring Boot 3, so content-type can't tell
+    # them apart) — but its body does NOT carry that gateway detail. So the
+    # gateway-CSRF-detail's ABSENCE proves the rotated CSRF validated and the
+    # request forwarded.
+    write_status="$(curl -s -o "$BODY_TMP" -w '%{http_code}' \
+      -X POST \
+      -H "Cookie: __Host-sid=$new_sid; XSRF-TOKEN=$new_csrf" \
+      -H "X-XSRF-TOKEN: $new_csrf" \
+      "$GATEWAY_BASE/api/admin" 2>/dev/null || true)"
+    if grep -q "invalid CSRF token" "$BODY_TMP"; then
+      printf '[FAIL] %s POST after rotation was CSRF-rejected by the gateway (rotated CSRF invalid for rotated sid; status=%s)\n' \
+        "$name" "$write_status"
+      FAILED=$((FAILED + 1))
+    else
+      printf '[PASS] %s post_after_rotation_passes_csrf (forwarded, no gateway CSRF reject; status=%s)\n' \
+        "$name" "$write_status"
+      PASSED=$((PASSED + 1))
+    fi
+  fi
   clear_session "$sid"
   [ -n "$new_sid" ] && clear_session "$new_sid"
 }

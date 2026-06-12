@@ -303,6 +303,42 @@ class InternalResolveControllerTest {
   }
 
   @Test
+  void concurrentLogoutDuringRefreshIsNotResurrectedByRotation(CapturedOutput output)
+      throws Exception {
+    // Review FINDING 2: a back-channel logout that clears idp_sid mid-refresh must
+    // WIN — the rotation must not rebuild the indexes and resurrect the revoked
+    // session. The session has a real IdP sid claim, so the rekey CAS engages;
+    // idp_sid:{X} is absent (simulating the logout already cleared it), so the
+    // CAS fails -> the controller fails closed (409) and leaves no session behind.
+    String sid = "sid-logout-race";
+    SessionRecord expiring = new SessionRecord(
+        "stale-access",
+        "refresh-token-1",
+        jwtWithSid("kc-session-race"),
+        Instant.now().plusSeconds(10),
+        Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    storeSession(sid, expiring);
+    // Note: idp_sid:kc-session-race is intentionally NOT seeded -> CAS(expected=sid)
+    // on an absent key returns false, exactly as if a concurrent logout deleted it.
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isConflict());
+
+    assertThat(tokenRefreshClient.refreshCalls()).isEqualTo(1);
+    // Neither the old session nor a resurrected new session survives, and the
+    // breadcrumb was cleaned up.
+    assertThat(stateStore.get("sess:" + sid)).as("old session moved then undone").isEmpty();
+    assertThat(stateStore.get("rotated:" + sid)).as("breadcrumb cleaned up").isEmpty();
+    assertThat(stateStore.keys().stream().anyMatch(k -> k.startsWith("sess:")))
+        .as("no resurrected sess:* key").isFalse();
+    assertThat(output.getOut()).contains("session_invalidated_during_refresh");
+  }
+
+  @Test
   void resolveReturns409OnInvalidRefreshToken(CapturedOutput output) throws Exception {
     String sid = "sid-reused";
     SessionRecord reused = new SessionRecord(
@@ -530,6 +566,16 @@ class InternalResolveControllerTest {
     return TestBeans.JSON.decode(
         stateStore.get("sess:" + sid).orElseThrow(),
         SessionRecord.class);
+  }
+
+  // A minimal parseable JWT carrying a `sid` claim, so SessionIndexes.idpSid()
+  // extracts the IdP session id that the rotation rekey CAS keys on.
+  private static String jwtWithSid(String idpSid) {
+    var enc = java.util.Base64.getUrlEncoder().withoutPadding();
+    var utf8 = java.nio.charset.StandardCharsets.UTF_8;
+    String header = enc.encodeToString("{\"alg\":\"HS256\"}".getBytes(utf8));
+    String payload = enc.encodeToString(("{\"sid\":\"" + idpSid + "\"}").getBytes(utf8));
+    return header + "." + payload + ".sig";
   }
 
   @TestConfiguration

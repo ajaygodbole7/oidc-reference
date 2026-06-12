@@ -22,6 +22,13 @@ interface StateStore {
   // rotation on refresh uses this so it inherits putIfPresent's race-safety.
   boolean rotateIfPresent(String oldKey, String newKey, String value, Duration ttl);
 
+  // Atomic compare-and-set: set key=newValue (with ttl) iff key currently equals
+  // expected. Returns false (no-op) when the key is absent or holds a different
+  // value. The sid-rotation index rekey uses this on idp_sid:{idpSid} so a
+  // concurrent back-channel logout that cleared the index is not clobbered by the
+  // rotation re-pointing it — if the CAS fails, the rotation aborts (fail closed).
+  boolean compareAndSwap(String key, String expected, String newValue, Duration ttl);
+
   Optional<String> get(String key);
 
   Optional<String> getAndDelete(String key);

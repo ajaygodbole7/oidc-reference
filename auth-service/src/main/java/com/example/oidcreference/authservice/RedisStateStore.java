@@ -35,6 +35,15 @@ class RedisStateStore implements StateStore {
           + "return 1 else return 0 end",
       Long.class);
 
+  // Compare-and-set: SET KEYS[1]=ARGV[2] PX ARGV[3] iff GET(KEYS[1]) == ARGV[1].
+  // Used to repoint idp_sid:{idpSid} on sid rotation only if a concurrent logout
+  // hasn't already cleared/changed it (else the logout would be undone).
+  private static final RedisScript<Long> COMPARE_AND_SWAP = new DefaultRedisScript<>(
+      "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+          + "redis.call('SET', KEYS[1], ARGV[2], 'PX', tonumber(ARGV[3])); "
+          + "return 1 else return 0 end",
+      Long.class);
+
   private final StringRedisTemplate redis;
 
   RedisStateStore(StringRedisTemplate redis) {
@@ -66,6 +75,17 @@ class RedisStateStore implements StateStore {
         value,
         Long.toString(ttl.toMillis()));
     return rotated != null && rotated == 1L;
+  }
+
+  @Override
+  public boolean compareAndSwap(String key, String expected, String newValue, Duration ttl) {
+    Long swapped = redis.execute(
+        COMPARE_AND_SWAP,
+        List.of(key),
+        expected,
+        newValue,
+        Long.toString(ttl.toMillis()));
+    return swapped != null && swapped == 1L;
   }
 
   @Override

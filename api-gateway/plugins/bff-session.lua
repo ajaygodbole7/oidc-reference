@@ -562,7 +562,15 @@ local function resolve_token_from_body(body)
   end
   local rotation
   if type(parsed.rotated_sid) == "string" and parsed.rotated_sid ~= "" then
-    rotation = { sid = parsed.rotated_sid, max_age = tonumber(parsed.rotated_sid_max_age) }
+    rotation = {
+      sid = parsed.rotated_sid,
+      max_age = tonumber(parsed.rotated_sid_max_age),
+      -- Fresh signed-CSRF token bound to the rotated sid. The CSRF HMAC covers
+      -- value:sid, so the old token would 403 every write after rotation — we
+      -- re-issue the XSRF-TOKEN cookie alongside the sid cookie.
+      csrf = (type(parsed.rotated_csrf) == "string" and parsed.rotated_csrf ~= "")
+        and parsed.rotated_csrf or nil,
+    }
   end
   return parsed.access_token, rotation
 end
@@ -770,7 +778,12 @@ function _M.access(conf, ctx)
   if rotation then
     ctx.bff_rotated_sid = rotation.sid
     ctx.bff_rotated_max_age = rotation.max_age
-    ctx.bff_scheme = scheme
+    ctx.bff_rotated_csrf = rotation.csrf
+    -- Drive the re-issued cookie's name/Secure from the route's allow_insecure_sid
+    -- flag (the same signal the ACCEPT path uses), NOT the spoofable
+    -- X-Forwarded-Proto-derived scheme — otherwise a forged proto could make the
+    -- gateway re-issue a bare `sid` the plugin then rejects (accept/re-issue skew).
+    ctx.bff_allow_insecure_sid = conf.allow_insecure_sid
   end
 end
 
@@ -787,23 +800,32 @@ function _M.header_filter(conf, ctx)
     end
   end
 
-  -- A6: the resolve rotated the sid. Re-issue the session cookie with the new
-  -- value so the browser uses it from the next request. Same name/attributes as
-  -- the Auth Service's login cookie — __Host-sid (Secure) on HTTPS, bare sid on
-  -- local HTTP — and Max-Age = the session's remaining absolute lifetime (from
-  -- the resolve response), so rotation never shortens the cookie's persistence.
-  -- Invisible to the SPA: the gateway swaps the opaque cookie, nothing else.
+  -- A6: the resolve rotated the sid. Re-issue BOTH session cookies with the new
+  -- values so the browser uses them from the next request: the opaque sid cookie
+  -- (HttpOnly) AND the signed-CSRF XSRF-TOKEN cookie (SPA-readable) — the latter
+  -- is sid-bound, so without it every write would 403 after a rotation. Same
+  -- name/attributes as the Auth Service's login cookies, with the Secure/__Host-
+  -- decision taken from the route's allow_insecure_sid flag (mirroring the accept
+  -- path), and Max-Age = the session's remaining absolute lifetime so rotation
+  -- never shortens persistence. Invisible to the SPA beyond the cookie swap.
   if ctx.bff_rotated_sid then
-    local name = (ctx.bff_scheme == "https") and "__Host-sid" or "sid"
-    local attrs = "; Path=/; HttpOnly; SameSite=Lax"
-    local max_age = ctx.bff_rotated_max_age
-    if type(max_age) == "number" and max_age > 0 then
-      attrs = attrs .. "; Max-Age=" .. math.floor(max_age)
+    local secure = not ctx.bff_allow_insecure_sid
+    local sid_name = secure and "__Host-sid" or "sid"
+    local max_age_attr = ""
+    if type(ctx.bff_rotated_max_age) == "number" and ctx.bff_rotated_max_age > 0 then
+      max_age_attr = "; Max-Age=" .. math.floor(ctx.bff_rotated_max_age)
     end
-    if ctx.bff_scheme == "https" then
-      attrs = attrs .. "; Secure"
+    local secure_attr = secure and "; Secure" or ""
+    local set_cookies = {
+      sid_name .. "=" .. ctx.bff_rotated_sid
+        .. "; Path=/; HttpOnly; SameSite=Lax" .. max_age_attr .. secure_attr,
+    }
+    if ctx.bff_rotated_csrf then
+      -- NOT HttpOnly: the SPA reads XSRF-TOKEN and echoes it as X-XSRF-TOKEN.
+      set_cookies[#set_cookies + 1] = "XSRF-TOKEN=" .. ctx.bff_rotated_csrf
+        .. "; Path=/; SameSite=Lax" .. max_age_attr .. secure_attr
     end
-    ngx.header["Set-Cookie"] = name .. "=" .. ctx.bff_rotated_sid .. attrs
+    ngx.header["Set-Cookie"] = set_cookies
   end
 end
 

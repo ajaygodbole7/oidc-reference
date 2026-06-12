@@ -77,6 +77,21 @@ class InMemoryStateStore implements StateStore {
   }
 
   @Override
+  public boolean compareAndSwap(String key, String expected, String newValue, Duration ttl) {
+    // Atomic per key via compute: set only if the current value equals expected.
+    boolean[] swapped = {false};
+    values.compute(key, (k, current) -> {
+      if (expected.equals(current)) {
+        swapped[0] = true;
+        ttls.put(k, ttl == null ? Duration.ZERO : ttl);
+        return newValue;
+      }
+      return current;
+    });
+    return swapped[0];
+  }
+
+  @Override
   public Optional<String> get(String key) {
     return Optional.ofNullable(values.get(key));
   }

@@ -227,7 +227,18 @@ class InternalResolveController {
     // to sid' for a short grace window instead of losing its session.
     stateStore.put(ROTATED_PREFIX + sid, newSid, ROTATION_GRACE);
     // Repoint the secondary indexes (idp_sid / sub_sessions / logout_hint) at sid'.
-    sessionIndexes.rotate(sid, newSid, refreshed);
+    // The idp_sid repoint is a CAS: if a concurrent back-channel logout cleared it
+    // during the IdP round-trip, the session was revoked — undo the rotation
+    // (delete the new session + breadcrumb) and fail closed, rather than let the
+    // rebuilt indexes resurrect a logged-out session.
+    if (!sessionIndexes.rotate(sid, newSid, refreshed)) {
+      stateStore.delete("sess:" + newSid);
+      stateStore.delete(ROTATED_PREFIX + sid);
+      SecurityAudit.event(
+          request, 409, "refresh_token_rejected", "session_invalidated_during_refresh",
+          subjectClaim(refreshed));
+      return problem(409, "session ended, re-login required");
+    }
     SecurityAudit.event(request, 200, "refresh_succeeded", "ok", subjectClaim(refreshed));
     return okRotated(refreshed, newSid);
   }
@@ -247,17 +258,20 @@ class InternalResolveController {
 
   private ResponseEntity<ResolveResponse> ok(SessionRecord session) {
     return ResponseEntity.ok(
-        new ResolveResponse(session.accessToken(), session.expiresAt(), null, null));
+        new ResolveResponse(session.accessToken(), session.expiresAt(), null, null, null));
   }
 
   // The sid rotated on this resolve: hand the new sid back, plus the cookie's
-  // max-age (the session's remaining absolute lifetime), so the gateway re-issues
-  // the __Host-sid cookie with sid'. Invisible to the SPA.
+  // max-age (remaining absolute lifetime) AND a fresh signed CSRF token bound to
+  // the new sid. The signed-CSRF HMAC covers value:sid, so a rotated sid with the
+  // OLD csrf token would 403 every subsequent write — the gateway re-issues BOTH
+  // the __Host-sid cookie and the XSRF-TOKEN cookie. Invisible to the SPA.
   private ResponseEntity<ResolveResponse> okRotated(SessionRecord session, String rotatedSid) {
     long maxAge = Math.max(0L,
         Duration.between(Instant.now(), session.absoluteExpiresAt()).getSeconds());
-    return ResponseEntity.ok(
-        new ResolveResponse(session.accessToken(), session.expiresAt(), rotatedSid, maxAge));
+    String rotatedCsrf = SignedCsrfSupport.issueToken(props.cookieSigningKey(), rotatedSid);
+    return ResponseEntity.ok(new ResolveResponse(
+        session.accessToken(), session.expiresAt(), rotatedSid, maxAge, rotatedCsrf));
   }
 
   // A concurrent request may have rotated this sid (sess:{sid} -> sess:{sid'})
@@ -344,5 +358,6 @@ class InternalResolveController {
       @JsonProperty("access_token") String accessToken,
       @JsonProperty("access_token_expires_at") Instant accessTokenExpiresAt,
       @JsonProperty("rotated_sid") String rotatedSid,
-      @JsonProperty("rotated_sid_max_age") Long rotatedSidMaxAge) {}
+      @JsonProperty("rotated_sid_max_age") Long rotatedSidMaxAge,
+      @JsonProperty("rotated_csrf") String rotatedCsrf) {}
 }

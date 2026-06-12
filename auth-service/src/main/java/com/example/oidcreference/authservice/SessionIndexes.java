@@ -47,17 +47,27 @@ class SessionIndexes {
 
   // Repoint the secondary indexes from oldSid to newSid after a sid rotation on
   // refresh. A refresh does NOT change the IdP session id — only the LOCAL sid
-  // moves — so idp_sid:{idpSid} is repointed at newSid, the sub_sessions:{sub}
-  // membership is swapped (add new before removing old, so the subject is always
-  // represented by at least one live sid), and the logout hint is moved. Index
-  // TTL is the remaining absolute lifetime, exactly as index().
-  void rotate(String oldSid, String newSid, SessionRecord session) {
+  // moves. Returns false iff a concurrent back-channel logout has already cleared
+  // (or changed) idp_sid:{idpSid} — i.e. the session was revoked mid-rotation;
+  // the caller must then fail closed (undo the rotation) rather than let this
+  // method resurrect a revoked session by rebuilding its indexes.
+  //
+  // The idp_sid repoint is a COMPARE-AND-SWAP (only if it still points at oldSid):
+  // without it, the rotation's unconditional write would clobber a logout's
+  // delete, undoing the revocation. sub_sessions add-before-removes (the subject
+  // is always represented by a live sid), and the logout hint moves. Index TTL is
+  // the remaining absolute lifetime, exactly as index().
+  boolean rotate(String oldSid, String newSid, SessionRecord session) {
     Duration ttl = Duration.between(Instant.now(), session.absoluteExpiresAt());
     if (ttl.isNegative() || ttl.isZero()) {
-      return;
+      return false;
     }
-    idpSid(session).ifPresent(idpSid ->
-        stateStore.put(IDP_SID_PREFIX + idpSid, newSid, ttl));
+    Optional<String> idpSid = idpSid(session);
+    if (idpSid.isPresent()
+        && !stateStore.compareAndSwap(IDP_SID_PREFIX + idpSid.get(), oldSid, newSid, ttl)) {
+      // A concurrent logout cleared/changed idp_sid since the refresh started.
+      return false;
+    }
     subject(session).ifPresent(sub -> {
       addSubjectSession(sub, newSid, ttl);
       removeSubjectSession(sub, oldSid);
@@ -66,6 +76,7 @@ class SessionIndexes {
     if (session.idToken() != null && !session.idToken().isBlank()) {
       stateStore.put(LOGOUT_HINT_PREFIX + newSid, session.idToken(), ttl);
     }
+    return true;
   }
 
   Optional<String> consumeLogoutHint(String localSid) {
