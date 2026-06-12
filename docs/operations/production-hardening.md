@@ -92,3 +92,172 @@ store. It is independent of which gateway fronts `/internal/refresh`.
 
 These are not required for the local reference to be correct, but they are
 normal review topics for regulated or high-risk deployments.
+
+## Operational Fundamentals Not Built Here
+
+The items above cover the secret cutover and the refresh-lock scale-out step in
+detail. The operational concerns below are equally load-bearing for a real
+rollout and are deliberately absent from this reference. They are documented so
+this checklist reads as a starting subset, not a complete path to production.
+
+### Session-store HA and the single-Valkey SPOF
+
+Compose runs a single `valkey` service. There is no replica, no Sentinel, no
+Cluster, and the Auth Service has no Lettuce failover configuration. Valkey is a
+hard single point of failure for the entire authenticated surface: every
+`/internal/resolve` reads `sess:{sid}`, and the login leg's `tx:{state}` lives
+there too. If it is unreachable, both new logins and every authenticated `/api`
+request fail.
+
+Sessions are externalized into Valkey, which is the reassuring half of the same
+fact: APISIX and the Auth Service hold no session state, so they are horizontally
+stateless and need no sticky sessions or session affinity at the load balancer.
+The state lives in one place by design — that place just has to be made highly
+available.
+
+Before a real deployment:
+
+- Run a replicated topology (Sentinel or Cluster, or a managed
+  Redis-compatible service with automatic failover).
+- Decide the failover behavior for in-flight refreshes explicitly. A failover
+  mid-refresh can lose the rotated token before it is persisted; pair this with
+  the graceful-shutdown and distributed-lock decisions below so an interrupted
+  refresh fails closed rather than orphaning the session.
+
+### Observability and cross-tier correlation IDs
+
+Neither service pulls Micrometer or OpenTelemetry; there are no tracing or
+metrics-registry dependencies, and no `traceId` / `X-Request-Id` is propagated
+across the gateway → Auth Service → Resource Server chain. The Resource Server
+exposes `metrics`/`prometheus` actuator endpoints, but with no registry
+dependency behind them they carry nothing. The audit log is structured and
+useful within the Auth Service, but it carries no correlation id, so a single
+browser request cannot be stitched across tiers from the logs alone. When the
+multi-instance refresh contention described above plays out in production, there
+is no metric or trace to observe it.
+
+Before a real deployment:
+
+- Establish a correlation-ID contract: the gateway mints an `X-Request-Id` (or
+  W3C `traceparent`) if absent, forwards it on every hop, and both services log
+  it on every line including the audit events. This is cheap, high-value, and a
+  precondition for the distributed tracing this document already calls for.
+- Add RED metrics (rate, errors, duration) per route and an explicit SLO for the
+  IdP token-endpoint dependency, since refresh latency and availability are
+  bounded by the IdP, not by this stack.
+
+### Graceful shutdown
+
+Neither `auth-service` nor `backend-resource-server` sets
+`server.shutdown: graceful` or `spring.lifecycle.timeout-per-shutdown-phase` in
+its `application.yml`. On `SIGTERM` the JVM stops immediately and drops in-flight
+requests. The dangerous case is a refresh interrupted after Keycloak has rotated
+the token but before `putIfPresent` persists the new session: the old refresh
+token is now spent, the new one was never stored, and the next refresh earns an
+`invalid_grant` and logs the user out. This compounds the in-process-lock
+limitation during any rolling deploy, where instances are terminated by design.
+
+Graceful shutdown is a near-free config win this reference could even adopt
+(`server.shutdown: graceful` plus a bounded
+`spring.lifecycle.timeout-per-shutdown-phase`), and it must be paired with a
+container/orchestrator `terminationGracePeriod` long enough to drain a refresh.
+
+### Dependency-checked readiness probes
+
+Both services set `management.endpoint.health.probes.enabled: true`, which
+auto-creates `/actuator/health/readiness`. With default content that group
+reflects only Spring application lifecycle — it does **not** check Valkey or IdP
+reachability. A replica whose Valkey connection is dead still reports `READY` and
+takes traffic, then fails every request. The Compose healthcheck compounds the
+gap: it probes the aggregate `/actuator/health`, not `/readiness`.
+
+Before a real deployment, add a custom readiness `HealthIndicator` (or readiness
+health group) that checks the session store and the IdP discovery endpoint, and
+point the orchestrator's readiness probe at `/actuator/health/readiness` so a
+broken-dependency replica is pulled from rotation.
+
+### Valkey eviction policy and durability
+
+The Valkey container runs with no `maxmemory` and no `maxmemory-policy`, so it
+uses the default `noeviction`. Under memory pressure that **rejects writes** —
+including refresh-token writes — which surfaces to the user as a forced logout. A
+naive switch to `allkeys-lru` is worse: it would evict *live* sessions to make
+room. Persistence is also explicitly off (`--save "" --appendonly no`), so a
+Valkey restart is a fleet-wide logout. The transport-security guidance above
+covers AUTH/TLS but not durability or eviction.
+
+Before a real deployment:
+
+- Set `maxmemory` with headroom and a `volatile-ttl` (or `volatile-lru`) policy.
+  Every key this stack writes carries a TTL, so a volatile policy evicts the
+  nearest-to-expiry session under pressure rather than rejecting writes or
+  dropping an arbitrary live one.
+- Decide the durability posture deliberately. A Valkey restart with persistence
+  off logs every active user out; persistence or a replicated failover topology
+  is the remedy.
+
+### Supply-chain pinning
+
+Container images use mutable tags with no `@sha256` digest pinning
+(`eclipse-temurin:25-jre-jammy`, `apache/apisix:3.16.0-debian`,
+`valkey/valkey:9.1-alpine`, `quay.io/keycloak/keycloak:26.6.1`). The build stage
+downloads the Maven distribution over the network with no checksum or signature
+verification. There is no image signing. (Credit where due: the images are
+pinned to specific minor tags rather than `:latest`, and the runtime images are
+non-root JRE-only layers. The Maven build also already emits a CycloneDX SBOM at
+`verify`, so the *application* bill of materials exists — the gap is at the
+container and download layer.)
+
+Before a real deployment:
+
+- Pin base images by digest (`image@sha256:…`) so a re-pushed tag cannot change
+  the bits.
+- Verify the Maven download against a published checksum/signature, or vendor the
+  build toolchain into a trusted base image.
+- Sign and verify the produced images (e.g. Cosign) and publish a
+  container-level SBOM alongside the existing application SBOM.
+
+### Rate-limit coverage and IdP refresh amplification
+
+`limit-req` is applied only to `/auth/login` and `/auth/callback/idp`. The
+`/api/**` routes have no rate limit. Post-phantom-token, every `/api/**` request
+makes a synchronous gateway → `/internal/resolve` call, and when the access token
+is near expiry that call drives a refresh through
+gateway → `/internal/resolve` → Keycloak. An authenticated client looping a
+single `/api` endpoint inside that near-expiry window therefore amplifies load
+directly onto the IdP token endpoint — the rate-limited login edge does not
+constrain it at all.
+
+Before a real deployment:
+
+- Add a limit on the refresh-driving path (the `/api/**` routes, or a limit keyed
+  on the session) so a near-expiry loop cannot fan out into IdP token-endpoint
+  traffic. This complements lengthening the access-token lifespan (see
+  Token-endpoint load above), which shrinks the window but does not bound it.
+- Note the keying caveat already flagged in the route template: `remote_addr`
+  collapses to the load balancer's address behind a real LB, so per-client
+  limits must key on a trusted forwarded-IP header with the proxy's trusted-IP
+  list pinned.
+
+### Zero-downtime deployment is not possible today
+
+State this plainly because it is the compound conclusion of four separate gaps
+and is easy to miss when each is read in isolation: **do not run this stack with
+more than one replica, and do not attempt a rolling or blue-green deploy, until
+the in-process refresh lock, a shared/HA session store, dual-key signing
+rotation, and graceful shutdown are all in place.** The first `kubectl rollout`
+against this architecture as shipped logs every active user out.
+
+The four preconditions:
+
+- the refresh lock is in-process (`InProcessRefreshLock`), so two instances
+  refreshing one session race to `invalid_grant` (see the distributed-lock
+  section above);
+- the session store is a single Valkey with no HA (see the SPOF section above);
+- the signing key is a single hard-cutover key — and it is shared by **both** the
+  double-submit CSRF cookie and the `oauth_tx` login-state value, so rotating it
+  does not merely break CSRF validation, it also breaks every login already in
+  flight at rotation time (blast radius wider than a CSRF-only framing implies);
+- there is no graceful shutdown, so the terminations a rolling deploy performs by
+  design interrupt in-flight refreshes mid-rotation (see the graceful-shutdown
+  section above).

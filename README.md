@@ -297,8 +297,11 @@ in [`docs/architecture/architecture-decisions.md`](docs/architecture/architectur
 
 - **Sender-constrained tokens (DPoP / mTLS).** The BFF pattern removes the
   primary browser-token leakage vector, and the RS sits behind the API
-  Gateway. Reconsider when the RS is exposed to multi-tenant or untrusted
-  callers.
+  Gateway. But RS bearer tokens are not sender-constrained: any holder of a
+  token with `aud=oidc-reference-api` that reaches the RS over the network can
+  call it directly, so **network isolation of the Resource Server is
+  load-bearing** until DPoP/mTLS is added (SECURITY.md threat-model row G-8).
+  Reconsider when the RS is exposed to multi-tenant or untrusted callers.
 - **Asymmetric client authentication (`private_key_jwt`, mTLS to the AS).**
   Shared-secret client auth is sufficient for the teaching baseline.
   Reconsider for FAPI / PSD2 or any compliance regime that mandates it.
