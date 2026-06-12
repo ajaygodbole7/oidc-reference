@@ -15,12 +15,29 @@ interface StateStore {
   // NOT resurrected — the delete paths do not share the per-sid refresh lock.
   boolean putIfPresent(String key, String value, Duration ttl);
 
-  // Atomic rotate: iff oldKey exists, write value under newKey (with ttl) and
-  // delete oldKey, returning true. If oldKey is absent — e.g. a concurrent
-  // logout deleted sess:{sid} during a refresh round-trip — this is a no-op
-  // returning false: the session is NOT resurrected under newKey. The sid
-  // rotation on refresh uses this so it inherits putIfPresent's race-safety.
-  boolean rotateIfPresent(String oldKey, String newKey, String value, Duration ttl);
+  // Atomic rotate + breadcrumb: iff oldKey exists, write value under newKey (ttl),
+  // write breadcrumbValue under breadcrumbKey (breadcrumbTtl), and delete oldKey —
+  // all atomically — returning true. If oldKey is absent (e.g. a concurrent logout
+  // deleted sess:{sid} during a refresh round-trip) this is a no-op returning
+  // false: nothing is written, so the session is NOT resurrected and NO orphan
+  // breadcrumb is left.
+  //
+  // Folding the breadcrumb INTO the move is load-bearing for revocation safety
+  // (N3): the sid rotation on refresh leaves a rotated:{old}->new breadcrumb so a
+  // logout that reaches the OLD sid can follow it to the live new session. If the
+  // breadcrumb were a SEPARATE write after the move, a subject-wide logout landing
+  // in the gap would find sess:{old} already gone and no breadcrumb to follow,
+  // leaving the rotated session alive past revocation. Atomic here means a
+  // concurrent logout sees either sess:{old} (EXISTS-gate fails closed) or
+  // sess:{new}+breadcrumb (follows it) — never an in-between state.
+  boolean rotateIfPresent(
+      String oldKey,
+      String newKey,
+      String value,
+      Duration ttl,
+      String breadcrumbKey,
+      String breadcrumbValue,
+      Duration breadcrumbTtl);
 
   // Atomic compare-and-set: set key=newValue (with ttl) iff key currently equals
   // expected. Returns false (no-op) when the key is absent or holds a different

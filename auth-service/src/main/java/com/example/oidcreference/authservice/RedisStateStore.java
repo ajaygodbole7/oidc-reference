@@ -23,14 +23,19 @@ class RedisStateStore implements StateStore {
           + "return 1",
       Long.class);
 
-  // Atomic sid rotation: iff KEYS[1] (sess:{old}) exists, write ARGV[1] under
-  // KEYS[2] (sess:{new}) with a PX TTL of ARGV[2] ms and delete KEYS[1]; else a
-  // no-op returning 0. The EXISTS-gate makes rotation inherit SET XX's
-  // race-safety: a concurrent logout that DEL'd the old key during the refresh
-  // round-trip leaves nothing to rotate, so we fail closed, not resurrect it.
+  // Atomic sid rotation + breadcrumb: iff KEYS[1] (sess:{old}) exists, write
+  // ARGV[1] under KEYS[2] (sess:{new}) PX ARGV[2] ms, write ARGV[3] under KEYS[3]
+  // (rotated:{old} breadcrumb) PX ARGV[4] ms, and delete KEYS[1]; else a no-op
+  // returning 0. The EXISTS-gate makes rotation inherit SET XX's race-safety: a
+  // concurrent logout that DEL'd the old key during the refresh round-trip leaves
+  // nothing to rotate, so we fail closed, not resurrect it. The breadcrumb is
+  // written in the SAME script as the move (N3) so a concurrent subject-wide
+  // logout can never observe sess:{new} without the breadcrumb that lets it
+  // follow through — closing the revocation window.
   private static final RedisScript<Long> ROTATE_IF_PRESENT = new DefaultRedisScript<>(
       "if redis.call('EXISTS', KEYS[1]) == 1 then "
           + "redis.call('SET', KEYS[2], ARGV[1], 'PX', tonumber(ARGV[2])); "
+          + "redis.call('SET', KEYS[3], ARGV[3], 'PX', tonumber(ARGV[4])); "
           + "redis.call('DEL', KEYS[1]); "
           + "return 1 else return 0 end",
       Long.class);
@@ -68,12 +73,21 @@ class RedisStateStore implements StateStore {
   }
 
   @Override
-  public boolean rotateIfPresent(String oldKey, String newKey, String value, Duration ttl) {
+  public boolean rotateIfPresent(
+      String oldKey,
+      String newKey,
+      String value,
+      Duration ttl,
+      String breadcrumbKey,
+      String breadcrumbValue,
+      Duration breadcrumbTtl) {
     Long rotated = redis.execute(
         ROTATE_IF_PRESENT,
-        List.of(oldKey, newKey),
+        List.of(oldKey, newKey, breadcrumbKey),
         value,
-        Long.toString(ttl.toMillis()));
+        Long.toString(ttl.toMillis()),
+        breadcrumbValue,
+        Long.toString(breadcrumbTtl.toMillis()));
     return rotated != null && rotated == 1L;
   }
 

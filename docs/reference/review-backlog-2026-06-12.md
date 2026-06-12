@@ -59,7 +59,13 @@ breaker with half-open probe + 503/Retry-After) in front of `/internal/resolve`,
 paired with N1's pooling. Consider a bounded per-worker resolve concurrency limit.
 **Where.** `bff-session.lua` resolve path; `apisix.yaml.template`; SPEC-0001 §7.1.
 
-### N3 — sid-rotation resurrection window on concurrent subject logout — `REF`, **Medium**, OPEN *(self-disclosed)*
+### N3 — sid-rotation resurrection window on concurrent subject logout — `REF`, **Medium**, FIXED-2026-06-12 *(self-disclosed)*
+**Fix.** `StateStore.rotateIfPresent` now writes the `rotated:{old}` breadcrumb in the
+SAME atomic op as the `sess:{old}`→`sess:{new}` move (Redis: one Lua script; in-memory
+twin mirrors it). The separate post-move `put` is gone. A concurrent subject-wide logout
+now sees either `sess:{old}` (EXISTS-gate fails closed) or `sess:{new}`+breadcrumb (follows
+it) — never an in-between state. Index-repoint keeps its existing `idp_sid` CAS. Parity test
+asserts breadcrumb-written-atomically + no-orphan-on-fail; teeth via mutation.
 **Why.** Rotation does three non-atomic store calls — move `sess:{sid}`→`sess:{sid'}`
 (`InternalResolveController.java:220`), write the `rotated:{sid}` breadcrumb
 (`:228`), repoint indexes (`:234`) — and **logout does not take the refresh lock**
@@ -78,7 +84,10 @@ fold move + breadcrumb + index-repoint into a single atomic Lua script. Gate the
 subject-path `addSubjectSession(new)` on `sess:{new}` still existing.
 **Where.** `InternalResolveController.java:219-241`, `SessionIndexes.java:74-77,114-143`.
 
-### N4 — 30s rotation grace keeps the OLD sid valid — `REF`, **Medium**, OPEN
+### N4 — 30s rotation grace keeps the OLD sid valid — `REF`, **Medium**, FIXED-2026-06-12
+**Fix.** `ROTATION_GRACE` 30s → 10s (`InternalResolveController.java:45`), comfortably above
+the ~5s resolve read timeout the only legitimate consumer (a raced in-flight request) needs.
+SECURITY S-5 updated. Replay surface after each rotation cut ~3×.
 **Why.** `ROTATION_GRACE = 30s` (`InternalResolveController.java:45`): a stolen old
 sid still resolves (via breadcrumb → fresh token) for 30s after each rotation. A6
 reduced the fixation window from 8h to 30s — a real win — but "a once-observed sid
@@ -162,7 +171,10 @@ backlog per the doc-honesty audit.
 
 ## C. Missing tests (new architecture)
 
-### C1 — No test proves the OLD sid stops working after the breadcrumb expires — `REF`, **Medium**, OPEN
+### C1 — No test proves the OLD sid stops working after the breadcrumb expires — `REF`, **Medium**, FIXED-2026-06-12
+**Fix.** `InternalResolveControllerTest.oldSidIsDeadOnceTheRotationGraceBreadcrumbExpires`:
+rotate, prove the old sid resolves WHILE the breadcrumb lives, delete `rotated:{old}` (simulate
+the grace TTL elapsing), assert the old sid 404s while the new session stays alive.
 **Why.** The A6 security bound ("a stolen old sid is dead within ~`ROTATION_GRACE`
 of rotation") is asserted only by the 30s TTL literal in code — there is no test
 that, after the breadcrumb expires, presenting the old sid yields 404/no-session.

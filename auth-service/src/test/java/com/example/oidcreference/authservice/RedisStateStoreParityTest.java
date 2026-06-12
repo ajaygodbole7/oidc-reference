@@ -102,30 +102,43 @@ class RedisStateStoreParityTest {
   // --- rotateIfPresent -------------------------------------------------------
 
   @Test
-  void rotateIfPresent_oldPresent_movesValueAndReturnsTrue() {
+  void rotateIfPresent_oldPresent_movesValueAndWritesBreadcrumbAtomically() {
     redisStore.put("sess:old", "rec", TTL);
     memoryStore.put("sess:old", "rec", TTL);
 
-    boolean r = redisStore.rotateIfPresent("sess:old", "sess:new", "rec2", TTL);
-    boolean m = memoryStore.rotateIfPresent("sess:old", "sess:new", "rec2", TTL);
+    boolean r = redisStore.rotateIfPresent("sess:old", "sess:new", "rec2", TTL,
+        "rotated:old", "new", TTL);
+    boolean m = memoryStore.rotateIfPresent("sess:old", "sess:new", "rec2", TTL,
+        "rotated:old", "new", TTL);
 
-    assertSameOutcome("rotate/old-present", r, m, List.of("sess:old", "sess:new"));
+    assertSameOutcome("rotate/old-present", r, m,
+        List.of("sess:old", "sess:new", "rotated:old"));
     assertThat(r).isTrue();
     assertThat(redisStore.get("sess:old")).as("old sid dropped").isEmpty();
     assertThat(redisStore.get("sess:new")).as("value moved to new sid").contains("rec2");
+    // N3: the breadcrumb is written in the SAME atomic op as the move, so a logout
+    // reaching the old sid after the move always finds it to follow through.
+    assertThat(redisStore.get("rotated:old")).as("breadcrumb written atomically").contains("new");
   }
 
   @Test
-  void rotateIfPresent_oldAbsent_failsClosed_doesNotResurrect() {
-    // Fail-closed branch: a concurrent logout DEL'd sess:{old} mid-refresh.
-    // Neither store may create sess:{new} — that would resurrect a revoked session.
-    boolean r = redisStore.rotateIfPresent("sess:gone", "sess:new", "rec", TTL);
-    boolean m = memoryStore.rotateIfPresent("sess:gone", "sess:new", "rec", TTL);
+  void rotateIfPresent_oldAbsent_failsClosed_writesNeitherSessionNorBreadcrumb() {
+    // Fail-closed branch: a concurrent logout DEL'd sess:{old} mid-refresh. Neither
+    // store may create sess:{new} (would resurrect a revoked session) NOR leave an
+    // orphan breadcrumb pointing at a session that never existed.
+    boolean r = redisStore.rotateIfPresent("sess:gone", "sess:new", "rec", TTL,
+        "rotated:gone", "new", TTL);
+    boolean m = memoryStore.rotateIfPresent("sess:gone", "sess:new", "rec", TTL,
+        "rotated:gone", "new", TTL);
 
-    assertSameOutcome("rotate/old-absent", r, m, List.of("sess:gone", "sess:new"));
+    assertSameOutcome("rotate/old-absent", r, m,
+        List.of("sess:gone", "sess:new", "rotated:gone"));
     assertThat(r).isFalse();
     assertThat(redisStore.get("sess:new"))
         .as("a revoked session must NOT be resurrected under the new sid")
+        .isEmpty();
+    assertThat(redisStore.get("rotated:gone"))
+        .as("no orphan breadcrumb when the rotation fails closed")
         .isEmpty();
   }
 
@@ -136,10 +149,13 @@ class RedisStateStoreParityTest {
     memoryStore.put("sess:old", "rec", TTL);
     memoryStore.put("sess:new", "stale", TTL);
 
-    boolean r = redisStore.rotateIfPresent("sess:old", "sess:new", "rec", TTL);
-    boolean m = memoryStore.rotateIfPresent("sess:old", "sess:new", "rec", TTL);
+    boolean r = redisStore.rotateIfPresent("sess:old", "sess:new", "rec", TTL,
+        "rotated:old", "new", TTL);
+    boolean m = memoryStore.rotateIfPresent("sess:old", "sess:new", "rec", TTL,
+        "rotated:old", "new", TTL);
 
-    assertSameOutcome("rotate/new-pre-exists", r, m, List.of("sess:old", "sess:new"));
+    assertSameOutcome("rotate/new-pre-exists", r, m,
+        List.of("sess:old", "sess:new", "rotated:old"));
     assertThat(redisStore.get("sess:new")).contains("rec");
   }
 
@@ -196,10 +212,14 @@ class RedisStateStoreParityTest {
     // The twin trivially stores the Duration; the real risk is a Lua that forgot
     // PX, leaving a persistent key that outlives the session's absolute ceiling.
     redisStore.put("sess:old", "rec", TTL);
-    redisStore.rotateIfPresent("sess:old", "sess:new", "rec", Duration.ofSeconds(120));
+    redisStore.rotateIfPresent("sess:old", "sess:new", "rec", Duration.ofSeconds(120),
+        "rotated:old", "new", Duration.ofSeconds(10));
     assertThat(redisStore.ttl("sess:new"))
         .as("rotate must SET ... PX, never a persistent key")
         .isBetween(Duration.ofSeconds(90), Duration.ofSeconds(120));
+    assertThat(redisStore.ttl("rotated:old"))
+        .as("breadcrumb gets its own (shorter) PX grace TTL")
+        .isBetween(Duration.ofSeconds(1), Duration.ofSeconds(10));
 
     redisStore.put("idp_sid:k", "old", TTL);
     redisStore.compareAndSwap("idp_sid:k", "old", "new", Duration.ofSeconds(120));

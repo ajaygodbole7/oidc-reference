@@ -373,6 +373,62 @@ class InternalResolveControllerTest {
   }
 
   @Test
+  void oldSidIsDeadOnceTheRotationGraceBreadcrumbExpires() throws Exception {
+    // A6 / N4 security bound (C1): a once-observed (or stolen) OLD sid must stop
+    // resolving once the rotation grace breadcrumb expires — it must NOT keep
+    // forwarding to the live new session for the absolute lifetime. Rotate, prove
+    // the old sid still resolves WHILE the breadcrumb lives (the in-flight grace),
+    // then simulate ROTATION_GRACE elapsing (delete rotated:{old}) and assert the
+    // old sid 404s while the new session is untouched. Without this, a breadcrumb
+    // accidentally set to the absolute ceiling would silently re-open the exact
+    // fixation hole A6 closed, and nothing else would catch it.
+    String sid = "sid-grace";
+    SessionRecord expiring = new SessionRecord(
+        "stale-access",
+        "refresh-token-1",
+        "id-token-1",
+        Instant.now().plusSeconds(10),
+        Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    storeSession(sid, expiring);
+
+    // First resolve refreshes + rotates; capture the new sid and the breadcrumb.
+    var rotated = mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isOk())
+        .andReturn();
+    @SuppressWarnings("unchecked")
+    Map<String, Object> body =
+        TestBeans.JSON.decode(rotated.getResponse().getContentAsString(), Map.class);
+    String newSid = (String) body.get("rotated_sid");
+    assertThat(stateStore.get("rotated:" + sid))
+        .as("breadcrumb present during the grace window").contains(newSid);
+
+    // While the breadcrumb lives, an in-flight request on the old sid still resolves.
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isOk());
+
+    // Simulate ROTATION_GRACE elapsing: the breadcrumb TTL expires.
+    stateStore.delete("rotated:" + sid);
+
+    // Now the old sid is dead — no breadcrumb to forward, the old session is gone.
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isNotFound());
+
+    // The live new session is unaffected by the old sid dying.
+    assertThat(stateStore.get("sess:" + newSid))
+        .as("the rotated-to session stays alive").isPresent();
+  }
+
+  @Test
   void concurrentLogoutDuringRefreshIsNotResurrectedByRotation(CapturedOutput output)
       throws Exception {
     // Review FINDING 2: a back-channel logout that clears idp_sid mid-refresh must

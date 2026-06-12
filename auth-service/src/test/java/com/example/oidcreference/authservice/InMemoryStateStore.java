@@ -62,10 +62,17 @@ class InMemoryStateStore implements StateStore {
   }
 
   @Override
-  public boolean rotateIfPresent(String oldKey, String newKey, String value, Duration ttl) {
-    // Mirror the Redis EXISTS-gated rotate: write newKey + drop oldKey only if
-    // oldKey existed. values.remove is atomic; the test double does not need
-    // true cross-key atomicity.
+  public boolean rotateIfPresent(
+      String oldKey,
+      String newKey,
+      String value,
+      Duration ttl,
+      String breadcrumbKey,
+      String breadcrumbValue,
+      Duration breadcrumbTtl) {
+    // Mirror the Redis EXISTS-gated rotate: write newKey + breadcrumb + drop
+    // oldKey only if oldKey existed (else write NOTHING). values.remove is atomic;
+    // the test double does not need true cross-key atomicity.
     String existing = values.remove(oldKey);
     if (existing == null) {
       return false;
@@ -73,6 +80,8 @@ class InMemoryStateStore implements StateStore {
     ttls.remove(oldKey);
     values.put(newKey, value);
     ttls.put(newKey, ttl == null ? Duration.ZERO : ttl);
+    values.put(breadcrumbKey, breadcrumbValue);
+    ttls.put(breadcrumbKey, breadcrumbTtl == null ? Duration.ZERO : breadcrumbTtl);
     return true;
   }
 

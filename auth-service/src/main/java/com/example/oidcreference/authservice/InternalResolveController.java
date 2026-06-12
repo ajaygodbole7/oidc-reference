@@ -41,8 +41,13 @@ class InternalResolveController {
   // was already in flight with the old cookie still resolves (to the new session)
   // instead of losing its session. Also bounds how long a stolen old sid remains
   // usable after a rotation — to this window, not the absolute ceiling.
+  //
+  // The only legitimate consumer is a request that RACED the rotation, so the
+  // window need only cover the in-flight resolve budget (~5s read timeout), not
+  // 30s (N4): kept at 10s to cut the post-rotation replay surface ~3x while
+  // staying comfortably above the resolve round-trip. See SECURITY.md S-5.
   private static final String ROTATED_PREFIX = "rotated:";
-  private static final Duration ROTATION_GRACE = Duration.ofSeconds(30);
+  private static final Duration ROTATION_GRACE = Duration.ofSeconds(10);
 
   private final StateStore stateStore;
   private final JsonCodec json;
@@ -217,15 +222,20 @@ class InternalResolveController {
     // round-trip; rotateIfPresent's EXISTS-gate fails closed in that case rather
     // than resurrecting it — the same property the old SET XX gave.
     String newSid = CryptoSupport.randomUrlToken(32);
-    if (!stateStore.rotateIfPresent(sessKey, "sess:" + newSid, json.encode(refreshed), nextTtl)) {
+    // Move sess:{sid} -> sess:{sid'} AND write the rotated:{sid}->sid' breadcrumb
+    // ATOMICALLY (N3). The breadcrumb lets a concurrent request still in flight
+    // with the OLD sid forward to sid' for a short grace window instead of losing
+    // its session; folding it into the move closes the revocation window where a
+    // subject-wide logout could see sess:{sid'} without a breadcrumb to follow.
+    // The EXISTS-gate still fails closed if a logout DEL'd sess:{sid} first.
+    if (!stateStore.rotateIfPresent(
+        sessKey, "sess:" + newSid, json.encode(refreshed), nextTtl,
+        ROTATED_PREFIX + sid, newSid, ROTATION_GRACE)) {
       SecurityAudit.event(
           request, 404, "refresh_rejected", "session_deleted_during_refresh",
           subjectClaim(refreshed));
       return problem(404, "session ended, re-login required");
     }
-    // Breadcrumb: a concurrent request still in flight with the OLD sid forwards
-    // to sid' for a short grace window instead of losing its session.
-    stateStore.put(ROTATED_PREFIX + sid, newSid, ROTATION_GRACE);
     // Repoint the secondary indexes (idp_sid / sub_sessions / logout_hint) at sid'.
     // The idp_sid repoint is a CAS: if a concurrent back-channel logout cleared it
     // during the IdP round-trip, the session was revoked — undo the rotation
