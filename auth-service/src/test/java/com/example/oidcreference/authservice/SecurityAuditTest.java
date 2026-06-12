@@ -226,10 +226,16 @@ class SecurityAuditTest {
 
     SecurityAudit.event(request, 403, "auth_denied", "csrf_invalid");
 
-    assertThat(output.getOut())
-        .contains(
-            "security_audit event=auth_denied status=403 method=POST "
-                + "path=/auth/logout reason=csrf_invalid remote=198.51.100.7");
+    // Build the expected line FROM the constant (rendered by the same SLF4J
+    // MessageFormatter the logger uses), so the wire literal lives in exactly one
+    // place: a format change to SecurityAudit.FORMAT updates this assertion
+    // automatically. The test still pins event()'s argument ORDER + values: if
+    // event() filled the placeholders out of order the rendered line would differ.
+    String expected = org.slf4j.helpers.MessageFormatter.arrayFormat(
+        SecurityAudit.FORMAT,
+        new Object[] {"auth_denied", 403, "POST", "/auth/logout", "csrf_invalid", "198.51.100.7"})
+        .getMessage();
+    assertThat(output.getOut()).contains(expected);
   }
 
   @Test
@@ -242,11 +248,16 @@ class SecurityAuditTest {
 
     SecurityAudit.event(request, 302, "logout_succeeded", "ok", "alice");
 
-    assertThat(output.getOut())
-        .contains(
-            "security_audit event=logout_succeeded status=302 method=POST "
-                + "path=/auth/logout reason=ok sub_hash=" + sha256Prefix("alice")
-                + " remote=198.51.100.7");
+    // Same single-source build for the with-subject format. The subject arg is
+    // the HASHED value (sha256Prefix), so this also proves event() hashes `sub`
+    // before logging — a regression that logged the raw subject would render
+    // sub_hash=alice and fail this comparison.
+    String expected = org.slf4j.helpers.MessageFormatter.arrayFormat(
+        SecurityAudit.FORMAT_WITH_SUBJECT,
+        new Object[] {"logout_succeeded", 302, "POST", "/auth/logout", "ok",
+            sha256Prefix("alice"), "198.51.100.7"})
+        .getMessage();
+    assertThat(output.getOut()).contains(expected);
   }
 
   // -- helpers --------------------------------------------------------------

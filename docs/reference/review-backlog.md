@@ -108,10 +108,11 @@ sub` (optionally that the IdP `sid` is unchanged); on mismatch throw
   primitive `SET`s the new key unconditionally after the EXISTS-gate; safe only
   because `newSid` is a 256-bit token. One-line threat-model note that safety rests
   on newSid entropy. (Was N8.)
-- **O4 — Audit-format constant not referenced by its test.** `REF`, Low. The
-  `SecurityAudit` format constant is shared between the two `event()` overloads but
-  `SecurityAuditTest` hardcodes the wire-format literal. Have the test build its
-  expected line from the constant so a format change updates one place. (Was C6/B1.)
+- **O4 — Audit-format constant not referenced by its test.** `REF`, Low. **DONE 2026-06-12.**
+  Both wire-shape tests now build the expected line from `SecurityAudit.FORMAT` /
+  `FORMAT_WITH_SUBJECT` via SLF4J `MessageFormatter` (the renderer the logger uses), so the
+  wire literal lives in one place; a format change updates the constant only. Still pins
+  event()'s arg order + the subject-hashing (teeth proven: logging raw `sub` → red). (Was C6/B1.)
 - **O5 — Record the "keep AuthController un-split" decision in code/ADR.** `REF`, Low.
   The decision currently lives only in a (now-deleted) backlog; add a one-line class
   note or ADR entry so it survives. (Was A5/B2.)
