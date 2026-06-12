@@ -286,6 +286,16 @@ function ttlSeconds(key: string): number {
   return Number(valkey(["TTL", key]));
 }
 
+// Rewrite sess:{sid}'s access_token_expires_at to ~30s out — inside the gateway's
+// refresh window — so the next /api call delegates to /internal/resolve and
+// triggers a real refresh (which rotates the sid). Mirrors lib.sh
+// set_session_access_expiry; KEEPTTL preserves the session's idle TTL.
+function moveAccessExpiryIntoRefreshWindow(sid: string): void {
+  const rec = JSON.parse(valkey(["GET", `sess:${sid}`])) as Record<string, unknown>;
+  rec.access_token_expires_at = new Date(Date.now() + 30_000).toISOString();
+  valkey(["SET", `sess:${sid}`, JSON.stringify(rec), "KEEPTTL"]);
+}
+
 // ---------------------------------------------------------------------------
 // Story 1 — Anonymous baseline. The browser holds no token-like material.
 // Invariant: nothing token-shaped in any JS-readable surface; /auth/me 401.
@@ -965,4 +975,66 @@ test("16. concurrent login tabs complete independently", async ({ browser }) => 
   } finally {
     await context.close();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Story 17 — A write AFTER a refresh that rotates the sid. The XSRF-TOKEN is
+// HMAC-bound to the sid, so it must be re-issued alongside the rotated sid; if
+// not, every state-changing request 403s after a routine refresh (the exact
+// showstopper a GET-only suite cannot see). This proves the REAL-BROWSER round
+// trip: the browser stores both re-issued cookies, JS reads the NEW XSRF-TOKEN
+// from document.cookie, and the write forwards because the rotated CSRF
+// validates against the rotated sid.
+// ---------------------------------------------------------------------------
+
+test("17. a write after a refresh-rotation re-reads the rotated CSRF and forwards", async ({
+  page,
+  context
+}) => {
+  await loginAs(page, ALICE);
+
+  const before = await context.cookies();
+  const oldSid = sidFrom(before);
+  const oldXsrf = before.find((c) => c.name === "XSRF-TOKEN")?.value;
+  expect(oldXsrf, "login issued an XSRF-TOKEN cookie").toBeTruthy();
+
+  // Force the next /api call into the refresh window -> refresh -> sid rotation.
+  moveAccessExpiryIntoRefreshWindow(oldSid);
+
+  const apiStatus = await page.evaluate(async () => {
+    const res = await fetch("/api/user-data", {
+      credentials: "include",
+      headers: { Accept: "application/json" }
+    });
+    return res.status;
+  });
+  // Forwarded (alice can read /api/user-data); not a no-session bounce.
+  expect(apiStatus, "the rotating /api call forwarded").toBe(200);
+
+  // The rotation re-issued BOTH cookies with fresh values.
+  const after = await context.cookies();
+  const newSid = sidFrom(after);
+  const newXsrf = after.find((c) => c.name === "XSRF-TOKEN")?.value;
+  expect(newSid, "sid rotated on refresh").not.toBe(oldSid);
+  expect(newXsrf, "XSRF-TOKEN re-issued on rotation").toBeTruthy();
+  expect(newXsrf, "XSRF-TOKEN rotated, not stale").not.toBe(oldXsrf);
+
+  // Real-browser write: JS reads the NEW XSRF-TOKEN from document.cookie and
+  // echoes it. A gateway CSRF reject is 403 "invalid CSRF token"; a forwarded
+  // request gets the RS role-403 (alice is not admin). Must NOT be a CSRF reject.
+  const write = await page.evaluate(async () => {
+    const xsrf = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/)?.[1] ?? "";
+    const res = await fetch("/api/admin", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "X-XSRF-TOKEN": xsrf }
+    });
+    return { status: res.status, body: await res.text() };
+  });
+  expect(write.body, "write after rotation must not be a gateway CSRF reject")
+    .not.toContain("invalid CSRF token");
+  expect(write.status, "rotated CSRF validated; forwarded to RS (alice role-403)").toBe(403);
+
+  // The token invariant still holds after a rotation.
+  await assertNoBrowserTokens(page, context);
 });
