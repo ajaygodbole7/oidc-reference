@@ -720,6 +720,34 @@ test_hop_by_hop_headers_stripped() {
   clear_session "$sid"
 }
 
+# B4 — the gateway strips client-supplied identity headers before proxying, so a
+# future RS that trusts X-User (etc.) can't be driven by an external client.
+test_inbound_identity_headers_stripped() {
+  name="inbound_identity_headers_stripped"
+  base_name="$name"
+  sid="echo-identity-1"
+  setup_echo_session "$name" "$sid" || return 1
+
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid" \
+    -H "X-User: attacker" \
+    -H "X-Forwarded-User: attacker" \
+    -H "X-Forwarded-Email: a@evil.test" \
+    -H "X-Groups: admin" \
+    -H "X-Roles: admin" \
+    -H "X-Remote-User: attacker" \
+    -H "X-Auth-Request-User: attacker" \
+    -H "X-Id-Token: forged" \
+    "$GATEWAY_BASE/api/_test/echo" 2>/dev/null || true)"
+  assert_status "$base_name status" 200 "$status"
+
+  for header in x-user x-forwarded-user x-forwarded-email x-groups x-roles x-remote-user x-auth-request-user x-id-token; do
+    observed="$(json_get "$BODY_TMP" "headers.$header")"
+    assert_status "$base_name $header" "" "$observed"
+  done
+  clear_session "$sid"
+}
+
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
@@ -743,6 +771,7 @@ test_ttl_slide_capped_at_absolute_ceiling           || true
 test_cookie_strip_does_not_leak_to_upstream         || true
 test_query_string_preserved                         || true
 test_hop_by_hop_headers_stripped                    || true
+test_inbound_identity_headers_stripped              || true
 
 printf -- '---- summary ----\n'
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"

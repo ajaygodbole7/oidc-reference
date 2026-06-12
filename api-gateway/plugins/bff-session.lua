@@ -109,6 +109,33 @@ local HOP_BY_HOP = {
   ["authorization"]       = true,     -- gateway-injected; never trust inbound
 }
 
+-- Inbound identity headers a client must never be able to assert. The Resource
+-- Server today ignores all client-supplied identity headers — it authorizes
+-- ONLY on the gateway-injected bearer — so this strips nothing load-bearing
+-- right now. It is defense-in-depth for the gateway-as-security-boundary
+-- invariant: a future RS change that starts trusting `X-User` (or similar) must
+-- not be reachable by a header an external client sent. Contract: the RS MUST
+-- ignore all client-supplied identity headers; the gateway enforces it here too.
+local IDENTITY_HEADERS = {
+  ["x-user"]                          = true,
+  ["x-forwarded-user"]                = true,
+  ["x-forwarded-email"]               = true,
+  ["x-forwarded-groups"]              = true,
+  ["x-forwarded-preferred-username"]  = true,
+  ["x-auth-request-user"]             = true,
+  ["x-auth-request-email"]            = true,
+  ["x-auth-request-groups"]           = true,
+  ["x-auth-request-preferred-username"] = true,
+  ["x-email"]                         = true,
+  ["x-groups"]                        = true,
+  ["x-roles"]                         = true,
+  ["x-remote-user"]                   = true,
+  ["remote-user"]                     = true,
+  ["x-authenticated-user"]            = true,
+  ["x-forwarded-access-token"]        = true,
+  ["x-id-token"]                      = true,
+}
+
 -- Parse a Cookie header value into { name = value, ... }. We do this
 -- ourselves rather than using ngx.var.cookie_* because the latter
 -- depends on nginx's $cookie_NAME variable, which downcases the name
@@ -698,6 +725,10 @@ function _M.access(conf, ctx)
     core.request.set_header(ctx, header_name, nil)
   end
   for header_name, _ in pairs(connection_tokens) do
+    core.request.set_header(ctx, header_name, nil)
+  end
+  for header_name, _ in pairs(IDENTITY_HEADERS) do
+    -- Strip client-supplied identity headers before proxying (defense in depth).
     core.request.set_header(ctx, header_name, nil)
   end
   core.request.set_header(ctx, "Authorization", "Bearer " .. access_token)

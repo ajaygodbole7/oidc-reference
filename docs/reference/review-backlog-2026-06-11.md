@@ -76,10 +76,9 @@ The still-valid items from that file are carried forward below and marked `[carr
 **What's needed.** Gate the bare-`sid` acceptance behind an explicit plugin flag (e.g. `allow_insecure_sid`, default off) instead of inferring from scheme, and/or gate XFP behind an APISIX trusted-address/real-IP allowlist. In production, require `__Host-sid` and never honor bare `sid`. (Supersedes/merges the old C10.)
 **Where.** `bff-session.lua` (`effective_scheme`, `get_session_cookie`, `expire_session_cookie`), `apisix.yaml.template`.
 
-### B4 — Strip a positive set of inbound identity headers at the gateway — Low `[carried]`
-**Why.** The plugin clears `Authorization` + hop-by-hop headers but not identity headers (`X-User`, `X-Forwarded-User`, `X-Roles`, …). No exploit today (the RS doesn't trust them), but defense-in-depth for the gateway-as-security-boundary invariant: a future RS change that trusts `X-User` must not be reachable by a client-supplied header.
-**What's needed.** Strip an explicit identity-header set before proxying (~5 LOC) plus a gateway-behavior test using the echo endpoint; and document the contract ("the RS MUST ignore all client-supplied identity headers").
-**Where.** `bff-session.lua`; `api-gateway/tests/test-gateway-behavior.sh`.
+### B4 — Strip a positive set of inbound identity headers at the gateway — **[done]**
+**Resolved.** `bff-session.lua` gains an `IDENTITY_HEADERS` strip set (x-user, x-forwarded-user/-email/-groups/-preferred-username, x-auth-request-*, x-email/-groups/-roles, x-remote-user, remote-user, x-authenticated-user, x-forwarded-access-token, x-id-token), cleared before proxying alongside HOP_BY_HOP, with the contract documented in a comment ("the RS MUST ignore all client-supplied identity headers"). New live gateway test `test_inbound_identity_headers_stripped` sends the set and asserts none reach the echo upstream; verified red→green (disabling the strip lets `x-roles=admin`, `x-id-token=forged` through). Gateway suite 60/0, full e2e green.
+**Where.** `api-gateway/plugins/bff-session.lua`; `api-gateway/tests/test-gateway-behavior.sh`.
 
 ### B5 — Optional refresh-token-age ceiling for IdPs that omit `refresh_expires_in` — Low
 **Why.** When `refresh_expires_in` is absent (common on Okta/Auth0/Entra), `refreshExpiresAt` is null and `refreshTokenExpired()` always returns false, so the only brake on a non-rotating-`sid` session is the 8h absolute cap. Combined with S-5 (sid never rotates) a stolen `sid` can refresh for the full window. `REF` to disclose; optional knob.
