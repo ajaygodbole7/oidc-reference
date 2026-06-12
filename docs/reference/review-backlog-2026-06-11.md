@@ -52,10 +52,15 @@ The still-valid items from that file are carried forward below and marked `[carr
 The size (~720 LOC) is real but is cohesion, not a god-class. Revisit only if a genuinely independent concern (e.g. a second protocol surface) lands.
 **Where.** `auth-service/.../AuthController.java` (unchanged).
 
-### A6 — Rotate `sid` on refresh-token rotation — `REF`, Med `[carried]`
-**Why.** A once-observed `sid` stays valid across N token rotations for the full 8h absolute window (SECURITY.md S-5 discloses this). RFC 6265bis §8.6 and standard session practice favor rotating the session id on privilege/credential boundary changes; refresh rotation is the natural boundary here.
-**What's needed.** On a successful refresh, mint `sid'`, copy `sess:{sid}` → `sess:{sid'}`, `DEL sess:{sid}`, return `sid'` in the `/internal/resolve` response so the gateway re-issues the `__Host-sid` cookie, and update the `idp_sid:`/`sub_sessions:` indexes to point at `sid'`. Invisible to the SPA (the gateway calls `/internal/resolve` on every `/api/**` and re-reads the rotated `sid`). Note the interaction with A1 (lock is keyed by `sid`).
-**Where.** `InternalResolveController` (refresh path) / `AuthorizationCodeTokenRefreshClient`; `SessionIndexes`; the gateway's cookie re-issue in `bff-session.lua`. Decide explicitly and reflect in SPEC-0001 §7.2.
+### A6 — Rotate `sid` on refresh-token rotation — **[done]**
+**Resolved.** A successful refresh now rotates the local sid. Implementation:
+- New atomic `StateStore.rotateIfPresent(old,new,value,ttl)` — a Lua `EXISTS old → SET new PX ttl + DEL old` (RedisStateStore) / `InMemoryStateStore` — so the move inherits `putIfPresent`'s race-safety: a concurrent logout that DEL'd `sess:{sid}` during the IdP round-trip is NOT resurrected (fail closed → 404).
+- `InternalResolveController` mints `sid'`, `rotateIfPresent(sess:{sid}→sess:{sid'})`, `SessionIndexes.rotate` repoints `idp_sid:`/`sub_sessions:`/`logout_hint:` at `sid'`, and the `/internal/resolve` response carries `rotated_sid` + `rotated_sid_max_age` (NON_NULL, so the no-rotation response is byte-identical).
+- **Concurrency** (the subtle part): a `rotated:{sid}→sid'` breadcrumb (30 s) lets a concurrent in-flight request still holding the old sid forward to `sess:{sid'}` instead of 404-ing — no session loss. Checked on both the initial-read miss and the under-lock re-read miss.
+- Gateway (`bff-session.lua`): `resolve_session` threads `rotated_sid` through; `header_filter` re-issues the `__Host-sid` / bare-`sid` cookie with `sid'` + Max-Age = remaining absolute. Invisible to the SPA.
+- Docs: SPEC-0001 §7.2 documents it; SECURITY.md S-5 flipped (sid now rotates).
+- Verified: new `InternalResolveControllerTest` cases (rotation: old gone, new holds refreshed token, breadcrumb set; breadcrumb-forward: in-flight old sid → new session, no second refresh); auth suite green; live e2e `sid_rotated_on_refresh` + `old_sid_session_deleted` + `access_expiry_extended_on_rotated_sid` all PASS (gateway 62/0, conformance 9/0).
+**Where.** `StateStore`/`RedisStateStore`/`InMemoryStateStore`, `SessionIndexes`, `InternalResolveController`, `bff-session.lua`, `test-gateway-behavior.sh`, SPEC-0001 §7.2, SECURITY.md S-5.
 
 ---
 

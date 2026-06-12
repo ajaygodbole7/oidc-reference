@@ -549,7 +549,10 @@ local function call_internal_resolve(conf, sid, cc_token)
   return res.status, res.body, nil
 end
 
--- Extract access_token from a /internal/resolve 200 body. nil if missing/malformed.
+-- Extract access_token (+ optional sid rotation) from a /internal/resolve 200
+-- body. Returns: token, rotation. token is nil if missing/malformed. rotation is
+-- { sid = <new_sid>, max_age = <seconds> } when the Auth Service rotated the sid
+-- on this resolve (A6), so the gateway re-issues the session cookie; else nil.
 local function resolve_token_from_body(body)
   if type(body) ~= "string" or body == "" then return nil end
   local parsed = cjson.decode(body)
@@ -557,7 +560,11 @@ local function resolve_token_from_body(body)
      or parsed.access_token == "" then
     return nil
   end
-  return parsed.access_token
+  local rotation
+  if type(parsed.rotated_sid) == "string" and parsed.rotated_sid ~= "" then
+    rotation = { sid = parsed.rotated_sid, max_age = tonumber(parsed.rotated_sid_max_age) }
+  end
+  return parsed.access_token, rotation
 end
 
 -- Resolve the sid into the current access token via /internal/resolve, per the
@@ -584,12 +591,12 @@ local function resolve_session(conf, sid, deps)
 
   local status, body = call_resolve(conf, sid, cc_token)
   if status == 200 then
-    local token = resolve_token_from_body(body)
+    local token, rotation = resolve_token_from_body(body)
     if not token then
       core.log.error("bff-session: /internal/resolve 200 with no access_token")
       return nil, "502"
     end
-    return token, "ok"
+    return token, "ok", rotation
   end
   if status == 404 or status == 409 then
     -- Session was logged out, or refresh was rejected by the IdP
@@ -608,8 +615,8 @@ local function resolve_session(conf, sid, deps)
     end
     local retry_status, retry_body = call_resolve(conf, sid, new_token)
     if retry_status == 200 then
-      local token = resolve_token_from_body(retry_body)
-      if token then return token, "ok" end
+      local token, rotation = resolve_token_from_body(retry_body)
+      if token then return token, "ok", rotation end
       return nil, "502"
     end
     if retry_status == 404 or retry_status == 409 then return nil, "401_clear" end
@@ -710,7 +717,7 @@ function _M.access(conf, ctx)
   -- session, slides the idle window, refreshes if near expiry, and returns the
   -- token. No gateway-side cache, so a server-side session delete is visible on
   -- the very next request (instant revocation).
-  local access_token, action = resolve_session(conf, sid)
+  local access_token, action, rotation = resolve_session(conf, sid)
   if action == "401_clear" then
     -- 404 (session gone) or 409 (invalidated). Evict the now-useless cookie;
     -- the browser sees a no-session response (top-level nav -> 302 login,
@@ -756,6 +763,15 @@ function _M.access(conf, ctx)
   -- can add Cache-Control: no-store on the response. RS already sets
   -- this, but we add it on every path that exits through us.
   ctx.bff_session_added_bearer = true
+
+  -- A6: the resolve rotated the sid. Stash it so header_filter re-issues the
+  -- session cookie on the way back (cookie work belongs in the response phase,
+  -- not here where we are still shaping the upstream request).
+  if rotation then
+    ctx.bff_rotated_sid = rotation.sid
+    ctx.bff_rotated_max_age = rotation.max_age
+    ctx.bff_scheme = scheme
+  end
 end
 
 function _M.header_filter(conf, ctx)
@@ -769,6 +785,25 @@ function _M.header_filter(conf, ctx)
     if not ngx.header["Cache-Control"] then
       ngx.header["Cache-Control"] = "no-store"
     end
+  end
+
+  -- A6: the resolve rotated the sid. Re-issue the session cookie with the new
+  -- value so the browser uses it from the next request. Same name/attributes as
+  -- the Auth Service's login cookie — __Host-sid (Secure) on HTTPS, bare sid on
+  -- local HTTP — and Max-Age = the session's remaining absolute lifetime (from
+  -- the resolve response), so rotation never shortens the cookie's persistence.
+  -- Invisible to the SPA: the gateway swaps the opaque cookie, nothing else.
+  if ctx.bff_rotated_sid then
+    local name = (ctx.bff_scheme == "https") and "__Host-sid" or "sid"
+    local attrs = "; Path=/; HttpOnly; SameSite=Lax"
+    local max_age = ctx.bff_rotated_max_age
+    if type(max_age) == "number" and max_age > 0 then
+      attrs = attrs .. "; Max-Age=" .. math.floor(max_age)
+    end
+    if ctx.bff_scheme == "https" then
+      attrs = attrs .. "; Secure"
+    end
+    ngx.header["Set-Cookie"] = name .. "=" .. ctx.bff_rotated_sid .. attrs
   end
 end
 

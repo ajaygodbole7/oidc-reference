@@ -224,10 +224,10 @@ class InternalResolveControllerTest {
   }
 
   @Test
-  void resolveReturns200WithRotatedAccessTokenWhenExpiring(CapturedOutput output) throws Exception {
+  void resolveRefreshesAndRotatesSidWhenExpiring(CapturedOutput output) throws Exception {
     // Access token expires in 10 s — inside the 60 s window — so resolve
-    // refreshes and returns the ROTATED access token. Assert both the body
-    // and the post-write state of sess:{sid}.
+    // refreshes AND rotates the sid (A6): sess:{old} is gone, the refreshed
+    // session lives under the new sid the response hands back as rotated_sid.
     String sid = "sid-expiring";
     SessionRecord expiring = new SessionRecord(
         "stale-access",
@@ -238,25 +238,68 @@ class InternalResolveControllerTest {
         Map.of("sub", "alice"));
     storeSession(sid, expiring);
 
-    mockMvc.perform(post("/internal/resolve")
+    var result = mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"" + sid + "\"}"))
         .andExpect(status().isOk())
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"access_token\"")))
         .andExpect(content().string(org.hamcrest.Matchers.containsString("refreshed-token")))
-        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"access_token_expires_at\"")));
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"rotated_sid\"")))
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("\"rotated_sid_max_age\"")))
+        .andReturn();
 
     assertThat(tokenRefreshClient.refreshCalls()).isEqualTo(1);
-    SessionRecord rotated = decodeSession(sid);
+
+    // A6: the old key is gone; the refreshed session lives under the rotated sid.
+    @SuppressWarnings("unchecked")
+    Map<String, Object> body =
+        TestBeans.JSON.decode(result.getResponse().getContentAsString(), Map.class);
+    String newSid = (String) body.get("rotated_sid");
+    assertThat(newSid).isNotNull().isNotBlank().isNotEqualTo(sid);
+    assertThat(stateStore.get("sess:" + sid)).as("old session key deleted on rotation").isEmpty();
+    SessionRecord rotated = decodeSession(newSid);
     assertThat(rotated.accessToken()).isEqualTo("refreshed-token");
     assertThat(rotated.refreshToken()).isEqualTo("rotated-refresh-token");
+
+    // The breadcrumb forwards an in-flight old-sid request to the new session.
+    assertThat(stateStore.get("rotated:" + sid)).contains(newSid);
 
     assertThat(output.getOut())
         .contains("event=refresh_succeeded")
         .contains("status=200")
         .contains("reason=ok");
+  }
+
+  @Test
+  void resolveFollowsRotationBreadcrumbForInFlightOldSid() throws Exception {
+    // A6: after a rotation, a request still presenting the OLD sid (a concurrent
+    // call that was already in flight) must NOT lose its session. The
+    // rotated:{old} breadcrumb forwards it to the new session and returns
+    // rotated_sid so the gateway switches the browser to the new cookie. No
+    // second refresh — the new session is already fresh.
+    String oldSid = "sid-old";
+    String newSid = "sid-new";
+    SessionRecord fresh = new SessionRecord(
+        "fresh-access", "fresh-refresh", "id-token-1",
+        Instant.now().plusSeconds(300), Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    storeSession(newSid, fresh);
+    stateStore.put("rotated:" + oldSid, newSid, Duration.ofSeconds(30));
+
+    var result = mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + oldSid + "\"}"))
+        .andExpect(status().isOk())
+        .andExpect(content().string(org.hamcrest.Matchers.containsString("fresh-access")))
+        .andReturn();
+
+    assertThat(tokenRefreshClient.refreshCalls()).isEqualTo(0);
+    @SuppressWarnings("unchecked")
+    Map<String, Object> body =
+        TestBeans.JSON.decode(result.getResponse().getContentAsString(), Map.class);
+    assertThat(body.get("rotated_sid")).isEqualTo(newSid);
   }
 
   @Test

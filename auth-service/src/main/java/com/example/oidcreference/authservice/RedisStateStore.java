@@ -23,6 +23,18 @@ class RedisStateStore implements StateStore {
           + "return 1",
       Long.class);
 
+  // Atomic sid rotation: iff KEYS[1] (sess:{old}) exists, write ARGV[1] under
+  // KEYS[2] (sess:{new}) with a PX TTL of ARGV[2] ms and delete KEYS[1]; else a
+  // no-op returning 0. The EXISTS-gate makes rotation inherit SET XX's
+  // race-safety: a concurrent logout that DEL'd the old key during the refresh
+  // round-trip leaves nothing to rotate, so we fail closed, not resurrect it.
+  private static final RedisScript<Long> ROTATE_IF_PRESENT = new DefaultRedisScript<>(
+      "if redis.call('EXISTS', KEYS[1]) == 1 then "
+          + "redis.call('SET', KEYS[2], ARGV[1], 'PX', tonumber(ARGV[2])); "
+          + "redis.call('DEL', KEYS[1]); "
+          + "return 1 else return 0 end",
+      Long.class);
+
   private final StringRedisTemplate redis;
 
   RedisStateStore(StringRedisTemplate redis) {
@@ -44,6 +56,16 @@ class RedisStateStore implements StateStore {
   public boolean putIfPresent(String key, String value, Duration ttl) {
     Boolean stored = redis.opsForValue().setIfPresent(key, value, ttl);
     return Boolean.TRUE.equals(stored);
+  }
+
+  @Override
+  public boolean rotateIfPresent(String oldKey, String newKey, String value, Duration ttl) {
+    Long rotated = redis.execute(
+        ROTATE_IF_PRESENT,
+        List.of(oldKey, newKey),
+        value,
+        Long.toString(ttl.toMillis()));
+    return rotated != null && rotated == 1L;
   }
 
   @Override

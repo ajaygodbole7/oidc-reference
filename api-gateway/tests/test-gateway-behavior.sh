@@ -415,21 +415,49 @@ test_expiring_session_triggers_refresh_delegation() {
   status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
     -H "Cookie: __Host-sid=$sid" \
     "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-  after_expiry="$(get_session_field "$sid" access_token_expires_at)"
+
+  # A6: a successful refresh ROTATES the sid. The gateway re-issues the session
+  # cookie with the new sid; follow that Set-Cookie to read the refreshed session.
+  new_sid="$(grep -iE '^set-cookie:' "$HEADERS_TMP" \
+    | sed -E -n 's/^[Ss]et-[Cc]ookie:[[:space:]]*(__Host-)?sid=([^;[:space:]]+).*/\2/p' \
+    | head -1)"
+  [ -n "$new_sid" ] && track_sid "$new_sid"
+  after_expiry="$(get_session_field "$new_sid" access_token_expires_at)"
 
   # With a real session before and after refresh, the RS should accept the
   # gateway-injected bearer and return 200. A 401 here means either refresh did
   # not happen or the post-refresh token is not accepted by the RS.
   assert_status "$name status" 200 "$status"
 
-  if [ -n "$before_expiry" ] && [ -n "$after_expiry" ] && [ "$after_expiry" \> "$before_expiry" ]; then
-    printf '[PASS] %s access_expiry_extended\n' "$name"
+  # The sid rotated to a new value.
+  if [ -n "$new_sid" ] && [ "$new_sid" != "$sid" ]; then
+    printf '[PASS] %s sid_rotated_on_refresh\n' "$name"
     PASSED=$((PASSED + 1))
   else
-    printf '[FAIL] %s expected access_token_expires_at to move forward after refresh\n' "$name"
+    printf '[FAIL] %s sid did not rotate on refresh (new_sid=%s)\n' "$name" "$new_sid"
+    FAILED=$((FAILED + 1))
+  fi
+
+  # The OLD sid's session key was deleted by the rotation.
+  if [ -z "$(get_session_field "$sid" access_token_expires_at)" ]; then
+    printf '[PASS] %s old_sid_session_deleted\n' "$name"
+    PASSED=$((PASSED + 1))
+  else
+    printf '[FAIL] %s old sid session still present after rotation\n' "$name"
+    FAILED=$((FAILED + 1))
+  fi
+
+  # The refreshed token lives under the new sid and its access expiry moved forward.
+  if [ -n "$before_expiry" ] && [ -n "$after_expiry" ] && [ "$after_expiry" \> "$before_expiry" ]; then
+    printf '[PASS] %s access_expiry_extended_on_rotated_sid\n' "$name"
+    PASSED=$((PASSED + 1))
+  else
+    printf '[FAIL] %s expected access_token_expires_at to move forward on the rotated sid (new_sid=%s before=%s after=%s)\n' \
+      "$name" "$new_sid" "$before_expiry" "$after_expiry"
     FAILED=$((FAILED + 1))
   fi
   clear_session "$sid"
+  [ -n "$new_sid" ] && clear_session "$new_sid"
 }
 
 test_refresh_failure_evicts_session_and_clears_cookie() {

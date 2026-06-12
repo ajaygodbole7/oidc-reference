@@ -45,6 +45,29 @@ class SessionIndexes {
     }
   }
 
+  // Repoint the secondary indexes from oldSid to newSid after a sid rotation on
+  // refresh. A refresh does NOT change the IdP session id — only the LOCAL sid
+  // moves — so idp_sid:{idpSid} is repointed at newSid, the sub_sessions:{sub}
+  // membership is swapped (add new before removing old, so the subject is always
+  // represented by at least one live sid), and the logout hint is moved. Index
+  // TTL is the remaining absolute lifetime, exactly as index().
+  void rotate(String oldSid, String newSid, SessionRecord session) {
+    Duration ttl = Duration.between(Instant.now(), session.absoluteExpiresAt());
+    if (ttl.isNegative() || ttl.isZero()) {
+      return;
+    }
+    idpSid(session).ifPresent(idpSid ->
+        stateStore.put(IDP_SID_PREFIX + idpSid, newSid, ttl));
+    subject(session).ifPresent(sub -> {
+      addSubjectSession(sub, newSid, ttl);
+      removeSubjectSession(sub, oldSid);
+    });
+    stateStore.delete(LOGOUT_HINT_PREFIX + oldSid);
+    if (session.idToken() != null && !session.idToken().isBlank()) {
+      stateStore.put(LOGOUT_HINT_PREFIX + newSid, session.idToken(), ttl);
+    }
+  }
+
   Optional<String> consumeLogoutHint(String localSid) {
     return stateStore.getAndDelete(LOGOUT_HINT_PREFIX + localSid);
   }

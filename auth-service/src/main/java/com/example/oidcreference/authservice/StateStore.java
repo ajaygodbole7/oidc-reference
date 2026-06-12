@@ -15,6 +15,13 @@ interface StateStore {
   // NOT resurrected — the delete paths do not share the per-sid refresh lock.
   boolean putIfPresent(String key, String value, Duration ttl);
 
+  // Atomic rotate: iff oldKey exists, write value under newKey (with ttl) and
+  // delete oldKey, returning true. If oldKey is absent — e.g. a concurrent
+  // logout deleted sess:{sid} during a refresh round-trip — this is a no-op
+  // returning false: the session is NOT resurrected under newKey. The sid
+  // rotation on refresh uses this so it inherits putIfPresent's race-safety.
+  boolean rotateIfPresent(String oldKey, String newKey, String value, Duration ttl);
+
   Optional<String> get(String key);
 
   Optional<String> getAndDelete(String key);

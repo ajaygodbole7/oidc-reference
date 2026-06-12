@@ -402,6 +402,19 @@ serialized — only the near-expiry refresh takes the lock. The in-process lock 
 is bounded by session lifetime. A clustered Auth Service must replace it
 with a distributed lock (e.g., Valkey `SET NX EX`).
 
+**Sid rotation on refresh.** A successful refresh also rotates the local session
+id. The Auth Service mints `sid'`, atomically moves `sess:{sid}` → `sess:{sid'}`
+(an `EXISTS`-gated rename, so a concurrent logout that deleted the old key during
+the IdP round-trip is not resurrected — the refresh fails closed), repoints the
+`idp_sid:` / `sub_sessions:` / `logout_hint:` indexes, and returns `rotated_sid`
+(plus the cookie max-age) in the `/internal/resolve` response. The gateway
+re-issues the `__Host-sid` cookie with `sid'`; the SPA never sees it. A
+once-observed `sid` is therefore valid only until the session's next refresh, not
+the full absolute window (Threat Model S-5). A short-lived `rotated:{sid}` → `sid'`
+breadcrumb (a few seconds) covers the concurrent in-flight requests above: the
+loser that finds `sess:{sid}` gone follows the breadcrumb to `sess:{sid'}` and
+switches the browser to the new cookie, so rotation never costs a session a 404.
+
 ### Session Lifecycle
 
 - No pre-callback **session** cookie. The Auth Service sets only the

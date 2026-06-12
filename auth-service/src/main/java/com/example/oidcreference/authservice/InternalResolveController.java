@@ -36,10 +36,19 @@ import org.springframework.web.bind.annotation.RestController;
 class InternalResolveController {
   private static final Logger log = LoggerFactory.getLogger(InternalResolveController.class);
 
+  // Forward-pointer breadcrumb left when a refresh rotates the sid (A6): maps the
+  // OLD sid -> the new sid for a short grace window, so a concurrent request that
+  // was already in flight with the old cookie still resolves (to the new session)
+  // instead of losing its session. Also bounds how long a stolen old sid remains
+  // usable after a rotation — to this window, not the absolute ceiling.
+  private static final String ROTATED_PREFIX = "rotated:";
+  private static final Duration ROTATION_GRACE = Duration.ofSeconds(30);
+
   private final StateStore stateStore;
   private final JsonCodec json;
   private final TokenRefreshClient tokenRefreshClient;
   private final AuthProperties props;
+  private final SessionIndexes sessionIndexes;
   // Serializes concurrent refreshes for one sid so they collapse to a single
   // upstream grant. A RefreshLock interface (default InProcessRefreshLock, a
   // per-JVM lock) rather than a hardcoded map, so the single-instance lock is a
@@ -53,12 +62,14 @@ class InternalResolveController {
       JsonCodec json,
       TokenRefreshClient tokenRefreshClient,
       AuthProperties props,
-      RefreshLock refreshLock) {
+      RefreshLock refreshLock,
+      SessionIndexes sessionIndexes) {
     this.stateStore = stateStore;
     this.json = json;
     this.tokenRefreshClient = tokenRefreshClient;
     this.props = props;
     this.refreshLock = refreshLock;
+    this.sessionIndexes = sessionIndexes;
   }
 
   @PostMapping(path = "/resolve", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -83,6 +94,12 @@ class InternalResolveController {
     var sessKey = "sess:" + req.sid();
     Optional<String> raw = stateStore.get(sessKey);
     if (raw.isEmpty()) {
+      // The sid may have rotated under a concurrent refresh — follow the
+      // breadcrumb to the new session before giving up.
+      var forwarded = resolveViaBreadcrumb(req.sid(), request);
+      if (forwarded != null) {
+        return forwarded;
+      }
       SecurityAudit.event(request, 404, "refresh_rejected", "no_such_session");
       return problem(404, "no such session");
     }
@@ -120,6 +137,12 @@ class InternalResolveController {
       String sid, String sessKey, HttpServletRequest request) {
     Optional<String> raw = stateStore.get(sessKey);
     if (raw.isEmpty()) {
+      // A concurrent caller rotated this sid while we waited for the lock — the
+      // old key is gone. Follow the breadcrumb to the rotated session.
+      var forwarded = resolveViaBreadcrumb(sid, request);
+      if (forwarded != null) {
+        return forwarded;
+      }
       SecurityAudit.event(request, 404, "refresh_rejected", "no_such_session");
       return problem(404, "no such session");
     }
@@ -187,18 +210,26 @@ class InternalResolveController {
       stateStore.delete(sessKey);
       return problem(404, "session past absolute TTL");
     }
-    // Conditional write: persist the rotated tokens only if sess:{sid} still
-    // exists. A concurrent logout (which does NOT take this lock) can DEL the
-    // session during the upstream round-trip; an unconditional SET would
-    // resurrect it. SET ... XX makes the write a no-op and we fail closed.
-    if (!stateStore.putIfPresent(sessKey, json.encode(refreshed), nextTtl)) {
+    // Rotate the sid on refresh (A6): a once-observed sid must not stay valid
+    // across token rotations. Mint sid', then ATOMICALLY move sess:{sid} ->
+    // sess:{sid'} only if the old key still exists. A concurrent logout (which
+    // does NOT take this lock) can DEL the session during the upstream
+    // round-trip; rotateIfPresent's EXISTS-gate fails closed in that case rather
+    // than resurrecting it — the same property the old SET XX gave.
+    String newSid = CryptoSupport.randomUrlToken(32);
+    if (!stateStore.rotateIfPresent(sessKey, "sess:" + newSid, json.encode(refreshed), nextTtl)) {
       SecurityAudit.event(
           request, 404, "refresh_rejected", "session_deleted_during_refresh",
           subjectClaim(refreshed));
       return problem(404, "session ended, re-login required");
     }
+    // Breadcrumb: a concurrent request still in flight with the OLD sid forwards
+    // to sid' for a short grace window instead of losing its session.
+    stateStore.put(ROTATED_PREFIX + sid, newSid, ROTATION_GRACE);
+    // Repoint the secondary indexes (idp_sid / sub_sessions / logout_hint) at sid'.
+    sessionIndexes.rotate(sid, newSid, refreshed);
     SecurityAudit.event(request, 200, "refresh_succeeded", "ok", subjectClaim(refreshed));
-    return ok(refreshed);
+    return okRotated(refreshed, newSid);
   }
 
   // Slide the idle window on the live key. This is the slide that used to be a
@@ -215,7 +246,43 @@ class InternalResolveController {
   }
 
   private ResponseEntity<ResolveResponse> ok(SessionRecord session) {
-    return ResponseEntity.ok(new ResolveResponse(session.accessToken(), session.expiresAt()));
+    return ResponseEntity.ok(
+        new ResolveResponse(session.accessToken(), session.expiresAt(), null, null));
+  }
+
+  // The sid rotated on this resolve: hand the new sid back, plus the cookie's
+  // max-age (the session's remaining absolute lifetime), so the gateway re-issues
+  // the __Host-sid cookie with sid'. Invisible to the SPA.
+  private ResponseEntity<ResolveResponse> okRotated(SessionRecord session, String rotatedSid) {
+    long maxAge = Math.max(0L,
+        Duration.between(Instant.now(), session.absoluteExpiresAt()).getSeconds());
+    return ResponseEntity.ok(
+        new ResolveResponse(session.accessToken(), session.expiresAt(), rotatedSid, maxAge));
+  }
+
+  // A concurrent request may have rotated this sid (sess:{sid} -> sess:{sid'})
+  // while THIS request was in flight. The rotated:{sid} breadcrumb (short grace
+  // TTL) forwards us to sid': resolve sess:{sid'}, slide it, and return its token
+  // tagged with rotated_sid=sid' so the gateway switches the browser to the new
+  // cookie. Returns null when there is no breadcrumb (genuinely no session) or
+  // the forwarded session is itself gone/expired — the caller then 404s.
+  private ResponseEntity<ResolveResponse> resolveViaBreadcrumb(
+      String oldSid, HttpServletRequest request) {
+    Optional<String> newSid = stateStore.get(ROTATED_PREFIX + oldSid);
+    if (newSid.isEmpty()) {
+      return null;
+    }
+    String newKey = "sess:" + newSid.get();
+    Optional<String> raw = stateStore.get(newKey);
+    if (raw.isEmpty()) {
+      return null;
+    }
+    var session = json.decode(raw.get(), SessionRecord.class);
+    if (session.absoluteExpired()) {
+      return null;
+    }
+    slideIdle(newKey, session);
+    return okRotated(session, newSid.get());
   }
 
   // Package-private + parameterized so the configurable identity is unit-tested
@@ -268,7 +335,14 @@ class InternalResolveController {
   // Wire shape MUST be snake_case per SPEC-0001 §7.1 — the API Gateway (Lua,
   // case-sensitive) reads `access_token` verbatim and injects it as the
   // upstream bearer. Java fields stay camelCase; @JsonProperty pins the wire name.
+  // rotated_sid / rotated_sid_max_age are present ONLY when this resolve rotated
+  // the sid (A6): the gateway then re-issues the session cookie with the new sid.
+  // NON_NULL keeps the common no-rotation response byte-identical.
+  @com.fasterxml.jackson.annotation.JsonInclude(
+      com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
   record ResolveResponse(
       @JsonProperty("access_token") String accessToken,
-      @JsonProperty("access_token_expires_at") Instant accessTokenExpiresAt) {}
+      @JsonProperty("access_token_expires_at") Instant accessTokenExpiresAt,
+      @JsonProperty("rotated_sid") String rotatedSid,
+      @JsonProperty("rotated_sid_max_age") Long rotatedSidMaxAge) {}
 }
