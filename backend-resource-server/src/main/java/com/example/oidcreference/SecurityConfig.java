@@ -111,6 +111,15 @@ class SecurityConfig {
     OAuth2TokenValidator<Jwt> audienceValidator = new JwtClaimValidator<Object>(
         JwtClaimNames.AUD,
         aud -> hasAudience(aud, audience));
+    // RFC 9068 §2.1 RECOMMENDS access tokens carry typ=at+JWT, and a typ-header
+    // validator would be defense-in-depth (B6). It is deliberately NOT added:
+    // the threat it guards — an ID token presented as an access token — is
+    // already blocked here by the audience pin, because this realm's ID tokens
+    // carry aud=oidc-reference-auth while access tokens carry the configured API
+    // audience. Adding a strict typ=at+JWT check would also require reconfiguring
+    // Keycloak to emit at+JWT (it sends typ=JWT by default), or the RS would 401
+    // every token. The audience pin is the load-bearing control; typ validation
+    // is a documented Do-Later (see review-backlog B6).
     return new DelegatingOAuth2TokenValidator<>(defaults, audienceValidator);
   }
 
