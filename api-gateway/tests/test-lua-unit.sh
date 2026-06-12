@@ -28,6 +28,16 @@ if ! docker run --rm \
   status=1
 fi
 
+# Pure helpers: constant-time byte comparison (the primitive under signed-CSRF /
+# HMAC validation). hmac_b64url + csrf_ok need OpenResty's resty.hmac / ngx and
+# are covered by the live CSRF battery in test-gateway-behavior.sh instead.
+echo "== pure functions (constant_time_equals) =="
+if ! docker run --rm \
+    -v "$GATEWAY_DIR:/gateway:ro" -w /gateway \
+    "$APISIX_IMAGE" "$LUAJIT" tests/test-pure-fns.lua plugins/bff-session.lua; then
+  status=1
+fi
+
 if [ "$status" -ne 0 ]; then
   echo "test-lua-unit: FAIL" >&2
 else

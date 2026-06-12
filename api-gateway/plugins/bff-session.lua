@@ -624,6 +624,11 @@ end
 -- APISIX plugin contract.
 _M._resolve_session = resolve_session
 
+-- Test hook: constant-time byte comparison — the primitive under signed-CSRF and
+-- HMAC validation. Pure (string + bit ops, no ngx/resty), so test-pure-fns.lua
+-- exercises its correctness directly in bare LuaJIT. Not part of the contract.
+_M._constant_time_equals = constant_time_equals
+
 -- ---------------------------------------------------------------------
 -- Plugin lifecycle
 -- ---------------------------------------------------------------------
