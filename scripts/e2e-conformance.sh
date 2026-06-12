@@ -236,67 +236,72 @@ fi
 clear_session "$sid"
 
 # --- C9.4 repeated /api activity keeps the session alive past one idle window -
+# De-flaked (C3): instead of two fixed `sleep 6` against idle=10 (4s of margin a
+# slow host can drift past), poll /api at gaps well UNDER the idle window across
+# MORE than one window. Each call slides the idle TTL; because no inter-call gap
+# approaches the window, a slow host only delays the test — it cannot flip it to
+# a false failure. Without the slide the session would expire at one idle window;
+# we assert it still EXISTS with a live TTL at the end.
 sid="conf-steady-api-1"
 setup_session_absolute "$sid" "test-jwt-steady-api" 300 60 "$ALT_IDLE"
-status1="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
-  -H "Cookie: __Host-sid=$sid" \
-  "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-case "$status1" in
-  302|403|502|000|"")
-    printf '[FAIL] C9.4 first /api did not forward (status=%s)\n' "$status1"
-    FAILED=$((FAILED + 1)) ;;
-  *)
-    sleep 6
-    status2="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
-      -H "Cookie: __Host-sid=$sid" \
-      "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-    sleep 6
-    status3="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
-      -H "Cookie: __Host-sid=$sid" \
-      "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-    exists="$(valkey_exec EXISTS "sess:$sid" | tr -d '\r')"
-    ttl="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"
-    case "$status2:$status3:$exists" in
-      302:*|403:*|502:*|000:*|*:302:*|*:403:*|*:502:*|*:000:*|*:0)
-        printf '[FAIL] C9.4 repeated /api did not keep session alive (status2=%s status3=%s exists=%s ttl=%s)\n' \
-          "$status2" "$status3" "$exists" "$ttl"
-        FAILED=$((FAILED + 1)) ;;
-      *)
-        printf '[PASS] C9.4 repeated /api kept session alive beyond one idle window (status2=%s status3=%s ttl=%s)\n' \
-          "$status2" "$status3" "$ttl"
-        PASSED=$((PASSED + 1)) ;;
-    esac ;;
-esac
+gap=$(( ALT_IDLE / 3 ))
+[ "$gap" -lt 2 ] && gap=2
+alive=1
+calls=0
+while [ "$calls" -lt 6 ]; do   # 6 calls, 5 gaps -> >= ~1.6 idle windows elapsed
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid" \
+    "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+  case "$status" in 302|403|502|000|"") alive=0; break ;; esac
+  calls=$((calls + 1))
+  [ "$calls" -lt 6 ] && sleep "$gap"
+done
+exists="$(valkey_exec EXISTS "sess:$sid" | tr -d '\r')"
+ttl="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"; ttl="${ttl:-0}"
+if [ "$alive" = 1 ] && [ "$exists" != 0 ] && [ "$ttl" -gt 0 ]; then
+  printf '[PASS] C9.4 repeated /api kept session alive beyond one idle window (calls=%s exists=%s ttl=%s)\n' \
+    "$calls" "$exists" "$ttl"
+  PASSED=$((PASSED + 1))
+else
+  printf '[FAIL] C9.4 repeated /api did not keep session alive (alive=%s exists=%s ttl=%s)\n' \
+    "$alive" "$exists" "$ttl"
+  FAILED=$((FAILED + 1))
+fi
 clear_session "$sid"
 
 # --- C9.5 absolute ceiling still wins under repeated /api activity ------------
+# De-flaked (C3): the absolute ceiling (11s) must end the session despite the
+# idle slide that continuous /api activity applies. Poll /api to a deadline well
+# past the ceiling and detect death by EXISTS=0 — NOT by status: a non-JWT token
+# yields RS 401 while the session is alive AND the gateway yields 401 once it is
+# gone, so only EXISTS distinguishes "alive" from "ended".
 sid="conf-absolute-ceiling-1"
 setup_session_absolute "$sid" "test-jwt-absolute-ceiling" 300 11 "$ALT_IDLE"
 status1="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
   -H "Cookie: __Host-sid=$sid" \
   "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-sleep 6
-status2="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
-  -H "Cookie: __Host-sid=$sid" \
-  "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-sleep 6
-status3="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
-  -H "Cookie: __Host-sid=$sid" \
-  "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-exists="$(valkey_exec EXISTS "sess:$sid" | tr -d '\r')"
-case "$status1:$status2:$status3:$exists" in
-  302:*|403:*|502:*|000:*|*:302:*|*:403:*|*:502:*|*:000:*)
-    printf '[FAIL] C9.5 setup activity failed before proving ceiling (status1=%s status2=%s status3=%s exists=%s)\n' \
-      "$status1" "$status2" "$status3" "$exists"
+died=0
+iter=0
+while [ "$iter" -lt 14 ]; do   # 14 * 2s = 28s, well past the 11s ceiling
+  exists="$(valkey_exec EXISTS "sess:$sid" | tr -d '\r')"
+  [ "$exists" = 0 ] && { died=1; break; }
+  sleep 2
+  curl -s -o /dev/null -H "Cookie: __Host-sid=$sid" \
+    "$GATEWAY_BASE/api/me" 2>/dev/null || true
+  iter=$((iter + 1))
+done
+case "$status1" in
+  302|403|502|000|"")
+    printf '[FAIL] C9.5 setup /api did not forward (status1=%s) — cannot prove ceiling\n' "$status1"
     FAILED=$((FAILED + 1)) ;;
-  *:401:0)
-    printf '[PASS] C9.5 absolute ceiling ended session despite repeated /api activity (final status=%s)\n' \
-      "$status3"
-    PASSED=$((PASSED + 1)) ;;
   *)
-    printf '[FAIL] C9.5 expected absolute ceiling to end session; got status1=%s status2=%s status3=%s exists=%s\n' \
-      "$status1" "$status2" "$status3" "$exists"
-    FAILED=$((FAILED + 1)) ;;
+    if [ "$died" = 1 ]; then
+      printf '[PASS] C9.5 absolute ceiling ended session despite repeated /api activity (iters=%s)\n' "$iter"
+      PASSED=$((PASSED + 1))
+    else
+      printf '[FAIL] C9.5 expected absolute ceiling to end session; still alive past deadline\n'
+      FAILED=$((FAILED + 1))
+    fi ;;
 esac
 clear_session "$sid"
 

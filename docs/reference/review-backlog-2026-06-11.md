@@ -103,9 +103,8 @@ The still-valid items from that file are carried forward below and marked `[carr
 **Resolved (softening route).** The universal "every matrix behavior MUST also have a live assertion / not a fabricated JWT" over-claim lived in `SPEC-0002`, which was folded into `SPEC-0001` and deleted (no `SPEC-0002` reference remains repo-wide). SPEC-0001's "Live conformance gates" section already scopes "real tokens, not fabricated JWTs" to *the live suites* (e2e-auth, C8, C9, BCL); it never claimed the ID-token / RS issuer-aud negatives are live. Added a sentence making the split explicit: those token-shape negatives are unit-layer with synthetic JWTs (`JwtDecoderNegativeTest` + the AS ID-token tests), the live suites assert the happy path + the trust-boundary/session-window/logout negatives end-to-end — two deliberate layers, not a gap. The spec now claims exactly what is true.
 **Where.** `docs/specs/SPEC-0001-core-oidc-flows.md` § "Live conformance gates".
 
-### C3 — De-flake the timing-based conformance gates — Med
-**Why.** C9.4/C9.5 use fixed `sleep 6` against compressed TTLs (idle=10s). On a loaded host or slow APISIX reload, the sleep + request latency can drift across the 10s boundary and flip the gate to a false failure (or false pass if timing coincidentally aligns).
-**What's needed.** Poll the Valkey TTL/EXISTS transition instead of sleeping a fixed interval, or widen the margins.
+### C3 — De-flake the timing-based conformance gates — **[done]**
+**Resolved.** Replaced the two fixed `sleep 6` against idle=10 (4s of drift margin) with polling. C9.4 (keep-alive) now polls `/api` at gaps of `idle/3` across >1 idle window and asserts the session still EXISTS with a live TTL — a slow host only delays, can't flip it. C9.5 (ceiling) polls `/api` to a deadline well past the 11s ceiling and detects death by `EXISTS=0` (a non-JWT yields RS 401 whether the session is alive or gone, so only EXISTS distinguishes — the old `*:401:0` match was fragile). Verified: C9.4/C9.5 PASS in the live conformance run.
 **Where.** `scripts/e2e-conformance.sh` (C9.4/C9.5).
 
 ### C4 — Live PKCE-mismatch and `tx:{state}` 5-minute expiry negatives — Low `[carried as C1-spec]`
