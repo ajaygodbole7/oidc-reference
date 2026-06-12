@@ -238,7 +238,7 @@ services:
     networks:
       - oidc-internal
     healthcheck:
-      # The apache/apisix:3.11.0-debian image does not ship curl/wget/nc;
+      # The apache/apisix:3.16.0-debian image does not ship curl/wget/nc;
       # bash and /dev/tcp DO work. A successful TCP open on 9080 proves
       # the worker is accepting connections — that's the property we want
       # for a "container is ready" gate. The admin endpoint /apisix/status
