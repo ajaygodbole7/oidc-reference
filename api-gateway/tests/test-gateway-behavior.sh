@@ -698,9 +698,12 @@ test_session_past_absolute_ceiling_returns_401() {
   name="session_past_absolute_ceiling_returns_401"
   sid="ceiling-past-1"
   # Session whose absolute ceiling is already in the past, but whose access
-  # token is still "fresh". The gateway MUST refuse to slide it and treat it as
-  # no session (401) + evict the cookie — never EXPIRE a past-ceiling session
-  # back to life. This is the hard upper bound on session lifetime (A4/C14).
+  # token is still "fresh". A gateway /api request resolves via /internal/resolve;
+  # the Auth Service MUST refuse to slide it and report no session, so the gateway
+  # returns 401 + evicts the cookie — a past-ceiling session is never EXPIRE'd back
+  # to life. This is the hard upper bound on session lifetime (A4/C14). The slide
+  # moved from the gateway's Lua to the Auth Service in the phantom-token rewrite;
+  # this test still drives it through a gateway /api call and observes the effect.
   setup_session_absolute "$sid" "test-jwt-ceiling-past" 300 -5 1800
   status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
     -H "Cookie: __Host-sid=$sid" \
@@ -721,9 +724,11 @@ test_ttl_slide_capped_at_absolute_ceiling() {
   name="ttl_slide_capped_at_absolute_ceiling"
   sid="ceiling-cap-1"
   # Absolute ceiling only ~8s away; the Valkey key currently has a much larger
-  # TTL (100s). A /api request slides the idle window, but the gateway MUST cap
-  # EXPIRE at remaining_absolute (~8s), NOT bump it to the full idle window
-  # (1800s). So the post-call TTL proves the cap: it lands near ~8, never ~1800.
+  # TTL (100s). A gateway /api request resolves via /internal/resolve; the Auth
+  # Service slides the idle window but MUST cap it at remaining_absolute (~8s),
+  # NOT bump it to the full idle window (1800s). So the post-call TTL proves the
+  # cap: it lands near ~8, never ~1800. (The slide lives in the Auth Service since
+  # the phantom-token rewrite; the test drives it through a gateway /api call.)
   setup_session_absolute "$sid" "test-jwt-cap" 300 8 100
   status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
     -H "Cookie: __Host-sid=$sid" \
@@ -731,7 +736,8 @@ test_ttl_slide_capped_at_absolute_ceiling() {
   assert_plugin_forwarded "$name" "$status" "$HEADERS_TMP" "$BODY_TMP"
   after="$(valkey_exec TTL "sess:$sid" | tr -d '\r')"
   # Capped near remaining_absolute (~8s, allow a little clock slack), and well
-  # below the idle window — proving the gateway never extends past the ceiling.
+  # below the idle window — proving the Auth Service's slide never extends past
+  # the ceiling.
   if [ "$after" -gt 0 ] && [ "$after" -le 12 ]; then
     printf '[PASS] %s ttl_capped_at_ceiling after=%s (<=~remaining, not idle 1800)\n' \
       "$name" "$after"

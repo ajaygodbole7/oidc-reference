@@ -126,10 +126,11 @@ sub` (optionally that the IdP `sid` is unchanged); on mismatch throw
   502 is proven, but no end-to-end test drives a real transient AS failure and asserts
   cookie retained + `Retry-After`. Lower value (unit + AS tests bracket it). (Was C2.)
 - **O8 — Re-comment the gateway TTL/ceiling tests to the right plane.** `REF`, Low.
-  `test-gateway-behavior.sh` TTL/ceiling tests + `lib.sh` still carry "the slide that
-  used to live in the gateway's Lua EXPIRE" framing; the slide now runs in the Auth
-  Service behind `/internal/resolve`. Re-comment or consolidate with the
-  `InternalResolveControllerTest` slide tests. (Was C3.)
+  **DONE 2026-06-12.** Reworded the slide/ceiling-cap/past-ceiling-evict comments in
+  `test-gateway-behavior.sh` (×3) and `lib.sh` `setup_session_absolute` (×1) to attribute the
+  idle-slide + cap to the Auth Service inside `/internal/resolve` (driven by a gateway `/api`
+  request, effect observed on the Valkey key) — not the gateway's old Lua `EXPIRE`. Comment-only;
+  `sh -n` clean. (Was C3.)
 - **O9 — Trim the phantom-token ADR's repetition.** `REF`, Info. It restates "the Auth
   Service is the only component that touches the store" ~4×. Stylistic; no invented
   precision (all TTLs/timeouts match code). (Was E2.)

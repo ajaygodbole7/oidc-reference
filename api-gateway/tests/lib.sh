@@ -89,8 +89,9 @@ setup_session_with_extra() {
 
 setup_session_absolute() {
   # Like setup_session but with explicit control over the absolute ceiling and
-  # the Valkey key TTL, so callers can prove the gateway's idle-slide is capped
-  # by `absolute_expires_at`:
+  # the Valkey key TTL, so callers can prove the idle-slide — performed by the
+  # Auth Service inside /internal/resolve, driven by a gateway /api request — is
+  # capped by `absolute_expires_at`:
   #   $1 sid  $2 access_token  $3 access_expires_in  $4 absolute_in  $5 ttl
   # $4 may be NEGATIVE to model a session already past its hard ceiling.
   sid="$1"
