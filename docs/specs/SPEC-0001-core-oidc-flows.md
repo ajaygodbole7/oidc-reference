@@ -349,8 +349,9 @@ neither is multiplexed through a framework-managed HTTP session blob.
 `tx:{state}` is addressed by the OAuth `state` parameter (round-tripped
 through Keycloak). `sess:{sid}` is addressed only by the opaque session
 cookie and is created only after a successful callback. The Auth Service
-is the sole writer of both keyspaces. The API Gateway is the sole reader
-of `sess:{sid}` on the bearer-injection path.
+is the sole writer and sole reader of both keyspaces. On the bearer-injection
+path the API Gateway has no store handle and resolves `sess:{sid}` indirectly
+through `/internal/resolve`.
 
 - `tx:{state}` → `{verifier, nonce, saved_request, created_at, tx_cookie_hash}`.
   TTL 5m. Deleted on callback (success or failure).

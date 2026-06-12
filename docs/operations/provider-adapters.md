@@ -67,12 +67,12 @@ provider-specific overlay.
 | `AUTH_CLIENT_SECRET` | Auth Service | Confidential OIDC client secret. |
 | `OIDC_SCOPES` | Auth Service | Comma-separated requested scopes. Defaults to the local Keycloak scopes. |
 | `OIDC_ROLES_CLAIM_PATH` | Auth Service, Resource Server | Comma-separated claim path for roles/groups, for example `realm_access,roles` or `groups`. |
-| `GATEWAY_CLIENT_ID` | Auth Service, APISIX | Client id the gateway authenticates as for `/internal/refresh`, and the value the Auth Service requires in the caller's `azp`/`client_id`. Set in both. Default `oidc-reference-api-gateway`. |
-| `INTERNAL_REFRESH_AUDIENCE` | Auth Service | Audience the gateway's Client-Credentials token must carry for `/internal/refresh`. Default `oidc-reference-auth-internal`. |
+| `GATEWAY_CLIENT_ID` | Auth Service, APISIX | Client id the gateway authenticates as for `/internal/resolve`, and the value the Auth Service requires in the caller's `azp`/`client_id`. Set in both. Default `oidc-reference-api-gateway`. |
+| `INTERNAL_REFRESH_AUDIENCE` | Auth Service | Audience the gateway's Client-Credentials token must carry for `/internal/resolve`. Default `oidc-reference-auth-internal`. |
 | `RS_SERVICE_CLIENT_IDS` | Resource Server | Comma-separated client ids treated as service accounts (denied on `/api/me`). Default `oidc-reference-api-gateway,oidc-reference-service`. |
 | `RS_JOBS_CLIENT_ID` | Resource Server | The single service client authorized to `POST /api/jobs`. Default `oidc-reference-service`. |
 | `OIDC_AUDIENCE` | Resource Server | Required access-token audience for `/api/**`. |
-| `GATEWAY_CLIENT_SECRET` | APISIX | API Gateway client-credentials secret for `/internal/refresh`. |
+| `GATEWAY_CLIENT_SECRET` | APISIX | API Gateway client-credentials secret for `/internal/resolve`. |
 | `CSRF_SIGNING_KEY` | Auth Service, APISIX | Shared 256-bit Base64 HMAC key for signed double-submit CSRF. |
 
 Local Keycloak uses this split:
@@ -135,7 +135,7 @@ For a provider to pass the reference's portability bar:
 4. Access token validates at the Resource Server: `iss`, signature, `exp`,
    `aud=OIDC_AUDIENCE`, standard `scope` / `scp` authorities, and configured
    role claim path.
-5. API Gateway obtains a client-credentials token that Auth Service accepts for `/internal/refresh`.
+5. API Gateway obtains a client-credentials token that Auth Service accepts for `/internal/resolve`.
 6. Refresh behavior is understood:
    - Keep `APP_REFRESH_REQUIRE_ROTATION=true` for providers with refresh-token rotation and reuse detection.
    - Set it false only for a provider that does not rotate refresh tokens, and document that downgrade.

@@ -26,10 +26,11 @@ contracts, see [`../specs/SPEC-0001-core-oidc-flows.md`](../specs/SPEC-0001-core
    Flow with PKCE. The Auth Service writes `tx:{state}` to the state store,
    creates `sess:{sid}` after callback, and issues a `302` to the saved
    request URL with `__Host-sid` (`SameSite=Lax`) and a signed `XSRF-TOKEN`.
-   The API Gateway reads `sess:{sid}` on each `/api/**` request and forwards
-   to the Resource Server with `Authorization: Bearer`. Refresh is delegated
-   back to the Auth Service over the `/internal/refresh` RPC, authenticated
-   with Client Credentials.
+   On each `/api/**` request the API Gateway calls the Auth Service over the
+   `/internal/resolve` RPC to obtain the current access token, then forwards
+   to the Resource Server with `Authorization: Bearer`. Session lookup, the
+   idle-TTL slide, and refresh are all delegated to the Auth Service inside
+   that call, authenticated with Client Credentials.
 2. **Service authorization.** A machine client uses the Client Credentials
    Flow against Keycloak, then calls service-only Resource Server endpoints
    directly. Neither the Auth Service nor the API Gateway is in this path.
@@ -43,19 +44,21 @@ contracts, see [`../specs/SPEC-0001-core-oidc-flows.md`](../specs/SPEC-0001-core
   Confidential OIDC client. Owns the OAuth flow, the session cookie, the
   custom Redis-compatible `tx:{state}` and `sess:{sid}` repositories,
   ID-token validation, refresh-token rotation with reuse detection,
-  RP-initiated logout, OIDC Back-Channel Logout, and the `/internal/refresh`
+  RP-initiated logout, OIDC Back-Channel Logout, and the `/internal/resolve`
   RPC (served as an OAuth Resource Server for `/internal/*`).
 - **API Gateway** (`api-gateway/`): Apache APISIX in standalone mode with a
-  custom Lua plugin. Owns `/api/**`. Sole non-Auth-Service reader of
-  `sess:{sid}`. Strips inbound `Cookie` and hop-by-hop headers; injects
-  `Authorization: Bearer` upstream. Enforces the path-pattern allowlist.
-  Validates signed CSRF on state-changing requests. Delegates refresh to the
-  Auth Service.
+  custom Lua plugin. Owns `/api/**`. Holds only the opaque sid and never
+  reads the session store; resolves each request to a current access token by
+  calling `/internal/resolve` on the Auth Service. Strips inbound `Cookie` and
+  hop-by-hop headers; injects `Authorization: Bearer` upstream. Enforces the
+  path-pattern allowlist. Validates signed CSRF on state-changing requests.
+  Delegates session lookup, the idle-TTL slide, and refresh to the Auth
+  Service.
 - **State store** (`valkey`): Valkey locally (Redis-compatible). Holds
   short-lived PKCE transactions (`tx:{state}`: state, verifier, nonce) and
   sessions (`sess:{sid}`: tokens, claims). The Auth Service is the sole
-  writer; the API Gateway is the sole non-writing reader, through a tolerant
-  reader over the documented JSON schema.
+  component that touches the store, for both reads and writes; the API Gateway
+  has no store handle and reaches session state only through `/internal/resolve`.
 - **Resource Server** (`backend-resource-server/`): Spring Boot, Spring
   Security OAuth2 Resource Server. Validates Keycloak JWT access tokens
   (issuer, signature, expiration, algorithm, audience, scope, roles). Knows
@@ -75,11 +78,12 @@ single source of truth for the flows. Two points specific to the split shape:
 1. The browser flow runs in separate Auth Service and API Gateway swimlanes
    behind one ingress. The Auth Service owns `/auth/*`; the API Gateway owns
    `/api/**`.
-2. Token refresh is a back-channel RPC. The API Gateway calls
-   `/internal/refresh` on the Auth Service, authenticated as the
-   `oidc-reference-api-gateway` Client Credentials client and audience-bound
-   to `oidc-reference-auth-internal`. The Auth Service holds the per-session
-   refresh lock and writes the rotated tokens back to `sess:{sid}`.
+2. Session resolution is a back-channel RPC. On every `/api/**` request the
+   API Gateway calls `/internal/resolve` on the Auth Service, authenticated as
+   the `oidc-reference-api-gateway` Client Credentials client and audience-bound
+   to `oidc-reference-auth-internal`. The Auth Service does the session lookup,
+   the idle-TTL slide, and refresh-when-near-expiry; it holds the per-session
+   refresh lock and writes any rotated tokens back to `sess:{sid}`.
 
 ## Local assumptions
 

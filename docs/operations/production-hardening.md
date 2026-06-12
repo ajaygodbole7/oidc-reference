@@ -22,7 +22,7 @@ architecture is meant to be copied and hardened for a specific platform.
 - Add OpenTelemetry traces and metrics across APISIX, Auth Service, Resource
   Server, Keycloak/IdP calls, and Redis-compatible state-store calls.
 - Configure provider-specific rate limits for `/auth/login`,
-  `/auth/callback/idp`, `/auth/logout`, and `/internal/refresh`.
+  `/auth/callback/idp`, `/auth/logout`, and `/internal/resolve`.
 - Decide whether local logout or upstream RP-initiated logout is the correct
   user experience for the chosen IdP.
 - Keep `SESSION_MAX_TTL` less than or equal to the IdP SSO max session
@@ -61,13 +61,13 @@ lock, in the shared state store:
 
 (Alternatively, disable refresh-token rotation. This is weaker, since you lose
 reuse detection.) This concern lives entirely in the Auth Service and the state
-store. It is independent of which gateway fronts `/internal/refresh`.
+store. It is independent of which gateway fronts `/internal/resolve`.
 
 ### Token-endpoint load
 
 - Tune the IdP access-token lifespan against refresh load. The reference
   realm uses a short (~120 s) access token, so every active session refreshes
-  roughly every two minutes through the synchronous gateway → `/internal/refresh`
+  roughly every two minutes through the synchronous gateway → `/internal/resolve`
   → IdP chain. At scale that is significant IdP token-endpoint traffic and added
   request tail latency. Lengthen it (5–15 min is typical) and treat the IdP
   token endpoint as a capacity dimension.

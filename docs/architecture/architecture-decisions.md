@@ -112,7 +112,7 @@ work:
 
 - `frontend/` - React SPA.
 - `auth-service/` - Spring Boot OAuth/OIDC confidential client. Owns
-  `/auth/*` and `/internal/refresh`.
+  `/auth/*` and `/internal/resolve`.
 - `api-gateway/` - APISIX gateway with a custom Lua `bff-session` plugin.
   Owns `/api/**`.
 - `backend-resource-server/` - Spring Boot Resource Server.
@@ -131,16 +131,17 @@ The BFF pattern (A1) is implemented as two services, not one:
 
 - **Auth Service** — Spring Boot OAuth/OIDC confidential client. Owns
   `/auth/login`, `/auth/callback/idp`, `/auth/me`, `/auth/logout`, and
-  `/internal/refresh`. Writer of `tx:{state}` and `sess:{sid}`. Holds the
-  per-session refresh lock. Acts as an OAuth Resource Server for
+  `/internal/resolve`. Sole reader and writer of `tx:{state}` and `sess:{sid}`.
+  Holds the per-session refresh lock. Acts as an OAuth Resource Server for
   `/internal/*` with audience `oidc-reference-auth-internal`.
 - **API Gateway** — APISIX (OpenResty / nginx + Lua) with a custom Lua
-  plugin `bff-session`. Owns `/api/**`. Reader of `sess:{sid}` (tolerant
-  reader on documented JSON). Forwards to the Resource Server with
+  plugin `bff-session`. Owns `/api/**`. Holds only the opaque sid and has no
+  session-store handle. Forwards to the Resource Server with
   `Authorization: Bearer`. Enforces the path-pattern allowlist. Validates
-  the signed CSRF token on state-changing requests. Delegates token refresh
-  to the Auth Service via `/internal/refresh`. Itself a confidential client
-  at Keycloak for the Client Credentials token used on `/internal/*`.
+  the signed CSRF token on state-changing requests. Delegates session lookup,
+  the idle-TTL slide, and token refresh to the Auth Service via
+  `/internal/resolve`. Itself a confidential client at Keycloak for the
+  Client Credentials token used on `/internal/*`.
 
 Rationale: adoptability and responsibility clarity. Production OIDC
 deployments at meaningful scale almost always separate the OAuth surface
@@ -167,21 +168,25 @@ operational topology, not new OIDC content.
 
 - **Gateway runtime: APISIX.** Open-source API gateway
   (OpenResty / nginx + Lua). Declarative routes plus a custom `bff-session`
-  Lua plugin that does tolerant session read from Valkey, bearer
-  injection, signed-CSRF validation, and refresh delegation to the Auth
-  Service. Custom Spring (WebMVC + virtual threads) and Spring Cloud
+  Lua plugin that calls `/internal/resolve` on the Auth Service to resolve the
+  sid to a current access token, plus bearer injection, signed-CSRF validation,
+  and resolution/refresh delegation to the Auth Service. Custom Spring (WebMVC
+  + virtual threads) and Spring Cloud
   Gateway were considered. APISIX was chosen because the production-shape
   argument that motivates the split applies to the Gateway runtime
   itself: a real ingress data plane reads more truthfully than an
   embedded Spring proxy. Spring Cloud Gateway is noted as a production
   alternative for organizations standardizing on a JVM ingress.
-- **Session-schema contract.** Tolerant reader on documented JSON: the API
-  Gateway reads only `access_token` and `access_token_expires_at`; ignores
-  the rest. Schema documented in SPEC-0001 §7.2. No shared jar; no deploy
-  coupling. Versioned-reader strategy if the schema evolves.
-- **Refresh delegation.** Gateway → Auth Service via `POST
-  /internal/refresh`. Keeps OAuth client logic in one place. Adds ~one RPC
-  per refresh window per session.
+- **Session-resolution contract.** The API Gateway holds no session-store
+  handle and knows nothing of the `sess:{sid}` JSON schema; it sends only the
+  opaque sid to `/internal/resolve` and receives back the access token to
+  inject. The Auth Service is the only component that touches the store. The
+  resolve contract is documented in SPEC-0001 §7.1. No shared jar; no deploy
+  coupling.
+- **Resolution delegation.** Gateway → Auth Service via `POST
+  /internal/resolve`, on every `/api/**` request. Keeps OAuth client logic and
+  all store access in one place. The Auth Service folds session lookup, the
+  idle-TTL slide, and refresh-when-near-expiry into that call.
 - **Internal RPC auth.** Client Credentials via Keycloak. The API Gateway
   is a third confidential client (`oidc-reference-api-gateway` by local
   default) with Client Credentials only. The Auth Service acts as OAuth
@@ -200,7 +205,7 @@ fast machine. Two secrets (Auth Service Keycloak secret, API Gateway Keycloak
 secret) plus the CSRF signing key are handled via env + bootstrap (E2).
 
 Spec: SPEC-0001 Auth Service + API Gateway Endpoints; SPEC-0001 API
-Gateway Architecture (APISIX); SPEC-0001 §7.1 `/internal/refresh` contract.
+Gateway Architecture (APISIX); SPEC-0001 §7.1 `/internal/resolve` contract.
 
 ### A7. Nimbus oauth2-oidc-sdk Directly, Not spring-boot-starter-oauth2-client
 
@@ -278,9 +283,10 @@ The framework default was rejected for three reasons:
 
 Trade-off: custom transaction and session repositories are required.
 
-Under the split-implementation shape (A6) the writer of both keyspaces is the
-Auth Service; the reader of `sess:{sid}` on the bearer-injection path is the
-API Gateway via a tolerant reader. The keyspaces themselves are unchanged.
+Under the split-implementation shape (A6) the Auth Service is the sole reader
+and writer of both keyspaces; on the bearer-injection path the API Gateway holds
+no store handle and resolves `sess:{sid}` indirectly by calling
+`/internal/resolve`. The keyspaces themselves are unchanged.
 
 Spec: SPEC-0001 State Store Keys; SPEC-0001 Session Lifecycle.
 
@@ -397,8 +403,9 @@ shape because it does not require a `sess:{sid}` lookup before signature
 validation.
 
 The synchronizer-token pattern was considered. It is acceptable, but it
-adds another server lookup for a same-origin SPA-to-API-Gateway flow where
-the Gateway already looks up `sess:{sid}`.
+adds a server-side session lookup to validate CSRF on a same-origin
+SPA-to-API-Gateway flow where the signed-HMAC variant needs none at the
+Gateway at all.
 
 Trade-off: the SPA must echo the signed cookie value as a header on every
 state-changing fetch; a CSRF signing key joins the secret-handling list (E2).
@@ -505,7 +512,7 @@ Spec: SPEC-0001 Resource Server; SPEC-0001 Threat Model.
 Virtual threads are enabled on both Spring services in the reference: the
 Auth Service and the Resource Server. Their workloads are IO-bound:
 state-store lookups, token endpoint calls, JWKS discovery, and the Auth
-Service's `/internal/refresh` Keycloak round-trip. Virtual threads scale
+Service's `/internal/resolve` Keycloak round-trip. Virtual threads scale
 this workload without forcing the project into a reactive programming model.
 
 The API Gateway is APISIX (OpenResty / nginx + Lua), not a Spring service,
@@ -649,7 +656,7 @@ reference teaches (browser-app OAuth with no tokens in the browser).
 So `/api/user-data` returns the caller's profile and entitlements derived from
 the validated JWT itself, not from a downstream fetch. The two service-to-service
 patterns that ARE shown use their own Client Credentials identity, not a relayed
-user token: the API Gateway → Auth Service `/internal/refresh` call, and the
+user token: the API Gateway → Auth Service `/internal/resolve` call, and the
 machine client → Resource Server `/api/jobs` call.
 
 Reconsider when the reference grows a real second service the Resource Server
