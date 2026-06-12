@@ -102,6 +102,15 @@
       <artifactId>spring-security-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- A real valkey container for the StateStore parity test: it runs the
+         production Redis/Lua rotateIfPresent + compareAndSwap fail-closed
+         branches (which the live e2e never reaches) against the in-memory twin.
+         Version managed by Spring Boot's testcontainers BOM. -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
