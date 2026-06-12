@@ -835,6 +835,69 @@ test_inbound_identity_headers_stripped() {
   clear_session "$sid"
 }
 
+# O7 — transient Auth Service failure: the ONE resolve failure branch that IS
+# deterministically orchestratable live. Stop the Auth Service (Keycloak stays
+# up, so the gateway's CC-token fetch still works — only the /internal/resolve
+# hop fails with a transport error). Per SPEC §7.1 the gateway MUST answer 503 +
+# Retry-After and MUST NOT evict the cookie: the session may still be valid, only
+# resolution is temporarily unavailable. Then restore the AS (health-gated) and
+# prove the same session resolves again — it was never killed.
+#
+# Runs LAST and restores the AS BEFORE asserting: e2e-auth's browser phase
+# precedes the gateway suite, and test-e2e's conformance phase follows, so the AS
+# must be healthy again before this returns. A failed assertion must never strand
+# the stack with the AS down — hence restore-then-assert on a saved header copy.
+test_transient_auth_service_failure_returns_503_keeps_cookie() {
+  name="transient_auth_service_failure_503_keeps_cookie"
+  sid="transient-as-down-1"
+  setup_session "$sid" "test-jwt-as-down" 300
+
+  docker compose stop auth-service >/dev/null 2>&1
+  status="$(curl -s -o "$BODY_TMP" -D "${HEADERS_TMP}.asdown" -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid" \
+    "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+
+  # Restore with `start` (NOT `up`): start restarts the existing container with
+  # its original env/config; `up` would re-evaluate config against this shell's
+  # env and could recreate the AS with a drifted CSRF_SIGNING_KEY etc. Then poll
+  # the gateway until the AS resolves again — this is both the health gate and
+  # the recovery assertion (the session was never killed, so it resolves once the
+  # AS is back). Restore happens BEFORE the asserts so a failure can't strand it.
+  docker compose start auth-service >/dev/null 2>&1
+  status2=503
+  i=0
+  while [ "$i" -lt 90 ]; do
+    status2="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+      -H "Cookie: __Host-sid=$sid" \
+      "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
+    if [ -n "$status2" ] && [ "$status2" != "503" ] && [ "$status2" != "000" ]; then
+      break
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+
+  assert_status "$name status" 503 "$status"
+  if grep -iE '^Retry-After:[[:space:]]*[0-9]+' "${HEADERS_TMP}.asdown" >/dev/null 2>&1; then
+    printf '[PASS] %s retry_after_present\n' "$name"; PASSED=$((PASSED + 1))
+  else
+    printf '[FAIL] %s expected a Retry-After header on the 503\n' "$name"; FAILED=$((FAILED + 1))
+  fi
+  if grep -iE '^Set-Cookie:[[:space:]]*(sid|__Host-sid)=[[:space:]]*;.*Max-Age=0' \
+      "${HEADERS_TMP}.asdown" >/dev/null 2>&1; then
+    printf '[FAIL] %s cookie was evicted on a transient failure (must be retained)\n' "$name"
+    FAILED=$((FAILED + 1))
+  else
+    printf '[PASS] %s cookie_retained\n' "$name"; PASSED=$((PASSED + 1))
+  fi
+  rm -f "${HEADERS_TMP}.asdown" 2>/dev/null || true
+
+  # Recovery: with the AS healthy again, the same (never-killed) session resolves.
+  assert_plugin_forwarded "$name recovery" "$status2" "$HEADERS_TMP" "$BODY_TMP"
+
+  clear_session "$sid"
+}
+
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
@@ -859,6 +922,8 @@ test_cookie_strip_does_not_leak_to_upstream         || true
 test_query_string_preserved                         || true
 test_hop_by_hop_headers_stripped                    || true
 test_inbound_identity_headers_stripped              || true
+# Runs LAST — stops + (health-gated) restores the Auth Service (O7).
+test_transient_auth_service_failure_returns_503_keeps_cookie || true
 
 printf -- '---- summary ----\n'
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"

@@ -16,8 +16,10 @@ Envoy/mesh), so we disclose infra requirements in `production-hardening.md` and 
 
 **Status of the codebase:** no High/Critical issues in the copyable surface. The
 sid-rotation revocation race (N3) is fixed and verified; all prior security
-controls and doc-drift fixes held. **P1–P4 are all DONE (2026-06-12);** what
-remains is the Low/Info O-items (comment/test/doc-hygiene) below.
+controls and doc-drift fixes held. **P1–P4 and O1/O3/O4/O5/O6/O7/O8 are all DONE
+(2026-06-12).** The only items left are **O2** (502/503 label consistency on the
+CC-retry path, in the swappable gateway Lua — cosmetic) and **O9** (trim ADR
+repetition — stylistic); both optional. Infra (N1/N2, SPOF/HA) stays out of scope.
 
 ---
 
@@ -118,13 +120,19 @@ sub` (optionally that the IdP `sid` is unchanged); on mismatch throw
   "kept cohesive, not split" decision and its rationale (shared `oauth_tx`/`sess:{sid}` core +
   token-isolation invariant a per-route split would scatter). (Was A5/B2.)
 - **O6 — Final sweep relocating agent-process docs off the published surface.** `REF`,
-  Low. Mostly done (`.agents/` gitignored, `AGENTS.md` cleaned, `CONTRIBUTING.md`
-  added); confirm nothing left in the published tree describes the internal authoring
-  workflow. (Was D5/B3.)
-- **O7 — Live test that the 503 transient path keeps the cookie.** `REF`, Low. The
-  502→503-keeps-cookie mapping is unit-tested (Lua) and the AS-side non-destructive
-  502 is proven, but no end-to-end test drives a real transient AS failure and asserts
-  cookie retained + `Retry-After`. Lower value (unit + AS tests bracket it). (Was C2.)
+  Low. **DONE/VERIFIED 2026-06-12.** Swept the tracked tree: `.agents/` is gitignored; the
+  only agent-named tracked file is `AGENTS.md`, which is now conventional project-context
+  (Project Goal / Ownership / Security Rules / Canonical Docs), not an internal authoring
+  workflow; `CONTRIBUTING.md` is present. No build-scaffolding or authoring-process docs
+  remain in the published surface. (Was D5/B3.)
+- **O7 — Live test that the 503 transient path keeps the cookie.** `REF`, Low. **DONE 2026-06-12.**
+  `test-gateway-behavior.sh` now has `test_transient_auth_service_failure_returns_503_keeps_cookie`
+  (runs last): stops the auth-service container (Keycloak stays up so the CC-token fetch still
+  works — only the resolve hop fails with a transport error), asserts the gateway returns 503 +
+  `Retry-After` and does NOT evict the cookie, then `docker compose start`s the AS (no `up` — avoids
+  config drift), health-polls, and proves the same session resolves again. The authors' note that
+  these branches "cannot be exercised against the live stack" was true for the orchestrated-failure
+  branches but not for AS-down, which IS deterministic. (Was C2.)
 - **O8 — Re-comment the gateway TTL/ceiling tests to the right plane.** `REF`, Low.
   **DONE 2026-06-12.** Reworded the slide/ceiling-cap/past-ceiling-evict comments in
   `test-gateway-behavior.sh` (×3) and `lib.sh` `setup_session_absolute` (×1) to attribute the
