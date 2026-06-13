@@ -23,13 +23,11 @@ Security BCP) and OIDC Core §3.1.3.7 for ID-token validation, across two flows:
 
 What's included:
 
-- **A separate Auth Service and API Gateway.** The OIDC client and the gateway
-  run as two services, matching how production OIDC deployments are structured.
-- **Tokens never reach the browser.** Access and refresh tokens stay
-  server-side; the id_token never reaches browser JS, storage, SPA-readable
-  JSON, SPA-visible cookies, or app logs — only the server's
-  `/auth/logout/continue` → IdP redirect carries `id_token_hint`. A live test
-  inspects the browser's storage and cookies to confirm it.
+- **A live test asserts no token reaches the browser.** The id_token never
+  reaches browser JS, storage, SPA-readable JSON, SPA-visible cookies, or app
+  logs — only the server's `/auth/logout/continue` → IdP redirect carries
+  `id_token_hint` — and the test inspects the browser's storage and cookies to
+  confirm it.
 - **Each control is linked to its spec, code, and test.** The Security controls
   table maps every control to its RFC/OIDC section, the code that implements it,
   and the gate that proves it.
@@ -113,7 +111,7 @@ sequenceDiagram
     participant A as Auth Service (BFF)
     participant K as IdP
 
-    Note over B: Browser holds only an opaque __Host-sid cookie + a CSRF token —<br/>never an access, refresh, or id token.
+    Note over B: Browser holds only an opaque __Host-sid cookie + a CSRF token —<br/>never an access, refresh, or ID token.
     U->>B: Open a protected URL
     B->>G: GET /api/… (no session cookie)
     G-->>B: 302 → /auth/login (navigation) · 401 (XHR)
@@ -124,7 +122,7 @@ sequenceDiagram
     K-->>B: 302 → /auth/callback?code
     B->>A: GET /auth/callback (+ transaction cookie)
     A->>K: Exchange code (+ PKCE verifier, client secret)
-    K-->>A: access + refresh + id tokens
+    K-->>A: access + refresh + ID tokens
     Note over A,K: Tokens exist only server-side, from here on.
     A->>A: Validate id_token · create server-side session
     A-->>B: 302 → original URL + __Host-sid + CSRF cookie
@@ -344,7 +342,7 @@ Works on macOS, Linux, and Windows.
 
 **Prerequisites**
 
-- **Docker Desktop** (macOS or Windows) or any Docker-compatible engine, e.g. Podman.
+- **Docker Desktop** (macOS or Windows) or any Docker-compatible engine, such as Podman.
 - **Node 20+** for the SPA dev server.
 - **A POSIX shell** to run `scripts/*.sh`: built in on macOS/Linux; on Windows
   use WSL2 (recommended) or Git Bash.
