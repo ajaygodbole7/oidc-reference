@@ -36,11 +36,19 @@ docker info >/dev/null 2>&1 || \
    If a bad run already created the directory: bring apisix down, `rm -rf
    api-gateway/apisix.yaml.local`, re-render, then `up --force-recreate apisix`.
 
-2. **Frontend uses the pinned Node** in `frontend/.nvmrc` (Node 20): `cd
-   frontend && nvm use`. A much newer Node makes `App.test.tsx` fail under
-   jsdom/testing-library — environmental, not a regression.
+2. **`ripgrep` (`rg`) on PATH.** The contract gates (`verify-contract-strings`,
+   `verify-cross-service`) search with `rg`; without it every `require_present`
+   false-fails (rg exits non-zero → "missing contract string"). Install it:
+   `brew install ripgrep` / `apt-get install -y ripgrep`.
 
-3. **Manual Playwright runs** (the scripts handle this themselves) route `/auth`
+3. **Node: any version ≥ 20.19** (`frontend/package.json` `engines`). The suite is
+   Node-version-agnostic — `frontend/src/test-setup.ts` binds jsdom's Web Storage
+   so the tests pass on whatever Node is installed, including Node 24+ where the
+   native `localStorage` global would otherwise shadow jsdom's and break the
+   token-isolation assertions. `.nvmrc` records a known-good version but is not
+   required; no `nvm use` needed.
+
+4. **Manual Playwright runs** (the scripts handle this themselves) route `/auth`
    through APISIX because the Auth Service isn't host-published: set
    `VITE_AUTH_TARGET=http://127.0.0.1:9080`, and `npx playwright install chromium` once.
 

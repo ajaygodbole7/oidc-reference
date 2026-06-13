@@ -1,0 +1,68 @@
+# Proof harness for the DISTRIBUTED RefreshLock (not part of the normal stack).
+#
+# Runs TWO auth-service replicas on the SAME Valkey + Keycloak, both with
+# app.refresh-lock=distributed, each /internal/resolve published to a distinct
+# loopback port so a driver can fire concurrent resolves at different replicas:
+#
+#   replica 1 -> 127.0.0.1:8091   replica 2 -> 127.0.0.1:8092
+#
+# Usage: podman compose -f compose.yaml -f compose.distributed-lock.yml \
+#          up -d --build keycloak valkey auth-service auth-service-2
+# Then drive with scripts/e2e-distributed-lock.sh. Flip both APP_REFRESH_LOCK to
+# in-process to observe the cross-instance reuse-detection logout the lock fixes.
+
+# Shared env for the second replica (the first inherits compose.yaml's env and
+# only adds APP_REFRESH_LOCK + a published port). Keep in sync with the
+# auth-service block in compose.yaml.
+x-auth2-env: &auth2-env
+  SERVER_PORT: 8081
+  MANAGEMENT_PORT: 9081
+  MANAGEMENT_ADDRESS: 127.0.0.1
+  SPRING_DATA_REDIS_HOST: valkey
+  APP_BASE_URL: ${APP_BASE_URL:-http://127.0.0.1:5173}
+  OIDC_ISSUER_URI: http://localhost:8080/realms/oidc-reference
+  APP_AUTHORIZATION_URI: http://localhost:8080/realms/oidc-reference/protocol/openid-connect/auth
+  APP_TOKEN_URI: http://keycloak:8080/realms/oidc-reference/protocol/openid-connect/token
+  APP_JWKS_URI: http://keycloak:8080/realms/oidc-reference/protocol/openid-connect/certs
+  APP_END_SESSION_URI: http://localhost:8080/realms/oidc-reference/protocol/openid-connect/logout
+  APP_COOKIE_SIGNING_KEY: ${CSRF_SIGNING_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+  CSRF_SIGNING_KEY: ${CSRF_SIGNING_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+  SPRING_PROFILES_ACTIVE: ${AUTH_SERVICE_SPRING_PROFILES_ACTIVE:-local}
+  AUTH_CLIENT_ID: ${AUTH_CLIENT_ID:-oidc-reference-auth}
+  AUTH_CLIENT_SECRET: ${AUTH_CLIENT_SECRET:-LOCAL_DEV_AUTH_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY}
+  OIDC_SCOPES: ${OIDC_SCOPES:-openid,profile,email,roles,api.audience,api.read}
+  OIDC_ROLES_CLAIM_PATH: ${OIDC_ROLES_CLAIM_PATH:-realm_access,roles}
+  APP_REFRESH_REQUIRE_ROTATION: ${APP_REFRESH_REQUIRE_ROTATION:-true}
+  GATEWAY_CLIENT_ID: ${GATEWAY_CLIENT_ID:-oidc-reference-api-gateway}
+  INTERNAL_REFRESH_AUDIENCE: ${INTERNAL_REFRESH_AUDIENCE:-oidc-reference-auth-internal}
+  SESSION_IDLE_TTL: ${SESSION_IDLE_TTL:-1800}
+  SESSION_MAX_TTL: ${SESSION_MAX_TTL:-28800}
+  # The point of this harness:
+  APP_REFRESH_LOCK: ${APP_REFRESH_LOCK:-distributed}
+
+services:
+  auth-service:
+    environment:
+      APP_REFRESH_LOCK: ${APP_REFRESH_LOCK:-distributed}
+    ports:
+      - "127.0.0.1:8091:8081"
+
+  auth-service-2:
+    build:
+      context: ./auth-service
+    environment: *auth2-env
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    networks:
+      - oidc-internal
+    ports:
+      - "127.0.0.1:8092:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s

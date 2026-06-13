@@ -21,10 +21,10 @@ require_present() {
 # Static contract guard. Runtime versions of these checks live in the
 # frontend, Auth Service, API Gateway, RS, and auth-server test suites as
 # those slices are implemented.
-require_present "saved-request E2E|saved-request replay|saved request" docs scripts tasks README.md
-require_present "XHR 401|fetch 401|returns.*401|without session.*401" docs scripts tasks README.md
-require_present "/api/jobs" README.md docs tasks
-require_present "no BFF in path|Client Credentials.*internal RPC|Client Credentials.*RPC|internal RPC.*Client Credentials" README.md docs tasks
+require_present "saved-request E2E|saved-request replay|saved request" docs scripts README.md
+require_present "XHR 401|fetch 401|returns.*401|without session.*401" docs scripts README.md
+require_present "/api/jobs" README.md docs
+require_present "no BFF in path|Client Credentials.*internal RPC|Client Credentials.*RPC|internal RPC.*Client Credentials" README.md docs
 
 # Frame B split: the combined BFF is replaced by an Auth Service plus an
 # APISIX-based API Gateway, with an internal /internal/resolve RPC between

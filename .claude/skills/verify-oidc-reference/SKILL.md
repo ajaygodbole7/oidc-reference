@@ -20,9 +20,9 @@ and the `justfile`. Read the script before running it. The scripts call
 **Before running any gate, do the one-time environment setup** in
 [`references/environments.md`](references/environments.md): container-runtime
 wiring (Docker Desktop vs Podman socket), the APISIX-render-before-`compose-up`
-gotcha, the pinned Node, manual-Playwright routing, and the Podman-only
-Testcontainers / prune quirks. Skipping it is the usual cause of a stack that
-won't boot.
+gotcha, the host tools (`ripgrep`, Node ≥20.19 — the suite is version-agnostic),
+manual-Playwright routing, and the Podman-only Testcontainers / prune quirks.
+Skipping it is the usual cause of a stack that won't boot or a false gate failure.
 
 ## Gates (identical commands on both runtimes)
 
@@ -64,6 +64,7 @@ the container with drifted secrets like `CSRF_SIGNING_KEY`).
 ## Reporting
 
 Quote the actual pass/fail counts from the output — never claim green without
-the summary line. Separate a real failure from the known environmental ones
-(Node-version `App.test.tsx`; Podman Testcontainers-Ryuk) and say which. If you
-started a stack, note its final state (`e2e-portability` leaves the alt realm).
+the summary line. Separate a real failure from an environmental one (e.g. Podman
+Testcontainers-Ryuk, or a missing host tool like `ripgrep` making the contract
+gates false-fail) and say which. If you started a stack, note its final state
+(`e2e-portability` leaves the alt realm).
