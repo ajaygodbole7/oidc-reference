@@ -127,6 +127,17 @@ class ApiControllerTest {
         .isInstanceOf(StepUpRequiredException.class);
   }
 
+  @Test
+  void stepUpChallengeListsAllRequiredAcrValuesSortedAndDeterministic() {
+    // Multi-value required-acr: the RFC 9470 challenge advertises every accepted
+    // acr, space-delimited and sorted, so the header is deterministic regardless
+    // of the configured set's iteration order.
+    StepUpRequiredException ex = new StepUpRequiredException(STEP_UP_MAX_AGE, Set.of("2", "1"));
+    String challenge = controller.handleStepUpRequired(ex).getHeaders()
+        .getFirst(org.springframework.http.HttpHeaders.WWW_AUTHENTICATE);
+    assertThat(challenge).contains("acr_values=\"1 2\"");
+  }
+
   private static Jwt jwtWithAzp(String azp) {
     return Jwt.withTokenValue("t")
         .header("alg", "RS256")

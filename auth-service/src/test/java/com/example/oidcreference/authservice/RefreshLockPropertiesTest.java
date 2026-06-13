@@ -1,6 +1,7 @@
 package com.example.oidcreference.authservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.Map;
@@ -45,5 +46,16 @@ class RefreshLockPropertiesTest {
     assertThat(props.refreshLockTtl()).isEqualTo(Duration.ofSeconds(20));
     assertThat(props.refreshLockMaxWait()).isEqualTo(Duration.ofSeconds(25));
     assertThat(props.refreshLockPoll()).isEqualTo(Duration.ofMillis(100));
+  }
+
+  @Test
+  void unrecognizedModeIsRejectedAtBinding() {
+    // A typo'd mode (e.g. "redis") must FAIL FAST at boot, not silently fall
+    // back to in-process — a silent fallback would drop cross-instance refresh
+    // coordination, the exact failure the distributed lock exists to prevent.
+    assertThatThrownBy(() -> bind(Map.of("app.refresh-lock", "redis")))
+        .hasRootCauseInstanceOf(IllegalArgumentException.class)
+        .rootCause()
+        .hasMessageContaining("app.refresh-lock");
   }
 }

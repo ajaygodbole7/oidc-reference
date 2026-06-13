@@ -33,6 +33,20 @@ public record RefreshLockProperties(
     @NotNull @DefaultValue("12s") Duration refreshLockMaxWait,
     @NotNull @DefaultValue("50ms") Duration refreshLockPoll) {
 
+  // Reject an unrecognized mode at boot. distributed() treats any non-
+  // "distributed" value as in-process, so a typo (app.refresh-lock=Redis) would
+  // otherwise SILENTLY drop cross-instance coordination — the exact failure the
+  // distributed lock exists to prevent. Fail fast and loud instead.
+  public RefreshLockProperties {
+    if (refreshLock != null
+        && !"in-process".equalsIgnoreCase(refreshLock)
+        && !"distributed".equalsIgnoreCase(refreshLock)) {
+      throw new IllegalArgumentException(
+          "app.refresh-lock must be 'in-process' or 'distributed' (case-insensitive), got: "
+              + refreshLock);
+    }
+  }
+
   boolean distributed() {
     return "distributed".equalsIgnoreCase(refreshLock);
   }

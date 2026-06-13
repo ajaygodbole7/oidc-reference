@@ -155,7 +155,11 @@ class ApiController {
         + "error_description=\"A stronger or more recent authentication is required\", "
         + "max_age=" + maxAge;
     if (!ex.requiredAcr().isEmpty()) {
-      challenge += ", acr_values=\"" + String.join(" ", ex.requiredAcr()) + "\"";
+      // Sorted for a deterministic challenge: required-acr is a set ("any of
+      // these"), so the order carries no preference (RFC 9470 acr_values is a
+      // space-delimited list); sorting just keeps the header stable.
+      challenge += ", acr_values=\""
+          + String.join(" ", ex.requiredAcr().stream().sorted().toList()) + "\"";
     }
     ProblemDetail problem = ProblemDetail.forStatusAndDetail(
         HttpStatus.UNAUTHORIZED,
