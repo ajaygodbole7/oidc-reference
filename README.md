@@ -370,23 +370,14 @@ cd frontend && npm install && npm run dev
 - Keycloak admin console: <http://localhost:8080/> — sign in as
   `admin` / `admin` to inspect the seeded realm.
 
-Verification (each `just` recipe also runs as a script directly):
+Verify it — `just e2e-auth` is the authenticated proof (login → API → refresh →
+logout):
 
 ```sh
 just e2e-auth                                    # or: sh scripts/e2e-auth.sh
 sh scripts/verify-all.sh                         # per-component checks + secret scan
-RUN_FULL_STACK_AUTH=1 sh scripts/verify-all.sh   # also brings the stack up + gateway suite
+RUN_FULL_STACK_AUTH=1 sh scripts/verify-all.sh   # the above, plus the full stack + gateway suite
 ```
-
-`just e2e-auth` is the canonical authenticated local proof. It brings the stack
-up, runs `frontend/tests/e2e/reference-flow.spec.ts` for the real browser flow,
-then runs the gateway refresh-delegation proof with a real login-derived
-`sess:{sid}`. It covers:
-
-- Keycloak login and `/auth/me`;
-- an authenticated `/api/**` call and role enforcement;
-- refresh delegation;
-- RP-initiated logout through the same-origin `/auth/logout/continue` handle.
 
 ## Documentation
 
