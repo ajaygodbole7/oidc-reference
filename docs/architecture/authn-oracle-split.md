@@ -1,6 +1,8 @@
 # Architecture change: Auth Service as authentication oracle, gateway as edge
 
-**Status:** proposed, awaiting review.
+**Status:** reviewed — **declined**. The rename is not recommended; the boundary
+clarity it seeks already exists and can be sharpened in docs at near-zero churn.
+See "Review verdict" at the end.
 
 > **Reviewer:** please challenge the responsibility boundary and the contract
 > shape (the two tables + the reviewer questions at the end).
@@ -105,3 +107,65 @@ should reject at the edge.
    or move to an explicit decision object? (Recommendation: keep status-coded —
    minimal churn, the gateway already branches on it.)
 4. Anything that makes this *not* worth the rename churn for a reference repo?
+
+## Review verdict
+
+**Decline the rename (`/internal/resolve` → `/internal/authenticate`).** This is a
+rename plus a documentation reframe with no behavior change. Three findings sink
+it for a reference repo.
+
+**1. The motivating premise — "the boundary is blurred today" — does not hold.**
+The edge-vs-policy split is already explicit in code and docs:
+
+- `architecture-decisions.md §A6` (the Auth Service owns `/auth/*` +
+  `/internal/resolve` and is sole reader/writer of `sess:{sid}`; the gateway holds
+  no store handle and calls resolve to turn the opaque sid into an access token).
+- `bff-session.lua`'s header already enumerates the gateway's edge job as steps
+  1–4 (cookie read → no-cookie 302/401 classifier → CSRF → call resolve).
+- SPEC-0001 §7.1 and `phantom-token-session-resolution.md` carry the contract.
+
+The "No-cookie decision (confirmed)" section describes the status quo:
+`bff-session.lua` already short-circuits no-cookie to 302/401 at the edge and only
+calls resolve when a `sid` is present. That part is a no-op.
+
+**2. The name change is a regression, not a clarification.** `/internal/resolve`
+resolves a *phantom token* (opaque sid → real access token) **and** maintains the
+session lifecycle (idle-slide, near-expiry refresh, sid rotation, cookie re-issue)
+on every call. "resolve" names the phantom-token resolution that is this repo's
+core teaching concept. "authenticate" / "oracle" implies a side-effect-free yes/no
+check, but this endpoint mutates state every call, and "authenticate" collides with
+the login-time authentication the IdP already performed. The `auth_request` /
+oauth2-proxy precedent for naming a gateway sub-request `/authenticate` does not
+transfer — those are pure checks; this is resolve + provision + maintain.
+
+**3. The churn is wider than "bounded but wide," and it lands on the gates.**
+`/internal/resolve` spans ~50 files — 41 occurrences in SPEC-0001 alone, plus the
+Lua, the Java controller and six test classes, compose files, `schema/`, README,
+SECURITY — and the verification gates: it is a required contract string
+(`verify-cross-service.sh: require_present "/internal/resolve"`) and the C8
+conformance gate references it nine times, including the literal
+`curl …/internal/resolve` identity check. Large, gate-touching blast radius for
+zero behavior change.
+
+**On the doc:** this is the fourth standalone proposal doc (after `review-backlog.md`,
+`enhancement-proposals-2026-06-12.md`, `java-spring-modernization-2026-06-12.md`,
+all removed). Fine as a review input; if any of it lands it belongs as a refinement
+to §A6 / SPEC §7.1, not a new `docs/architecture/` file.
+
+**Answers to the reviewer questions:**
+
+1. Boundary is right — and already documented in §A6 + SPEC §7.1 + the Lua header.
+   Nothing to move.
+2. Keep `/internal/resolve`. It is accurate to the phantom-token pattern;
+   `/internal/authenticate` is a naming regression for a stateful resolve.
+3. Keep the status-coded response — but it is moot without the rename.
+4. Yes: that is what makes it not worth the churn. High blast radius into the
+   conformance/contract gates, no behavior change, accuracy-neutral-to-negative
+   naming.
+
+**If the goal is sharper teaching of the edge-vs-policy boundary, do it in words,
+not a rename:** add the "edge mechanics (swappable) vs authentication policy
+(copyable)" framing to §A6 and the `bff-session.lua` header, keeping the
+`/internal/resolve` name. That captures the full pedagogical benefit at near-zero
+churn — without touching the contract string, the conformance gate, or the
+phantom-token vocabulary — and keeps the endpoint name honest about what it does.
