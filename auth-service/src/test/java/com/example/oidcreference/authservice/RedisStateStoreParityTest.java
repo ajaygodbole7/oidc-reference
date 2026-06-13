@@ -205,6 +205,47 @@ class RedisStateStoreParityTest {
         .isEmpty();
   }
 
+  // --- compareAndDelete (DistributedRefreshKeyLock release) -----------------
+
+  @Test
+  void compareAndDelete_match_deletesAndReturnsTrue() {
+    redisStore.put("refresh_lock:s", "token-A", TTL);
+    memoryStore.put("refresh_lock:s", "token-A", TTL);
+
+    boolean r = redisStore.compareAndDelete("refresh_lock:s", "token-A");
+    boolean m = memoryStore.compareAndDelete("refresh_lock:s", "token-A");
+
+    assertSameOutcome("cad/match", r, m, List.of("refresh_lock:s"));
+    assertThat(r).isTrue();
+    assertThat(redisStore.get("refresh_lock:s")).as("own lease released").isEmpty();
+  }
+
+  @Test
+  void compareAndDelete_mismatch_doesNotDeleteAnotherHoldersLease() {
+    // Our lease expired by TTL and another instance acquired the lock (token-B).
+    // Releasing must NOT delete the lock we no longer own.
+    redisStore.put("refresh_lock:s", "token-B", TTL);
+    memoryStore.put("refresh_lock:s", "token-B", TTL);
+
+    boolean r = redisStore.compareAndDelete("refresh_lock:s", "token-A");
+    boolean m = memoryStore.compareAndDelete("refresh_lock:s", "token-A");
+
+    assertSameOutcome("cad/mismatch", r, m, List.of("refresh_lock:s"));
+    assertThat(r).isFalse();
+    assertThat(redisStore.get("refresh_lock:s"))
+        .as("must not delete a lease held by another instance")
+        .contains("token-B");
+  }
+
+  @Test
+  void compareAndDelete_keyAbsent_isNoOpReturningFalse() {
+    boolean r = redisStore.compareAndDelete("refresh_lock:gone", "token-A");
+    boolean m = memoryStore.compareAndDelete("refresh_lock:gone", "token-A");
+
+    assertSameOutcome("cad/key-absent", r, m, List.of("refresh_lock:gone"));
+    assertThat(r).isFalse();
+  }
+
   // --- Redis-only: the written key must carry a finite PX TTL -----------------
 
   @Test

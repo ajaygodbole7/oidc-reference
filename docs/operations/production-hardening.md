@@ -34,30 +34,38 @@ architecture is meant to be copied and hardened for a specific platform.
 
 `InProcessRefreshLock` — the default `RefreshLock` behind `InternalResolveController`
 — serializes concurrent refreshes for one session with a process-local
-`ReentrantLock`. That is correct for a single Auth Service instance only. The
-`RefreshLock` interface is the swap point: a distributed implementation drops in
-without touching the resolve path.
+`ReentrantLock`. That is correct for a single Auth Service instance only.
 
 With two or more instances, two can refresh the same session at the same time.
 Both present the same refresh token to the IdP. The reference realm enables
 refresh-token rotation and reuse detection, so the second is rejected as
 `invalid_grant` and the session is invalidated. Naive horizontal scaling logs
-active users out.
+active users out. Making the lock cross-instance is a scale-out step, not a bug.
 
-The lock is in-process for the single-instance reference. Making it
-cross-instance is a scale-out step, not a bug.
+**A cross-instance implementation ships and is opt-in.** Set
+`app.refresh-lock=distributed` to select `DistributedRefreshKeyLock` instead of
+the in-process default; the default stays in-process for the single-instance
+reference. It is built on the vendor-neutral `StateStore` (no Redis/Valkey client
+in the lock itself), so it follows whatever store backs `StateStore`. Knobs:
+`app.refresh-lock-ttl` (lease TTL, default `10s` — above the IdP connect+read
+budget so the lease covers a full refresh), `app.refresh-lock-max-wait`
+(default `12s`, above the TTL so a crashed holder's lease always lapses within a
+contender's wait), `app.refresh-lock-poll` (default `50ms`).
 
-Before scaling out, replace (or layer a distributed lock under) the in-process
-lock, in the shared state store:
+The algorithm (`DistributedRefreshKeyLock`, proven by `DistributedRefreshKeyLockTest`
+and the `compareAndDelete` parity cases in `RedisStateStoreParityTest`):
 
-- **Acquire**: `SET refresh_lock:{sid} <token> NX PX <ttl>`, with `ttl` a few
-  seconds above the IdP read timeout. The holder refreshes. A loser waits
-  briefly, re-reads `sess:{sid}`, and returns the holder's already-rotated
-  session without calling the IdP, so callers never see a spurious error.
-- **Release**: compare-and-delete (`if GET == <token> then DEL`, atomically) so
-  an instance never deletes a lock it no longer owns after a TTL expiry.
-- **Fail closed**: never refresh if the lock cannot be acquired or the store
-  errors.
+- **Acquire**: `SET refresh_lock:{sid} <token> NX PX <ttl>` (`StateStore.putIfAbsent`).
+- **Contend**: a loser polls until it can acquire, then runs the same action — which
+  re-reads `sess:{sid}`, finds the holder's already-rotated token (following the
+  `rotated:{sid}` breadcrumb on a sid rotation), and returns it without calling the
+  IdP. The two callers collapse to one upstream refresh.
+- **Release**: compare-and-delete (`StateStore.compareAndDelete`: `if GET == <token>
+  then DEL`) so an instance never deletes a lease another acquired after ours
+  expired by TTL.
+- **Fail closed**: if the lease cannot be acquired within `max-wait` (or the store
+  errors), throw rather than refresh unguarded — the controller surfaces a transient
+  5xx and the gateway keeps the session cookie and retries.
 
 (Alternatively, disable refresh-token rotation. This is weaker, since you lose
 reuse detection.) This concern lives entirely in the Auth Service and the state

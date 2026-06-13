@@ -54,6 +54,14 @@ class RedisStateStore implements StateStore {
           + "return 1 else return 0 end",
       Long.class);
 
+  // Release a lease only if we still own it (value matches), so an instance
+  // never deletes a lock another acquired after ours expired by TTL.
+  private static final RedisScript<Long> COMPARE_AND_DELETE = new DefaultRedisScript<>(
+      "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+          + "redis.call('DEL', KEYS[1]); "
+          + "return 1 else return 0 end",
+      Long.class);
+
   private final StringRedisTemplate redis;
 
   RedisStateStore(StringRedisTemplate redis) {
@@ -105,6 +113,12 @@ class RedisStateStore implements StateStore {
         newValue,
         Long.toString(ttl.toMillis()));
     return swapped != null && swapped == 1L;
+  }
+
+  @Override
+  public boolean compareAndDelete(String key, String expected) {
+    Long deleted = redis.execute(COMPARE_AND_DELETE, List.of(key), expected);
+    return deleted != null && deleted == 1L;
   }
 
   @Override

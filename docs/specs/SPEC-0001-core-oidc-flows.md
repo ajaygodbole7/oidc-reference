@@ -91,16 +91,19 @@ exists so a reader does not assume omission is oversight.
   without requiring TLS termination locally.
 
 - **Distributed per-session refresh lock across HA Auth Service
-  instances.** The default `RefreshLock`, `InProcessRefreshLock` (used by
-  `InternalResolveController`), holds a JVM-local `ConcurrentHashMap`; a
-  distributed impl swaps in behind the same interface. A second
-  `auth-service` instance breaks the
-  serialization guarantee: two concurrent refresh calls on the same
-  session can hit different instances, both submit the same refresh
-  token, one succeeds and the other triggers Keycloak's reuse detection
-  → session invalidation. The reference assumes a single instance and
-  documents this; an HA derivation should swap to a Valkey-based
-  distributed lock (`SET key 1 NX EX 5` with a release fence).
+  instances — DEFAULT off, implementation provided.** The default
+  `RefreshLock`, `InProcessRefreshLock` (used by `InternalResolveController`),
+  holds a JVM-local `ConcurrentHashMap`. A second `auth-service` instance breaks
+  its serialization guarantee: two concurrent refreshes on one session hit
+  different instances, both submit the same refresh token, one succeeds and the
+  other triggers Keycloak's reuse detection → session invalidation. The default
+  build assumes a single instance. A cross-instance implementation,
+  `DistributedRefreshKeyLock` (over the vendor-neutral `StateStore`:
+  `SET refresh_lock:{sid} <token> NX PX <ttl>` to acquire, compare-and-delete to
+  release, loser-re-reads on contention, fail-closed), **ships and is opt-in via
+  `app.refresh-lock=distributed`** — see `docs/operations/production-hardening.md`
+  §"Distributed refresh lock". It stays out of the default path because the local
+  reference is single-instance; enabling it is one config flip, not a rewrite.
 
 - **Multi-IdP mix-up defense via `iss` parameter validation.** RFC 9700
   §4.4 requires either distinct `redirect_uri` per AS or `iss` parameter
@@ -427,9 +430,12 @@ would fail with `invalid_grant` and destroy the session. The Auth Service
 serializes the refresh window with a per-session lock so only one refresh
 is in flight per session. The second caller re-reads `sess:{sid}` under
 the lock and returns the already-rotated token. The lock-free fresh path is not
-serialized — only the near-expiry refresh takes the lock. The in-process lock map
-is bounded by session lifetime. A clustered Auth Service must replace it
-with a distributed lock (e.g., Valkey `SET NX EX`).
+serialized — only the near-expiry refresh takes the lock. The default
+`InProcessRefreshLock` map is bounded by session lifetime and is single-instance
+only. A clustered Auth Service flips `app.refresh-lock=distributed` to use
+`DistributedRefreshKeyLock` (acquire `SET refresh_lock:{sid} <token> NX PX`,
+compare-and-delete release, loser-re-reads on contention, fail-closed) over the
+shared `StateStore` — same `RefreshLock` contract, no resolve-path change.
 
 **Sid rotation on refresh.** A successful refresh also rotates the local session
 id. The Auth Service mints `sid'`, atomically moves `sess:{sid}` → `sess:{sid'}`

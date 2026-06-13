@@ -101,6 +101,21 @@ class InMemoryStateStore implements StateStore {
   }
 
   @Override
+  public boolean compareAndDelete(String key, String expected) {
+    // Atomic per key via compute: returning null removes the mapping.
+    boolean[] deleted = {false};
+    values.compute(key, (k, current) -> {
+      if (expected.equals(current)) {
+        deleted[0] = true;
+        ttls.remove(k);
+        return null;
+      }
+      return current;
+    });
+    return deleted[0];
+  }
+
+  @Override
   public Optional<String> get(String key) {
     return Optional.ofNullable(values.get(key));
   }

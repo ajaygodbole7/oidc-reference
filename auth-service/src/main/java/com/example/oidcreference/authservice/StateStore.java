@@ -46,6 +46,14 @@ interface StateStore {
   // rotation re-pointing it — if the CAS fails, the rotation aborts (fail closed).
   boolean compareAndSwap(String key, String expected, String newValue, Duration ttl);
 
+  // Atomic compare-and-delete: delete key iff its current value equals expected,
+  // returning true (false if the value differs or the key is absent). The
+  // release side of a lease — an unconditional DEL could delete a lock another
+  // instance acquired after ours expired by TTL; this deletes only a lock we
+  // still own. Vendor-neutral: a Redis Lua GET==expected-then-DEL; the in-memory
+  // twin uses an atomic compute. Used by DistributedRefreshKeyLock.
+  boolean compareAndDelete(String key, String expected);
+
   Optional<String> get(String key);
 
   Optional<String> getAndDelete(String key);

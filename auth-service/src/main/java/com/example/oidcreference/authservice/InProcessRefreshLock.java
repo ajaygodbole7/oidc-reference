@@ -4,7 +4,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
-import org.springframework.stereotype.Component;
 
 /**
  * Per-JVM {@link RefreshLock}: a reference-counted {@link ReentrantLock} per
@@ -19,8 +18,10 @@ import org.springframework.stereotype.Component;
  * (naive horizontal scaling logs active users out). That is the documented
  * scale-out boundary, not a bug; see {@link RefreshLock} for the distributed
  * swap.
+ *
+ * <p>Provided as a bean by {@link RefreshLockConfig} (the default), not via a
+ * stereotype, so the lock implementation is selectable by configuration.
  */
-@Component
 class InProcessRefreshLock implements RefreshLock {
   private final ConcurrentHashMap<String, LockRef> locks = new ConcurrentHashMap<>();
 
