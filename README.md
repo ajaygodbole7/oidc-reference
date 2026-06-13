@@ -17,7 +17,7 @@ Security BCP) and OIDC Core §3.1.3.7 for ID-token validation, across two flows:
   with saved-request replay;
 - service-to-service via Client Credentials.
 
-What it gives you:
+What's included:
 
 - **A separate Auth Service and API Gateway.** The OIDC client and the gateway
   run as two services, matching how production OIDC deployments are structured.
@@ -70,7 +70,7 @@ rationale and reconsideration triggers are in
 | Decision | This reference | Rejected |
 |---|---|---|
 | Where tokens live | Server-side BFF; access, refresh, and ID tokens never reach the browser | A public-client SPA running PKCE in the browser (tokens are XSS-reachable), or a backend that still hands the access token to JavaScript |
-| Component shape | Split Auth Service (the OAuth/OIDC client) + API Gateway (routing, bearer injection) | One combined service — valid, but it conflates the identity surface with the API edge |
+| Component shape | Split Auth Service (the OAuth/OIDC client) + API Gateway (routing, bearer injection) | One combined service — valid, but mixes the OAuth-client and API-gateway roles |
 | Session state | Two server-side keyspaces, `tx:{state}` (pre-auth, keyed by the OAuth `state`) and `sess:{sid}` (post-auth); no pre-auth session cookie, so no session-fixation class | A framework HTTP-session blob |
 | Provider coupling | Branch on `iss` / `aud` / scopes / claim paths from `.well-known/openid-configuration`; differences live in config (`app.roles-claim-path`, env vars) | Provider-specific APIs baked into Java or APISIX |
 
@@ -155,7 +155,7 @@ sequenceDiagram
         Note over B: Authenticated — render identity and roles (display only, never a token)
     else no, expired, or server-deleted session
         A-->>B: 401 (Cache-Control no-store)
-        Note over B: Anonymous — render "Sign in"
+        Note over B: Anonymous — render the Sign-in prompt
     end
 ```
 
