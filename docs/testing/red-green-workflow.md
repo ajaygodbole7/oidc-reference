@@ -1,6 +1,6 @@
 # Red/Green TDD Workflow
 
-All behavior changes should follow this loop.
+What this is: the test-first loop every behavior change follows.
 
 ## Red
 

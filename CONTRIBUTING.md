@@ -1,7 +1,12 @@
 # Contributing
 
-This is a local reference implementation of the BFF session pattern for
-OAuth 2.1 / OpenID Connect. Contributions are welcome via pull request.
+- **What this is:** a local reference implementation of the BFF session
+  pattern for OAuth 2.1 / OpenID Connect.
+- **Who it's for:** anyone fixing a bug, tightening a control, or improving
+  the docs.
+- **Where to start:** the three reads below, then the workflow.
+
+Contributions are welcome via pull request.
 
 ## Before you open a PR
 

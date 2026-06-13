@@ -1,5 +1,7 @@
 # Verification Gates
 
+What this is: the test gates, from fastest to most complete, and when to run each.
+
 Use the smallest gate that proves the change, then run the broader gate before
 claiming the reference still works end-to-end.
 

@@ -1,7 +1,8 @@
 # Security
 
-This document is the navigation surface for this repo's security posture.
-The depth lives in:
+This document covers the threat model, crypto primitives, key handling,
+audit-logging surface, production-hardening list, and vulnerability
+reporting for this repo. Deeper rationale lives in:
 
 - [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
   §B (cookies/sessions/CSRF) and §C (OAuth/OIDC) — rationale for the
@@ -34,15 +35,18 @@ What that means for security claims:
   and [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
   §F for the reconsideration triggers.
 
-The reference is not a deployable production system. Adapting it for
-production requires the items in "Production hardening" below.
+This is not a deployable production system. Adapting it for production
+requires the items in "Production hardening" below.
 
 ## Threat model
 
-Threats grouped by surface. Each row names the threat, the implemented
-mitigation, and the residual risk after the mitigation. The "Reference"
-column points at the architecture-decisions §, RFC 9700 row, or OIDC
-Core § that owns the deeper discussion.
+Threats grouped by surface. Each row gives:
+
+- the threat;
+- the implemented mitigation;
+- the residual risk after that mitigation;
+- a "Reference" column pointing at the architecture-decisions §, RFC 9700
+  row, or OIDC Core § that owns the deeper discussion.
 
 ### Browser ↔ Auth Service / API Gateway
 
@@ -153,9 +157,9 @@ raw `state`, raw `XSRF-TOKEN` value, raw `oauth_tx` value, client
 secrets, request bodies.
 
 Hashed for correlation: subject (`sub_hash=`), sid (`sid_hash=`).
-Both are SHA-256 truncated to 96 bits, base64url. This is long enough
-to make collision impractical at this scale, and short enough that the
-hash alone is not session-recovery material.
+Both are SHA-256 truncated to 96 bits, base64url — long enough to make
+collision impractical at this scale, short enough that the hash alone is
+not session-recovery material.
 
 ## Production hardening
 
@@ -192,9 +196,10 @@ This is a reference repo, not a hosted service.
 
 For vulnerabilities in this implementation, open a private GitHub
 Security Advisory via the repo's [Security tab](../../security/advisories/new).
-Public issues are fine for general bugs. Use the private advisory
-channel for anything you would not want to disclose before a fix is
-published.
+
+- Public issues are fine for general bugs.
+- Use the private advisory channel for anything you would not want
+  disclosed before a fix is published.
 
 For vulnerabilities in the upstream libraries this reference depends
 on (Spring Boot, Spring Security, Nimbus `oauth2-oidc-sdk`, Keycloak,

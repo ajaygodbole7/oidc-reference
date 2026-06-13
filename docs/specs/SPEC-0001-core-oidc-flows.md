@@ -1,5 +1,10 @@
 # SPEC-0001: Core OAuth 2.1 and OIDC Flows (BFF Session Pattern, Split Implementation)
 
+The build contract for this reference's OAuth 2.1 / OIDC flows: the wire formats,
+cookie attributes, TTLs, keyspaces, and validation rules an implementer builds
+against. Expert-facing and normative — for someone implementing or auditing the
+Auth Service, API Gateway, or Resource Server.
+
 ## Problem
 
 Developers need a local, inspectable reference for modern OAuth 2.1 / OIDC that

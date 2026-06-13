@@ -1,9 +1,12 @@
 # Okta Provider Overlay
 
-This is a credentialed, non-gating portability runbook. The enforced gate is
-`scripts/e2e-portability.sh`, which is hermetic and re-runnable without
-third-party credentials. Okta is the external validation artifact. It proves
-the same config surface against a real enterprise IdP.
+What this is: a runbook for proving the portability surface against a real Okta
+tenant. It needs Okta credentials, so it is non-gating.
+
+- The enforced gate is `scripts/e2e-portability.sh` — hermetic, re-runnable
+  without third-party credentials.
+- Okta is the external validation artifact: it proves the same config surface
+  against a real enterprise IdP.
 
 ## Why Okta First
 

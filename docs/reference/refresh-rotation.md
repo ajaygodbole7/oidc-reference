@@ -1,9 +1,12 @@
 # Refresh-Token Rotation Policy
 
+What this is: how the Auth Service handles refresh-token rotation, and how to
+set it per provider.
+
 The Auth Service treats refresh-token rotation as a security invariant by
-default. A refresh-grant response that omits a new `refresh_token`, or
-returns the same value as the one we sent, is treated as a rotation
-failure. On that failure the controller:
+default. A refresh-grant response that omits a new `refresh_token`, or returns
+the same value as the one we sent, is a rotation failure. On that failure the
+controller:
 
 - invalidates the session,
 - deletes `sess:{sid}`,

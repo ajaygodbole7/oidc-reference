@@ -1,11 +1,7 @@
 # Local Verification Harness
 
-This document describes the local verification harness.
-
-## Goal
-
-A fresh checkout should be able to verify the reference stack without cloud
-services.
+What this is: how to verify the reference stack from a fresh checkout, with no
+cloud services — from fast contract checks to the full browser proof.
 
 ## Fast Verification
 

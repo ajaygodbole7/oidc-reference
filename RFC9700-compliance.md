@@ -1,15 +1,14 @@
 # RFC 9700 Compliance
 
-Status of this reference implementation against
-[RFC 9700 — Best Current Practice for OAuth 2.0 Security](https://datatracker.ietf.org/doc/rfc9700/).
-
-RFC 9700 is the security BCP that OAuth 2.1
-([draft-ietf-oauth-v2-1](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/))
-consolidates into the protocol baseline. A row marked ✅ here is also
-satisfied for the corresponding OAuth 2.1 requirement.
-
-Canonical sources for the implementation: `README.md` (flow diagrams) and
-`docs/specs/SPEC-0001-core-oidc-flows.md` (build contract).
+- Control-by-control status of this reference against
+  [RFC 9700 — Best Current Practice for OAuth 2.0 Security](https://datatracker.ietf.org/doc/rfc9700/).
+- For OAuth/OIDC implementers auditing the reference against the BCP, control by control.
+- RFC 9700 is the security BCP that OAuth 2.1
+  ([draft-ietf-oauth-v2-1](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/))
+  consolidates into the protocol baseline. A row marked ✅ here is also
+  satisfied for the corresponding OAuth 2.1 requirement.
+- Canonical sources for the implementation: `README.md` (flow diagrams) and
+  `docs/specs/SPEC-0001-core-oidc-flows.md` (build contract).
 
 ## Status legend
 
@@ -223,8 +222,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 
 ## Known gaps
 
-Items where the reference is short of the BCP, with the
-trigger for reconsidering.
+Items where the reference is short of the BCP, each with its trigger for reconsidering.
 
 | Gap | Why | When to revisit |
 |---|---|---|

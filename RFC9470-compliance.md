@@ -1,21 +1,29 @@
 # RFC 9470 Compliance — OAuth 2.0 Step Up Authentication Challenge Protocol
 
-Control-by-control status of this reference against
-[RFC 9470](https://datatracker.ietf.org/doc/rfc9470/) (OAuth 2.0 Step Up
-Authentication Challenge Protocol).
+- Control-by-control status of this reference against
+  [RFC 9470](https://datatracker.ietf.org/doc/rfc9470/) (OAuth 2.0 Step Up
+  Authentication Challenge Protocol).
+- For OAuth/OIDC implementers verifying the step-up wiring against the RFC text.
 
-**Scope of step-up in this reference.** Step-up on the sensitive route
-`POST /api/admin` enforces **both** RFC 9470 axes: **`auth_time` freshness**
-(`max_age` semantics — recency) and **`acr`** (LoA — assurance). `/auth/step-up`
-requests `acr_values` (`app.step-up-acr-values`, default `1`) and the Resource
-Server requires the token's `acr` to be in `app.step-up.required-acr` (default
-`1`), mirroring the `auth_time` gate. The realm's `oidc-acr-mapper` emits
-`acr="1"` for a fresh interactive auth and `"0"` for remembered SSO; the value
-survives refresh rotation. `acr`/`acr_values` are standard OIDC, so the code is
-provider-agnostic — the LoA→`acr` mapping is per-IdP config (as the `auth_time`
-mapper is), and a deployment maps a higher `acr` to real MFA in the IdP. See also
-[`OIDC-compliance.md`](OIDC-compliance.md) §2 (`auth_time`/`acr`) and §3.1.2.1
-(`prompt`), and [SPEC-0001 §"Step-up authentication"](docs/specs/SPEC-0001-core-oidc-flows.md).
+**Scope of step-up in this reference.** The sensitive route `POST /api/admin`
+enforces **both** RFC 9470 axes:
+
+- **`auth_time` freshness** (`max_age` semantics — recency).
+- **`acr`** (LoA — assurance). `/auth/step-up` requests `acr_values`
+  (`app.step-up-acr-values`, default `1`); the Resource Server requires the
+  token's `acr` to be in `app.step-up.required-acr` (default `1`), mirroring the
+  `auth_time` gate.
+
+Mapping and portability:
+
+- The realm's `oidc-acr-mapper` emits `acr="1"` for a fresh interactive auth and
+  `"0"` for remembered SSO; the value survives refresh rotation.
+- `acr`/`acr_values` are standard OIDC, so the code is provider-agnostic. The
+  LoA→`acr` mapping is per-IdP config (as the `auth_time` mapper is); a
+  deployment maps a higher `acr` to real MFA in the IdP.
+- See also [`OIDC-compliance.md`](OIDC-compliance.md) §2 (`auth_time`/`acr`) and
+  §3.1.2.1 (`prompt`), and
+  [SPEC-0001 §"Step-up authentication"](docs/specs/SPEC-0001-core-oidc-flows.md).
 
 ## Status legend
 
@@ -56,12 +64,18 @@ mapper is), and a deployment maps a higher `acr` to real MFA in the IdP. See als
 | §6 | Step-up must not weaken the surrounding flow | ✅ | `/auth/step-up` reuses the full login machinery — PKCE S256, `state`, `nonce`, and the `oauth_tx` browser-binding cookie — and the callback enforces `auth_time` freshness before minting a session. |
 | §7 | Use the IANA-registered `insufficient_user_authentication` OAuth error code | ✅ | Used as the challenge error code, distinct from `insufficient_scope`. |
 
-## Out of scope (companion ACR / LoA mechanism)
+## ACR / LoA: mechanism implemented, MFA mapping is deployment-side
 
-RFC 9470 supports two interchangeable requirement axes: authentication **recency**
-(`max_age` / `auth_time`) and authentication **strength** (`acr_values` / `acr`).
-This reference implements the recency axis end to end and defers the strength
-axis, because ACR values are provider-specific and require Level-of-Authentication
-configuration at the IdP (e.g., a Keycloak `acr-to-LoA` map plus an authentication
-flow that steps the level up). Reconsider when a deployment needs MFA-strength
-gating (e.g., "require `acr=mfa` before payment") rather than recency gating.
+- RFC 9470 supports two interchangeable requirement axes: authentication
+  **recency** (`max_age` / `auth_time`) and authentication **strength**
+  (`acr_values` / `acr`).
+- This reference implements **both** axes end to end: `/auth/step-up` requests
+  `acr_values`, and the Resource Server enforces `acr` against
+  `app.step-up.required-acr` (default `1`) alongside the `auth_time` recency gate.
+- What is deferred is the IdP-side LoA mapping. Here `acr=1` means "fresh
+  interactive auth" (the local realm emits `1` for that, `0` for remembered SSO).
+  Mapping `acr` to a real MFA level — e.g. "require `acr=mfa` before payment" —
+  needs provider config (a Keycloak `acr-to-LoA` map plus an authentication flow
+  that steps the level up), not done here.
+- Reconsider the IdP mapping when a deployment needs MFA-strength gating rather
+  than the single-level assurance floor.

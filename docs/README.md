@@ -1,7 +1,9 @@
 # Documentation
 
-The end-to-end flows are in the root [`README.md`](../README.md). These docs
-go deeper.
+What's here: the deeper reference behind the BFF OAuth 2.1 / OIDC pattern.
+Start with the root [`README.md`](../README.md) for the end-to-end flows, then
+follow "Read in order" below. The other sections are reference, operations, and
+testing material you can reach for as needed.
 
 ## Read in order
 
@@ -16,6 +18,16 @@ go deeper.
 5. [`operations/provider-adapters.md`](operations/provider-adapters.md) — how
    to swap Keycloak for another OIDC provider.
 
+## Architecture
+
+- [`architecture/overview.md`](architecture/overview.md) — topology and the two
+  flows.
+- [`architecture/architecture-decisions.md`](architecture/architecture-decisions.md)
+  — why this shape, and what was rejected.
+- [`architecture/phantom-token-session-resolution.md`](architecture/phantom-token-session-resolution.md)
+  — why the gateway resolves sessions via `/internal/resolve` instead of holding
+  a store handle.
+
 ## Reference
 
 - [`../SECURITY.md`](../SECURITY.md) — threat model, controls, token
@@ -24,6 +36,8 @@ go deeper.
   Core / Discovery / RP-Initiated Logout conformance matrix.
 - [`../RFC9700-compliance.md`](../RFC9700-compliance.md) — RFC 9700
   (OAuth 2.0 Security BCP) conformance matrix.
+- [`../RFC9470-compliance.md`](../RFC9470-compliance.md) — RFC 9470
+  (OAuth 2.0 Step Up Authentication Challenge) conformance matrix.
 - [`reference/refresh-rotation.md`](reference/refresh-rotation.md) — refresh
   and rotation behavior.
 

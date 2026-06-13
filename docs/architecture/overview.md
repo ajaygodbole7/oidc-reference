@@ -1,16 +1,18 @@
 # Architecture Overview
 
-A local reference implementation of OAuth 2.1 and OpenID Connect for a
-browser app, built on the Backend-for-Frontend (BFF) session pattern in its
-split implementation: the browser never holds an access, refresh, or ID
-token.
+A local, runnable reference for OAuth 2.1 and OpenID Connect in a browser app.
+Start with the README for the flows; this page maps the components.
 
-Two services divide the BFF role. A confidential **Auth Service** owns the
-OAuth/OIDC client: the Authorization Code Flow with PKCE, the session cookie,
-ID-token validation, refresh-token rotation, and RP-initiated logout. An
-**API Gateway** owns `/api/**` routing and bearer injection. They share a
-Valkey state store and sit behind a single ingress. Tokens live in the state
-store, addressed by an opaque `HttpOnly` session cookie.
+The shape is the Backend-for-Frontend (BFF) session pattern, in its
+split implementation:
+
+- The browser never holds an access, refresh, or ID token.
+- Two services divide the BFF role. A confidential **Auth Service** owns the
+  OAuth/OIDC client: Authorization Code + PKCE, the session cookie, ID-token
+  validation, refresh-token rotation, and RP-initiated logout. An **API
+  Gateway** owns `/api/**` routing and bearer injection.
+- Both sit behind a single ingress and share a Valkey state store. Tokens live
+  in the store, addressed by an opaque `HttpOnly` session cookie.
 
 This follows IETF guidance for OAuth 2.0 for Browser-Based Apps
 (draft-ietf-oauth-browser-based-apps).
@@ -23,14 +25,15 @@ contracts, see [`../specs/SPEC-0001-core-oidc-flows.md`](../specs/SPEC-0001-core
 
 1. **Browser login.** A top-level request for a protected URL, or an explicit
    `/auth/login` navigation, starts the Auth-Service-owned Authorization Code
-   Flow with PKCE. The Auth Service writes `tx:{state}` to the state store,
-   creates `sess:{sid}` after callback, and issues a `302` to the saved
-   request URL with `__Host-sid` (`SameSite=Lax`) and a signed `XSRF-TOKEN`.
-   On each `/api/**` request the API Gateway calls the Auth Service over the
-   `/internal/resolve` RPC to obtain the current access token, then forwards
-   to the Resource Server with `Authorization: Bearer`. Session lookup, the
-   idle-TTL slide, and refresh are all delegated to the Auth Service inside
-   that call, authenticated with Client Credentials.
+   Flow with PKCE.
+   - The Auth Service writes `tx:{state}`, creates `sess:{sid}` after callback,
+     and issues a `302` to the saved request URL with `__Host-sid`
+     (`SameSite=Lax`) and a signed `XSRF-TOKEN`.
+   - On each `/api/**` request the API Gateway calls the Auth Service over the
+     `/internal/resolve` RPC (authenticated with Client Credentials) to obtain
+     the current access token, then forwards to the Resource Server with
+     `Authorization: Bearer`. Session lookup, the idle-TTL slide, and refresh
+     are all delegated to the Auth Service inside that call.
 2. **Service authorization.** A machine client uses the Client Credentials
    Flow against Keycloak, then calls service-only Resource Server endpoints
    directly. Neither the Auth Service nor the API Gateway is in this path.

@@ -1,6 +1,7 @@
 # Production Hardening Notes
 
-This repository is a local reference, not a drop-in production deployment. The
+What this is: the gap list between the local reference and a real deployment.
+This repository is a local reference, not a drop-in production deployment; the
 architecture is meant to be copied and hardened for a specific platform.
 
 ## Required Before Non-Local Use

@@ -1,18 +1,20 @@
 # AGENTS.md
 
-This is the operating contract for all agents working in this repo (Claude
-Code, Codex, or human).
+- **What this is:** the operating contract for anyone working in this repo —
+  Claude Code, Codex, or human.
+- **Who it's for:** contributors making code or doc changes.
+- **Where to start:** read this file, then `docs/specs/SPEC-0001-core-oidc-flows.md`
+  (the build contract) and the README sequence diagrams (the canonical flows).
 
 ## Project Goal
 
-Build a local OAuth 2.1 / OIDC reference that uses the Backend-for-Frontend
-session pattern in its split-implementation shape. The browser never holds
-tokens. A confidential Auth Service owns the OAuth/OIDC client role. An API
-Gateway (APISIX) owns routing and bearer injection. Tokens live in a
-Redis-compatible server-side state store (Valkey locally).
+A local OAuth 2.1 / OIDC reference using the Backend-for-Frontend session
+pattern in its split-implementation shape.
 
-The canonical end-to-end flow is the Mermaid sequence diagram in the root
-`README.md`. The build contract is `docs/specs/SPEC-0001-core-oidc-flows.md`.
+- The browser never holds tokens.
+- A confidential Auth Service owns the OAuth/OIDC client role.
+- An API Gateway (APISIX) owns routing and bearer injection.
+- Tokens live in a Redis-compatible server-side state store (Valkey locally).
 
 Five directories, five components, no cloud.
 
@@ -38,12 +40,14 @@ Five directories, five components, no cloud.
 - Security Agent: threat model and negative auth cases
 - Docs Agent: docs scoped to the assigned task
 
-Auth Service and API Gateway have separate ownership boundaries. The Auth
-Service owns OAuth/OIDC client behavior and writes `tx:{state}` and
-`sess:{sid}`. The API Gateway owns routing, the `/api/**` allowlist, and
-the tolerant `sess:{sid}` reader. They share only the documented JSON
-schema in SPEC-0001 §"`sess:{sid}` schema contract" and the
-`/internal/resolve` contract.
+Auth Service and API Gateway have separate ownership boundaries:
+
+- The Auth Service owns OAuth/OIDC client behavior and writes `tx:{state}`
+  and `sess:{sid}`.
+- The API Gateway owns routing, the `/api/**` allowlist, and the tolerant
+  `sess:{sid}` reader.
+- They share only the documented JSON schema in SPEC-0001 §"`sess:{sid}`
+  schema contract" and the `/internal/resolve` contract.
 
 Coordinate before editing `AGENTS.md`, root build files, root
 `compose.yaml`, shared verification scripts, or Keycloak realm files once

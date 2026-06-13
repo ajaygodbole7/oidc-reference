@@ -1,9 +1,15 @@
 # Bring Your Own IdP
 
-This project is IdP-agnostic at the application boundary: the Frontend calls
-only the API Gateway, the Auth Service is the confidential OIDC client, and the
-Resource Server validates standard JWT claims. Keycloak is the local reference
-Authorization Server, not a code dependency.
+What this is: how to swap the local Keycloak for another OIDC provider, and the
+config surface that swap touches.
+
+This project is IdP-agnostic at the application boundary:
+
+- the Frontend calls only the API Gateway;
+- the Auth Service is the confidential OIDC client;
+- the Resource Server validates standard JWT claims.
+
+Keycloak is the local reference Authorization Server, not a code dependency.
 
 A provider swap is configuration-only for a standard OIDC provider. The
 following are all env-configurable:

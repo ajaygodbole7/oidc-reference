@@ -1,8 +1,7 @@
 # Phantom-token session resolution (gateway de-coupled from the store)
 
-> Decision capture. This is a standalone record of the research and the choices
-> behind making the API Gateway storage-agnostic. It will be folded into the main
-> docs in a later sweep.
+> How the API Gateway stays storage-agnostic: it resolves the session through
+> the Auth Service (`/internal/resolve`) and holds no session-store handle.
 
 ## The change
 
@@ -21,16 +20,18 @@ token. The gateway injects that token upstream.
 
 What we built has a name. The edge holds an opaque by-reference token (the sid)
 and **introspects it** via a token service (the Auth Service) to obtain the
-by-value JWT it forwards upstream. That is Curity's **phantom-token pattern**;
-conceptually it is RFC 7662 token introspection applied to the session
-reference; and it is a conformant implementation of the IETF BFF BCP, which
-specifies the *behavior* (the BFF "removes the cookie, attaches the access
-token, and forwards it") but deliberately does **not** prescribe the internal
-mechanics. Both "gateway reads the store directly" and "gateway introspects via a
-service" satisfy the BCP — and the introspection variant is the one the industry
-pattern catalog documents. The previous direct-read was a valid but
-non-canonical performance shortcut; this moves the reference *toward* the
-standard shape.
+by-value JWT it forwards upstream.
+
+- This is Curity's **phantom-token pattern**; conceptually, RFC 7662 token
+  introspection applied to the session reference.
+- It is a conformant implementation of the IETF BFF BCP, which specifies the
+  *behavior* (the BFF "removes the cookie, attaches the access token, and
+  forwards it") but deliberately does **not** prescribe the internal mechanics.
+- Both "gateway reads the store directly" and "gateway introspects via a
+  service" satisfy the BCP. The introspection variant is the one the industry
+  pattern catalog documents.
+- The previous direct-read was a valid but non-canonical performance shortcut;
+  this moves the reference *toward* the standard shape.
 
 ## Why — two wins
 
@@ -75,31 +76,37 @@ and document the revocation window as a deliberate dial. Not now.
 
 ## JWKS cost accounting (a common misconception)
 
-The per-request **JWT signature validation (JWKS) lives at the Resource Server in
-both designs** — it never lived at the gateway, and the redesign does not move
-it. The RS verifies the token's signature against a *cached* JWKS (refresh-ahead,
-local RSA verify). The Auth Service uses JWKS only at login and refresh (id-token
-validation), not per `/api` call. So the redesign **adds no JWKS cost**. What
-relocates is the **session lookup** — the Valkey `GET` moves from the gateway into
-the Auth Service, behind the resolve RPC. The resolve endpoint does **not**
-re-validate the access token's signature; that would be redundant with the RS,
-and the phantom-token pattern leaves authoritative validation at the API/RS.
+- The per-request **JWT signature validation (JWKS) lives at the Resource Server
+  in both designs** — it never lived at the gateway, and the redesign does not
+  move it. The RS verifies the signature against a *cached* JWKS (refresh-ahead,
+  local RSA verify).
+- The Auth Service uses JWKS only at login and refresh (id-token validation),
+  not per `/api` call. So the redesign **adds no JWKS cost**.
+- What relocates is the **session lookup**: the Valkey `GET` moves from the
+  gateway into the Auth Service, behind the resolve RPC.
+- The resolve endpoint does **not** re-validate the access token's signature;
+  that would be redundant with the RS, and the phantom-token pattern leaves
+  authoritative validation at the API/RS.
 
 ## Distributed-lock analysis
 
-The per-session refresh lock stays in the Auth Service, around the refresh portion
-of resolve. The phantom-token move adds **no new concurrency hazard**: the lock is
-engaged only near expiry (a fresh-token resolve is lock-free — read, slide, return),
-exactly as before. The reference stays **single-instance**, so the in-process
-`ReentrantLock` is correct and sufficient; we do **not** add a distributed lock now
-(an unexercised distributed lock, with no multi-instance deployment to test it
-against, is unvalidated complexity). But the hot-path move makes horizontal scaling
-of the Auth Service much more likely in production, so the distributed lock
-(`SET NX PX refresh_lock:{sid}` + compare-and-delete release) becomes a **more
-pressing** production requirement than before. The recipe is in
-`docs/operations/production-hardening.md`. The single-instance serialization (two
-concurrent resolves on one sid → exactly one upstream refresh) is proven by
-`InternalResolveControllerTest.concurrentResolveCallsForSameSidSerializeOnLock`.
+The per-session refresh lock stays in the Auth Service, around the refresh
+portion of resolve.
+
+- The phantom-token move adds **no new concurrency hazard**: the lock is
+  engaged only near expiry (a fresh-token resolve is lock-free — read, slide,
+  return), exactly as before.
+- The reference stays **single-instance**, so the in-process `ReentrantLock` is
+  correct and sufficient. We do **not** add a distributed lock now: unexercised,
+  with no multi-instance deployment to test it against, it is unvalidated
+  complexity.
+- The hot-path move makes horizontal scaling of the Auth Service more likely in
+  production, so the distributed lock (`SET NX PX refresh_lock:{sid}` +
+  compare-and-delete release) becomes a **more pressing** production requirement
+  than before. The recipe is in `docs/operations/production-hardening.md`.
+- Single-instance serialization (two concurrent resolves on one sid → exactly
+  one upstream refresh) is proven by
+  `InternalResolveControllerTest.concurrentResolveCallsForSameSidSerializeOnLock`.
 
 ## `/auth/me` vs `/internal/resolve` — shared core, two projections
 

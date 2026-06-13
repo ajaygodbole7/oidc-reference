@@ -299,17 +299,19 @@ State-changing requests are protected by a signed double-submit CSRF
 token (HMAC-signed or session-bound), not naive cookie-header match.
 
 What was rejected: `SameSite=Strict` plus an intermediate same-origin HTML
-landing page. The landing page is added engineering complexity. It is an HTML
-response that becomes an XSS surface needing a tight CSP, additional test
-scaffolding, and a "this exists only to work around a cookie attribute" step
-in the architecture diagram. The threat `Strict` defends against beyond `Lax`
-is being-linkable-while-authenticated from a cross-site context. That is the
-intended behavior for most browser apps and is a concern only for narrow
-threat models (banking, certain compliance regimes). For the reference's
-threat model, the CSRF risks `Strict` would mitigate on state-changing
-requests are already covered by the signed double-submit CSRF token.
-Mainstream production BFF implementations (`oauth2-proxy`, Spring Cloud
-Gateway BFF samples, Auth0 / Curity reference docs) ship `SameSite=Lax`.
+landing page.
+
+- The landing page is added complexity: an HTML response that becomes an XSS
+  surface needing a tight CSP, plus test scaffolding, plus a "this exists only
+  to work around a cookie attribute" step in the architecture diagram.
+- The threat `Strict` defends against beyond `Lax` is
+  being-linkable-while-authenticated from a cross-site context. That is the
+  intended behavior for most browser apps, and a concern only for narrow
+  threat models (banking, certain compliance regimes).
+- The CSRF risks `Strict` would mitigate on state-changing requests are already
+  covered by the signed double-submit CSRF token.
+- Mainstream production BFFs (`oauth2-proxy`, Spring Cloud Gateway BFF samples,
+  Auth0 / Curity reference docs) ship `SameSite=Lax`.
 
 What was also rejected: naive (unsigned) double-submit. **Failure mode:**
 cookie injection. An attacker with an XSS or `document.cookie` write
@@ -347,18 +349,19 @@ verified at the callback.
   in `tx:{state}`. The callback computes `HMAC(supplied cookie)` and
   rejects when it does not match.
 
-**Why the first three are not enough.** RFC 9700 §4.7's `state` defense
-covers the case where the victim initiated the OAuth flow and the
-attacker cannot predict `state`. It does not cover the inverse: an
-attacker who runs their own login flow at the AS, captures the resulting
-`(code, state)` callback URL, and induces the victim to load it (a crafted
-link, a redirect from an attacker page, an open-redirect chain in another
-property). The victim's browser then hits `/auth/callback/idp` with values
-the attacker controls. `tx:{state}` exists (the attacker created it), PKCE
-succeeds (the attacker generated the verifier), and the ID-token `nonce`
-matches (the attacker chose it). The result is a session minted from the
-attacker's identity logged into the victim's browser: a session-fixation
-class attack.
+**Why the first three are not enough.** RFC 9700 §4.7's `state` defense covers
+the case where the victim initiated the OAuth flow and the attacker cannot
+predict `state`. It does not cover the inverse:
+
+- The attacker runs their own login flow at the AS, captures the resulting
+  `(code, state)` callback URL, and induces the victim to load it (a crafted
+  link, a redirect from an attacker page, an open-redirect chain elsewhere).
+- The victim's browser hits `/auth/callback/idp` with attacker-controlled
+  values. `tx:{state}` exists (the attacker created it), PKCE succeeds (the
+  attacker generated the verifier), and the ID-token `nonce` matches (the
+  attacker chose it).
+- The result is a session minted from the attacker's identity, logged into the
+  victim's browser: a session-fixation class attack.
 
 The `oauth_tx` cookie closes this: the victim's browser cannot present a
 cookie matching the attacker's stored hash because the cookie was set on
@@ -391,16 +394,17 @@ exact match, signature recomputed and compared in constant time. The signing
 key is a 256-bit env-supplied secret shared between Auth Service (issuer)
 and API Gateway (validator).
 
-**Failure mode for naive double-submit: cookie injection.** An attacker with
-an XSS or `document.cookie` write vulnerability on a sibling subdomain
-(`evil.example.com` against `app.example.com`) can set a matching cookie and
-header pair in the victim's browser, satisfying a naive
-cookie-equals-header check from a cross-site request. Signing the token
-breaks the attack: the attacker cannot forge a valid HMAC without the
-server-side key. A session-bound variant (the token contains or hashes the
-`sid`) is an equivalent defense. The HMAC variant is the reference's chosen
-shape because it does not require a `sess:{sid}` lookup before signature
-validation.
+**Failure mode for naive double-submit: cookie injection.**
+
+- An attacker with an XSS or `document.cookie` write on a sibling subdomain
+  (`evil.example.com` against `app.example.com`) can set a matching cookie and
+  header pair in the victim's browser, satisfying a naive cookie-equals-header
+  check from a cross-site request.
+- Signing the token breaks the attack: the attacker cannot forge a valid HMAC
+  without the server-side key.
+- A session-bound variant (the token contains or hashes the `sid`) is an
+  equivalent defense. The HMAC variant is the reference's chosen shape because
+  it needs no `sess:{sid}` lookup before signature validation.
 
 The synchronizer-token pattern was considered. It is acceptable, but it
 adds a server-side session lookup to validate CSRF on a same-origin
@@ -649,15 +653,18 @@ resource URLs.
 The Resource Server serves resources from the token it already validated. It
 does not call a further downstream service.
 
-This is deliberate. The access token is audience-restricted to
-`oidc-reference-api` (RFC 9700 §2.3, least privilege). Relaying that token to a
-second service is token passthrough: it stretches one credential across
-audiences and inflates its blast radius, and it fails cleanly anyway when the
-second service validates `aud`. The correct way to call a downstream service —
-exchanging the user token for one scoped to that service (RFC 8693 Token
-Exchange), or the calling service obtaining its own token — is a distinct flow
-with its own grant, threat model, and tests. It is orthogonal to what this
-reference teaches (browser-app OAuth with no tokens in the browser).
+This is deliberate.
+
+- The access token is audience-restricted to `oidc-reference-api` (RFC 9700
+  §2.3, least privilege). Relaying it to a second service is token passthrough:
+  it stretches one credential across audiences and inflates its blast radius,
+  and fails cleanly anyway when the second service validates `aud`.
+- The correct way to call a downstream service — exchanging the user token for
+  one scoped to that service (RFC 8693 Token Exchange), or the calling service
+  obtaining its own token — is a distinct flow with its own grant, threat
+  model, and tests.
+- It is orthogonal to what this reference teaches (browser-app OAuth with no
+  tokens in the browser).
 
 So `/api/user-data` returns the caller's profile and entitlements derived from
 the validated JWT itself, not from a downstream fetch. The two service-to-service
