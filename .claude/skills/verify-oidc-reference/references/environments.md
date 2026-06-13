@@ -21,6 +21,15 @@ docker info >/dev/null 2>&1 || \
   export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
 ```
 
+**Exception — `scripts/e2e-distributed-lock.sh` self-detects.** Unlike the other
+scripts (which call `docker compose` and rely on the `DOCKER_HOST` redirect above
+under Podman), this harness picks the runtime for its Valkey `exec` itself:
+whichever runtime actually holds the `oidc-reference-valkey-1` container, else the
+first with a reachable engine (override `CONTAINER_RUNTIME=docker|podman`). So it
+needs **no `podman→docker` shim on a Docker-only host** and drives `podman exec`
+directly under Podman. You still bring its two-replica stack up with your
+runtime's `compose` per the SKILL gate.
+
 ## 2 — Prerequisites (both runtimes)
 
 1. **APISIX config is rendered before `compose up`.** Compose bind-mounts
