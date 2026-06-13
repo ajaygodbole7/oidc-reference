@@ -216,6 +216,27 @@ class ApiSecurityTest {
   }
 
   @Test
+  void adminWithStaleAuthTimeButSufficientAcrStillChallenges() throws Exception {
+    // Isolation: assurance IS satisfied (acr="1") but the last interactive
+    // authentication is stale. Recency must STILL be enforced — a sufficient
+    // acr does not excuse an old auth_time. Guards against a refactor that
+    // short-circuits the recency check once the acr check would pass.
+    mockMvc.perform(post("/api/admin")
+            .with(jwt().jwt(j -> j
+                    .claim("realm_access", Map.of("roles", List.of("admin")))
+                    .claim("auth_time", java.time.Instant.now().minusSeconds(3600).getEpochSecond())
+                    .claim("acr", "1"))
+                .authorities(new SimpleGrantedAuthority("ROLE_admin"))))
+        .andExpect(status().isUnauthorized())
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("error=\"insufficient_user_authentication\"")))
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("max_age=")))
+        .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(jsonPath("$.error").value("insufficient_user_authentication"));
+  }
+
+  @Test
   void adminWithSufficientAcrAndFreshAuthTimeSucceeds() throws Exception {
     // Assurance axis (E1): a fresh, sufficiently-assured authentication
     // (acr in app.step-up.required-acr, default "1") clears the step-up gate.

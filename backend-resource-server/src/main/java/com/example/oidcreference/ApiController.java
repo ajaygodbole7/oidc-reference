@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -51,7 +52,14 @@ class ApiController {
     this.serviceClients = Set.copyOf(serviceClients);
     this.jobsClientId = jobsClientId;
     this.stepUpMaxAge = stepUpMaxAge;
-    this.requiredAcr = Set.copyOf(requiredAcr);
+    // Strip blank entries: depending on the property binder, an unset
+    // `app.step-up.required-acr` can bind as a single empty string rather than
+    // an empty set. Filtering blanks makes an empty/blank config reliably
+    // DISABLE the acr check (the documented "IdP emits no acr" path) instead of
+    // rejecting every token, since no real token carries a blank acr.
+    this.requiredAcr = requiredAcr.stream()
+        .filter(value -> value != null && !value.isBlank())
+        .collect(Collectors.toUnmodifiableSet());
     if (!this.serviceClients.contains(this.jobsClientId)) {
       throw new IllegalArgumentException(
           "app.jobs-client-id must be included in app.service-client-ids");
