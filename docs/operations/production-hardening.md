@@ -67,6 +67,17 @@ and the `compareAndDelete` parity cases in `RedisStateStoreParityTest`):
   errors), throw rather than refresh unguarded — the controller surfaces a transient
   5xx and the gateway keeps the session cookie and retries.
 
+**Proof (two real replicas).** `scripts/e2e-distributed-lock.sh` with
+`compose.distributed-lock.yml` runs **two** `auth-service` replicas on one shared
+Valkey + Keycloak and fires concurrent `/internal/resolve` for the same session at
+each replica. With `app.refresh-lock=distributed` the two collapse to one upstream
+refresh — both return `200`, no `invalid_grant`. Flip both to `in-process` and the
+uncoordinated replicas trip Keycloak's reuse detection: a `409 invalid_grant` on a
+real overlap = the cross-instance logout the lock exists to prevent. It is a manual
+harness (seeds the session from ROPC-issued **real** tokens and toggles Keycloak
+direct-grant at runtime — both ephemeral), not part of the default gate; run it on
+the two-replica stack to reproduce the contrast.
+
 (Alternatively, disable refresh-token rotation. This is weaker, since you lose
 reuse detection.) This concern lives entirely in the Auth Service and the state
 store. It is independent of which gateway fronts `/internal/resolve`.
