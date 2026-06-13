@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import jakarta.servlet.http.HttpServletRequest;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -290,7 +291,7 @@ class InternalResolveController {
   // tagged with rotated_sid=sid' so the gateway switches the browser to the new
   // cookie. Returns null when there is no breadcrumb (genuinely no session) or
   // the forwarded session is itself gone/expired — the caller then 404s.
-  private ResponseEntity<ResolveResponse> resolveViaBreadcrumb(
+  private @Nullable ResponseEntity<ResolveResponse> resolveViaBreadcrumb(
       String oldSid, HttpServletRequest request) {
     Optional<String> newSid = stateStore.get(ROTATED_PREFIX + oldSid);
     if (newSid.isEmpty()) {
@@ -346,7 +347,7 @@ class InternalResolveController {
     };
   }
 
-  private static String subjectClaim(SessionRecord session) {
+  private static @Nullable String subjectClaim(@Nullable SessionRecord session) {
     if (session == null || session.claims() == null) {
       return null;
     }
@@ -367,7 +368,7 @@ class InternalResolveController {
   record ResolveResponse(
       @JsonProperty("access_token") String accessToken,
       @JsonProperty("access_token_expires_at") Instant accessTokenExpiresAt,
-      @JsonProperty("rotated_sid") String rotatedSid,
-      @JsonProperty("rotated_sid_max_age") Long rotatedSidMaxAge,
-      @JsonProperty("rotated_csrf") String rotatedCsrf) {}
+      @JsonProperty("rotated_sid") @Nullable String rotatedSid,
+      @JsonProperty("rotated_sid_max_age") @Nullable Long rotatedSidMaxAge,
+      @JsonProperty("rotated_csrf") @Nullable String rotatedCsrf) {}
 }

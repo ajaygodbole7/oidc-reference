@@ -1,10 +1,8 @@
 package com.example.oidcreference.authservice;
 
-import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -31,15 +29,15 @@ class RefreshLockConfig {
   private static final Logger log = LoggerFactory.getLogger(RefreshLockConfig.class);
 
   @Bean
-  RefreshLock refreshLock(
-      @Value("${app.refresh-lock:in-process}") String mode,
-      @Value("${app.refresh-lock-ttl:10s}") Duration ttl,
-      @Value("${app.refresh-lock-max-wait:12s}") Duration maxWait,
-      @Value("${app.refresh-lock-poll:50ms}") Duration poll,
-      ObjectProvider<StateStore> stateStore) {
-    if ("distributed".equalsIgnoreCase(mode)) {
-      log.info("RefreshLock: distributed (ttl={}, maxWait={}, poll={})", ttl, maxWait, poll);
-      return new DistributedRefreshKeyLock(stateStore.getObject(), ttl, maxWait, poll);
+  RefreshLock refreshLock(RefreshLockProperties properties, ObjectProvider<StateStore> stateStore) {
+    if (properties.distributed()) {
+      log.info("RefreshLock: distributed (ttl={}, maxWait={}, poll={})",
+          properties.refreshLockTtl(), properties.refreshLockMaxWait(), properties.refreshLockPoll());
+      return new DistributedRefreshKeyLock(
+          stateStore.getObject(),
+          properties.refreshLockTtl(),
+          properties.refreshLockMaxWait(),
+          properties.refreshLockPoll());
     }
     log.info("RefreshLock: in-process (single-instance only)");
     return new InProcessRefreshLock();

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,6 +15,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -37,6 +39,7 @@ import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 class SecurityConfig {
@@ -88,7 +91,8 @@ class SecurityConfig {
   JwtDecoder jwtDecoder(
       @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String issuerUri,
       @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri:}") String jwkSetUri,
-      @Value("${app.audience}") String requiredAudience) {
+      AppProperties properties) {
+    String requiredAudience = properties.audience();
     NimbusJwtDecoder decoder = jwkSetUri == null || jwkSetUri.isBlank()
         ? NimbusJwtDecoder
             .withIssuerLocation(issuerUri)
@@ -133,11 +137,15 @@ class SecurityConfig {
     return false;
   }
 
-  // Maps standard `scope` / `scp` claims -> SCOPE_* and the configured
-  // roles claim path -> ROLE_*.
   @Bean
-  JwtAuthenticationConverter jwtAuthenticationConverter(
-      @Value("${app.roles-claim-path}") List<String> rolesClaimPath) {
+  JwtAuthenticationConverter jwtAuthenticationConverter(AppProperties properties) {
+    return jwtAuthenticationConverter(properties.rolesClaimPath());
+  }
+
+  // Maps standard `scope` / `scp` claims -> SCOPE_* and the configured
+  // roles claim path -> ROLE_*. Package-private (not a @Bean) so a unit test
+  // can exercise it directly with an explicit claim path.
+  JwtAuthenticationConverter jwtAuthenticationConverter(List<String> rolesClaimPath) {
     JwtGrantedAuthoritiesConverter scopes = new JwtGrantedAuthoritiesConverter();
     scopes.setAuthorityPrefix("SCOPE_");
     JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
@@ -156,7 +164,9 @@ class SecurityConfig {
     return converter;
   }
 
-  private static Object nestedClaim(Map<String, Object> claims, List<String> path) {
+  // Returns null when the path doesn't resolve (a missing or non-map segment) —
+  // callers null-tolerate via `instanceof Collection`.
+  private static @Nullable Object nestedClaim(Map<String, Object> claims, List<String> path) {
     Object current = claims;
     for (String segment : path) {
       if (!(current instanceof Map<?, ?> map)) {
@@ -168,7 +178,7 @@ class SecurityConfig {
   }
 
   @Bean
-  AuthenticationEntryPoint authenticationEntryPoint() {
+  AuthenticationEntryPoint authenticationEntryPoint(ObjectMapper objectMapper) {
     return (request, response, ex) -> {
       logSecurityAudit(request, HttpStatus.UNAUTHORIZED, "authentication_required");
       // RFC 6750 §3: a 401 from a protected resource MUST include a Bearer
@@ -184,20 +194,20 @@ class SecurityConfig {
         challenge = "Bearer error=\"" + oae.getError().getErrorCode() + "\"";
       }
       response.setHeader(org.springframework.http.HttpHeaders.WWW_AUTHENTICATE, challenge);
-      writeProblem(response, HttpStatus.UNAUTHORIZED, "Unauthorized",
+      writeProblem(response, objectMapper, HttpStatus.UNAUTHORIZED, "Unauthorized",
         "Authentication is required to access this resource.");
     };
   }
 
   @Bean
-  AccessDeniedHandler accessDeniedHandler() {
+  AccessDeniedHandler accessDeniedHandler(ObjectMapper objectMapper) {
     return (request, response, ex) -> {
       logSecurityAudit(request, HttpStatus.FORBIDDEN, "insufficient_authority");
       // RFC 6750 §3.1: a 403 for an authenticated-but-underscoped token
       // challenges with error="insufficient_scope".
       response.setHeader(org.springframework.http.HttpHeaders.WWW_AUTHENTICATE,
           "Bearer error=\"insufficient_scope\"");
-      writeProblem(response, HttpStatus.FORBIDDEN, "Forbidden",
+      writeProblem(response, objectMapper, HttpStatus.FORBIDDEN, "Forbidden",
         "Access denied: the token does not include the required scope or role.");
     };
   }
@@ -215,21 +225,19 @@ class SecurityConfig {
         request.getRemoteAddr());
   }
 
+  // Body via Spring's ProblemDetail serialized with the Boot ObjectMapper
+  // (the idiom the auth-service already uses), instead of hand-rolled JSON.
+  // The WWW-Authenticate challenge is set by the caller and stays
+  // byte-controlled — only the body construction moved here.
   private static void writeProblem(
       HttpServletResponse response,
+      ObjectMapper objectMapper,
       HttpStatus status, String title, String detail) throws IOException {
+    ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
+    problem.setTitle(title);
     response.setStatus(status.value());
     response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
-    response.getWriter().write(
-        "{\"type\":\"about:blank\",\"title\":\"%s\",\"status\":%d,\"detail\":\"%s\"}"
-        .formatted(
-            escapeJson(title),
-            status.value(),
-            escapeJson(detail)));
-  }
-
-  private static String escapeJson(String value) {
-    return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    response.getWriter().write(objectMapper.writeValueAsString(problem));
   }
 
   @Bean

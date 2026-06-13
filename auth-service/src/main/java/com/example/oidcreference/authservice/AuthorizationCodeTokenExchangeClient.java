@@ -11,6 +11,7 @@ import com.nimbusds.openid.connect.sdk.OIDCTokenResponse;
 import com.nimbusds.openid.connect.sdk.OIDCTokenResponseParser;
 import java.net.URI;
 import java.time.Instant;
+import org.jspecify.annotations.Nullable;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -95,7 +96,7 @@ class AuthorizationCodeTokenExchangeClient implements TokenExchangeClient {
   // never short-circuits on a fabricated deadline. Inventing a value here
   // (the previous behavior hardcoded 1800s) would kill valid sessions on
   // any IdP that simply doesn't emit the claim.
-  static Long parseRefreshExpiresIn(Object raw) {
+  static @Nullable Long parseRefreshExpiresIn(@Nullable Object raw) {
     return switch (raw) {
       case Number n when n.longValue() > 0 -> n.longValue();
       case String s -> {

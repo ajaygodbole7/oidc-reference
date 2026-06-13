@@ -2,6 +2,7 @@ package com.example.oidcreference.authservice;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
+import org.jspecify.annotations.Nullable;
 
 // In-flight OAuth transaction, keyed by state in `tx:{state}`. The
 // txCookieHash field is the HMAC of the oauth_tx browser-binding
@@ -17,7 +18,7 @@ record OAuthTransaction(
     // Step-up marker. Persisted so the callback knows to enforce auth_time
     // freshness when the IdP redirects back. Tolerant-read: existing tx:{state}
     // records written before this field decode to null (treated as no step-up).
-    @JsonProperty("step_up") Boolean stepUp) {
+    @JsonProperty("step_up") @Nullable Boolean stepUp) {
 
   // Ordinary (non-step-up) login. Unlike the removed 4-arg constructor — which
   // produced an INVALID null txCookieHash the callback fail-closes on — a false

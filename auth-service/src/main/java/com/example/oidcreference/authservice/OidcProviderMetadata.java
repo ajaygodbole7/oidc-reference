@@ -5,6 +5,7 @@ import com.nimbusds.openid.connect.sdk.op.OIDCProviderConfigurationRequest;
 import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata;
 import java.net.URI;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Snapshot of the OpenID Provider configuration loaded once at startup.
@@ -25,7 +26,7 @@ public record OidcProviderMetadata(
     URI authorizationEndpoint,
     URI tokenEndpoint,
     URI jwksUri,
-    URI endSessionEndpoint,
+    @Nullable URI endSessionEndpoint,
     String issuer,
     Set<String> scopes) {
 

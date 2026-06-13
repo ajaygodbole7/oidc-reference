@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.Map;
 import java.util.Optional;
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.stereotype.Component;
@@ -141,5 +142,7 @@ class BackChannelLogoutTokenValidator {
     }
   }
 
-  record LogoutToken(String sub, String sid, String jti) {}
+  // A logout_token carries sub, sid, or both (validate() rejects neither);
+  // each is individually nullable.
+  record LogoutToken(@Nullable String sub, @Nullable String sid, String jti) {}
 }

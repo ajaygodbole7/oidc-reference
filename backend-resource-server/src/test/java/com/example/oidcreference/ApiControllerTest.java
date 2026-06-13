@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.AccessDeniedException;
@@ -18,10 +19,20 @@ class ApiControllerTest {
 
   private static final Duration STEP_UP_MAX_AGE = Duration.ofMinutes(5);
 
+  private static AppProperties props(
+      Set<String> serviceClientIds, String jobsClientId, Set<String> requiredAcr) {
+    return new AppProperties(
+        "oidc-reference-api",
+        List.of("realm_access", "roles"),
+        serviceClientIds,
+        jobsClientId,
+        new AppProperties.StepUp(STEP_UP_MAX_AGE, requiredAcr));
+  }
+
   private final ApiController controller =
       new ApiController(
-          Set.of("custom-gateway", "custom-service", "custom-jobs"), "custom-jobs", STEP_UP_MAX_AGE,
-          Set.of("1"));
+          props(Set.of("custom-gateway", "custom-service", "custom-jobs"), "custom-jobs",
+              Set.of("1")));
 
   @Test
   void meDeniesAConfiguredServiceClient() {
@@ -52,10 +63,22 @@ class ApiControllerTest {
 
   @Test
   void constructorRejectsJobsClientOutsideServiceAllowlist() {
-    assertThatThrownBy(() -> new ApiController(Set.of("custom-gateway"), "custom-jobs", STEP_UP_MAX_AGE,
-            Set.of("1")))
+    // The cross-field invariant now lives in the AppProperties compact
+    // constructor (fail-fast at binding), so building the record with a jobs
+    // client outside the service allowlist is what trips it.
+    assertThatThrownBy(() -> props(Set.of("custom-gateway"), "custom-jobs", Set.of("1")))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("app.jobs-client-id");
+  }
+
+  @Test
+  void adminAcceptsAFreshAuthTimeWithNoAcrWhenRequiredAcrIsEmpty() {
+    // The documented "IdP emits no acr" path: with required-acr EMPTY the acr
+    // check is disabled, so a fresh auth_time and NO acr claim clears the gate.
+    ApiController noAcr = new ApiController(
+        props(Set.of("custom-gateway", "custom-jobs"), "custom-jobs", Set.of()));
+    Jwt jwt = jwtWithAuthTime(Instant.now().minusSeconds(30));
+    assertThat(noAcr.admin(jwt)).containsEntry("status", "admin");
   }
 
   // -- step-up freshness on the sensitive route ---------------------------

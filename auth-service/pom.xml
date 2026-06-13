@@ -39,6 +39,15 @@
   </dependencyManagement>
 
   <dependencies>
+    <!-- JSpecify null-safety annotations. The main package is @NullMarked via
+         package-info; genuinely-nullable record components / returns / params
+         are annotated @Nullable so the nullability that was carried in prose
+         comments now lives in the type system. -->
+    <dependency>
+      <groupId>org.jspecify</groupId>
+      <artifactId>jspecify</artifactId>
+      <version>1.0.0</version>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-security</artifactId>

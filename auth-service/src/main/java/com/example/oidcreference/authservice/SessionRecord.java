@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.Nullable;
 
 // Field names on the wire MUST match SPEC-0001 §7.2 (sess:{sid} schema
 // contract). The Auth Service is the sole writer; the API Gateway is a
@@ -16,7 +17,7 @@ record SessionRecord(
     @JsonProperty("refresh_token") String refreshToken,
     @JsonProperty("id_token") String idToken,
     @JsonProperty("access_token_expires_at") Instant expiresAt,
-    @JsonProperty("refresh_token_expires_at") Instant refreshExpiresAt,
+    @JsonProperty("refresh_token_expires_at") @Nullable Instant refreshExpiresAt,
     @JsonProperty("created_at") Instant createdAt,
     @JsonProperty("absolute_expires_at") Instant absoluteExpiresAt,
     // When the CURRENT refresh token was minted: set on the initial code
@@ -24,7 +25,7 @@ record SessionRecord(
     // live refresh token's age. Nullable for backward compatibility — sessions
     // and fixtures written before this field deserialize fine and simply skip
     // the optional age check (see refreshTokenExpired(Duration)).
-    @JsonProperty("refresh_minted_at") Instant refreshMintedAt,
+    @JsonProperty("refresh_minted_at") @Nullable Instant refreshMintedAt,
     @JsonProperty("claims") Map<String, Object> claims) {
   private static final Duration ABSOLUTE_TTL = Duration.ofHours(8);
   static final Duration SESSION_IDLE_TTL = Duration.ofMinutes(30);
@@ -34,7 +35,7 @@ record SessionRecord(
       String refreshToken,
       String idToken,
       Instant expiresAt,
-      Instant refreshExpiresAt,
+      @Nullable Instant refreshExpiresAt,
       Map<String, Object> claims) {
     this(
         accessToken,
@@ -86,7 +87,7 @@ record SessionRecord(
    * @param maxRefreshTokenAge independent age ceiling, or {@code null}/unset to
    *     disable it — when null, behavior is identical to the IdP-only check.
    */
-  boolean refreshTokenExpired(Duration maxRefreshTokenAge) {
+  boolean refreshTokenExpired(@Nullable Duration maxRefreshTokenAge) {
     if (refreshExpiresAt != null && !refreshExpiresAt.isAfter(Instant.now())) {
       return true;
     }

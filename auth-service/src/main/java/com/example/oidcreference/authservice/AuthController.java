@@ -12,6 +12,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
+import org.jspecify.annotations.Nullable;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -84,7 +85,7 @@ class AuthController {
 
   @GetMapping("/login")
   ResponseEntity<?> login(
-      @RequestParam(name = "return_to", required = false) String returnTo,
+      @RequestParam(name = "return_to", required = false) @Nullable String returnTo,
       HttpServletRequest request) {
     if (!isValidReturnTo(returnTo)) {
       SecurityAudit.event(request, 400, "login_rejected", "invalid_return_to");
@@ -104,7 +105,7 @@ class AuthController {
   // is the portable, reliable "re-authenticate now" lever.
   @GetMapping("/step-up")
   ResponseEntity<?> stepUp(
-      @RequestParam(name = "return_to", required = false) String returnTo,
+      @RequestParam(name = "return_to", required = false) @Nullable String returnTo,
       HttpServletRequest request) {
     if (!isValidReturnTo(returnTo)) {
       SecurityAudit.event(request, 400, "step_up_rejected", "invalid_return_to");
@@ -181,10 +182,10 @@ class AuthController {
 
   @GetMapping("/callback/idp")
   ResponseEntity<?> callback(
-      @RequestParam(required = false) String code,
-      @RequestParam(name = "error", required = false) String error,
+      @RequestParam(required = false) @Nullable String code,
+      @RequestParam(name = "error", required = false) @Nullable String error,
       @RequestParam String state,
-      @RequestParam(name = "iss", required = false) String iss,
+      @RequestParam(name = "iss", required = false) @Nullable String iss,
     HttpServletRequest request) {
     boolean secure = isSecureRequest(request);
     var clearTxCookie = clearOauthTxCookie(state, secure);
@@ -412,7 +413,8 @@ class AuthController {
   // single-use handle is the capability. Referrer-Policy: no-referrer keeps the
   // id_token in the redirect URL out of the Referer of IdP-loaded resources.
   @GetMapping("/logout/continue")
-  ResponseEntity<Void> logoutContinue(@RequestParam(name = "lc", required = false) String lc) {
+  ResponseEntity<Void> logoutContinue(
+      @RequestParam(name = "lc", required = false) @Nullable String lc) {
     String target = "/";
     if (lc != null && !lc.isBlank()) {
       target = stateStore.getAndDelete("logout:" + lc).orElse("/");
@@ -452,7 +454,7 @@ class AuthController {
     return n.longValue() >= transaction.createdAt().getEpochSecond();
   }
 
-  private static String subjectClaim(SessionRecord session) {
+  private static @Nullable String subjectClaim(@Nullable SessionRecord session) {
     if (session == null || session.claims() == null) {
       return null;
     }

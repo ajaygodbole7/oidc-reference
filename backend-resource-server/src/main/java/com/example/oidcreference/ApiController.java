@@ -7,11 +7,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.GrantedAuthority;
@@ -44,26 +43,15 @@ class ApiController {
   // mapper emits "1" for a fresh interactive auth.
   private final Set<String> requiredAcr;
 
-  ApiController(
-      @Value("${app.service-client-ids}") Set<String> serviceClients,
-      @Value("${app.jobs-client-id}") String jobsClientId,
-      @Value("${app.step-up.max-age}") Duration stepUpMaxAge,
-      @Value("${app.step-up.required-acr:}") Set<String> requiredAcr) {
-    this.serviceClients = Set.copyOf(serviceClients);
-    this.jobsClientId = jobsClientId;
-    this.stepUpMaxAge = stepUpMaxAge;
-    // Strip blank entries: depending on the property binder, an unset
-    // `app.step-up.required-acr` can bind as a single empty string rather than
-    // an empty set. Filtering blanks makes an empty/blank config reliably
-    // DISABLE the acr check (the documented "IdP emits no acr" path) instead of
-    // rejecting every token, since no real token carries a blank acr.
-    this.requiredAcr = requiredAcr.stream()
-        .filter(value -> value != null && !value.isBlank())
-        .collect(Collectors.toUnmodifiableSet());
-    if (!this.serviceClients.contains(this.jobsClientId)) {
-      throw new IllegalArgumentException(
-          "app.jobs-client-id must be included in app.service-client-ids");
-    }
+  // Consumes the validated AppProperties record. The cross-field invariant
+  // (jobs-client-id ∈ service-client-ids) and the required-acr blank-strip
+  // normalization both live in the record now, so this constructor just copies
+  // the already-validated values into the controller's fields.
+  ApiController(AppProperties properties) {
+    this.serviceClients = Set.copyOf(properties.serviceClientIds());
+    this.jobsClientId = properties.jobsClientId();
+    this.stepUpMaxAge = properties.stepUp().maxAge();
+    this.requiredAcr = Set.copyOf(properties.stepUp().requiredAcr());
   }
 
   @GetMapping("/public")
@@ -154,25 +142,33 @@ class ApiController {
   }
 
   @ExceptionHandler(StepUpRequiredException.class)
-  ResponseEntity<String> handleStepUpRequired(StepUpRequiredException ex) {
+  ResponseEntity<ProblemDetail> handleStepUpRequired(StepUpRequiredException ex) {
     long maxAge = ex.maxAge().toSeconds();
     // RFC 9470 §3: 401 with error="insufficient_user_authentication" and the
     // requirements the resource states — max_age (recency) and, when acr is
     // enforced, acr_values (assurance). The SPA reads this to elevate via
-    // /auth/step-up (a fresh re-auth) rather than a full re-login.
+    // /auth/step-up (a fresh re-auth) rather than a full re-login. The
+    // WWW-Authenticate challenge string is the load-bearing RFC 6750/9470
+    // control and stays hand-controlled / byte-exact; only the body moves to
+    // ProblemDetail (matching the auth-service's idiom).
     String challenge = "Bearer error=\"insufficient_user_authentication\", "
         + "error_description=\"A stronger or more recent authentication is required\", "
         + "max_age=" + maxAge;
     if (!ex.requiredAcr().isEmpty()) {
       challenge += ", acr_values=\"" + String.join(" ", ex.requiredAcr()) + "\"";
     }
-    String body = ("{\"type\":\"about:blank\",\"title\":\"Unauthorized\",\"status\":401,"
-        + "\"detail\":\"Step-up authentication required: re-authenticate within the last %d "
-        + "seconds.\",\"error\":\"insufficient_user_authentication\"}").formatted(maxAge);
+    ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+        HttpStatus.UNAUTHORIZED,
+        "Step-up authentication required: re-authenticate within the last %d seconds."
+            .formatted(maxAge));
+    problem.setTitle("Unauthorized");
+    // The RFC 9470 machine-readable error code, surfaced as a top-level
+    // problem+json member (ApiSecurityTest asserts $.error).
+    problem.setProperty("error", "insufficient_user_authentication");
     return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
         .header(HttpHeaders.WWW_AUTHENTICATE, challenge)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-        .body(body);
+        .body(problem);
   }
 
   @PostMapping("/jobs")

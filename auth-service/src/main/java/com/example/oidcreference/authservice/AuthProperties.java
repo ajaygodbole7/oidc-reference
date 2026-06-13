@@ -7,6 +7,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
@@ -53,12 +54,12 @@ public record AuthProperties(
      * (e.g. {@code 1h}) bounds refresh-token age regardless of the IdP value.
      * Independent of, and additive to, {@link #sessionAbsoluteTtl}.
      */
-    Duration maxRefreshTokenAge,
+    @Nullable Duration maxRefreshTokenAge,
     @NotNull URI issuerUri,
-    URI authorizationUri,
-    URI tokenUri,
-    URI jwksUri,
-    URI endSessionUri,
+    @Nullable URI authorizationUri,
+    @Nullable URI tokenUri,
+    @Nullable URI jwksUri,
+    @Nullable URI endSessionUri,
     @NotBlank String clientId,
     @NotBlank String clientSecret,
     @NotEmpty Set<@NotBlank String> scopes,
