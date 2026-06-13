@@ -1064,7 +1064,8 @@ test("18. step-up forces a fresh re-auth (prompt=login) and the admin write pass
   // auth_time is surfaced on /auth/me from the realm's auth_time mapper.
   const authTimeBefore = await page.evaluate(async () => {
     const r = await fetch("/auth/me", { credentials: "include" });
-    return (await r.json()).auth_time as number | undefined;
+    const body = (await r.json()) as { auth_time?: number };
+    return body.auth_time;
   });
   expect(authTimeBefore, "/auth/me exposes auth_time after login").toBeTruthy();
 
@@ -1083,7 +1084,8 @@ test("18. step-up forces a fresh re-auth (prompt=login) and the admin write pass
   // The re-auth advanced auth_time (epoch seconds; never regresses).
   const authTimeAfter = await page.evaluate(async () => {
     const r = await fetch("/auth/me", { credentials: "include" });
-    return (await r.json()).auth_time as number | undefined;
+    const body = (await r.json()) as { auth_time?: number };
+    return body.auth_time;
   });
   expect(authTimeAfter, "auth_time present after step-up").toBeTruthy();
   expect(
