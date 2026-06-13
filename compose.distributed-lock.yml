@@ -6,7 +6,7 @@
 #
 #   replica 1 -> 127.0.0.1:8091   replica 2 -> 127.0.0.1:8092
 #
-# Usage: podman compose -f compose.yaml -f compose.distributed-lock.yml \
+# Usage (docker or podman): docker compose -f compose.yaml -f compose.distributed-lock.yml \
 #          up -d --build keycloak valkey auth-service auth-service-2
 # Then drive with scripts/e2e-distributed-lock.sh. Flip both APP_REFRESH_LOCK to
 # in-process to observe the cross-instance reuse-detection logout the lock fixes.

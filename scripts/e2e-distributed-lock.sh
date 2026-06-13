@@ -12,7 +12,8 @@
 # do not coordinate, so a real overlap makes Keycloak's reuse detection reject
 # the second refresh -> 409 -> the cross-instance logout the lock exists to fix.
 #
-# Usage:  sh scripts/e2e-distributed-lock.sh [TRIALS]   (default 1)
+# Usage:  bash scripts/e2e-distributed-lock.sh [TRIALS]   (default 1)
+# Container exec auto-detects docker vs podman (override: CONTAINER_RUNTIME).
 set -u
 
 KC=http://localhost:8080
@@ -25,6 +26,29 @@ R1="${R1:-http://127.0.0.1:8091}"
 R2="${R2:-http://127.0.0.1:8092}"
 VALKEY="${VALKEY_CONTAINER:-oidc-reference-valkey-1}"
 TRIALS="${1:-1}"
+
+# Container runtime: the two-replica stack may be brought up under Docker or
+# Podman, so detect which one is actually running this harness's Valkey and
+# drive `exec` through it. Override with CONTAINER_RUNTIME=docker|podman.
+detect_runtime() {
+  if [ -n "${CONTAINER_RUNTIME:-}" ]; then printf '%s\n' "$CONTAINER_RUNTIME"; return; fi
+  # Prefer the runtime that actually holds the target container.
+  for rt in docker podman; do
+    command -v "$rt" >/dev/null 2>&1 || continue
+    if "$rt" ps --format '{{.Names}}' 2>/dev/null | grep -qx "$VALKEY"; then
+      printf '%s\n' "$rt"; return
+    fi
+  done
+  # Otherwise the first runtime with a reachable engine.
+  for rt in docker podman; do
+    command -v "$rt" >/dev/null 2>&1 || continue
+    if "$rt" info >/dev/null 2>&1; then printf '%s\n' "$rt"; return; fi
+  done
+  echo "FATAL: no usable container runtime (docker or podman) found" >&2
+  exit 1
+}
+RUNTIME="$(detect_runtime)"
+echo "== container runtime: $RUNTIME (override with CONTAINER_RUNTIME) =="
 
 jget() { python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1],""))' "$1"; }
 decode_claim() {  # $1 jwt  $2 claim
@@ -86,15 +110,15 @@ print(json.dumps({
   "claims": {"sub": os.environ["SUB"], "preferred_username": "alice", "roles": ["user"]}
 }))
 PY
-  podman exec -i "$VALKEY" valkey-cli -x SET "sess:$SID" < /tmp/dlock-sess.json >/dev/null
-  podman exec "$VALKEY" valkey-cli EXPIRE "sess:$SID" 1800 >/dev/null
+  "$RUNTIME" exec -i "$VALKEY" valkey-cli -x SET "sess:$SID" < /tmp/dlock-sess.json >/dev/null
+  "$RUNTIME" exec "$VALKEY" valkey-cli EXPIRE "sess:$SID" 1800 >/dev/null
   # The real /auth/callback writes the idp_sid index; the rotation's CAS gates on
   # it (idp_sid:{idpSid} == sid), so seed it too or rotate() fails closed (409
   # session_invalidated_during_refresh) — which is NOT a lock outcome.
   IDP_SID=$(decode_claim "$IT" sid); [ -n "$IDP_SID" ] || IDP_SID=$(decode_claim "$AT" sid)
   if [ -n "$IDP_SID" ]; then
-    podman exec "$VALKEY" valkey-cli SET "idp_sid:$IDP_SID" "$SID" >/dev/null
-    podman exec "$VALKEY" valkey-cli EXPIRE "idp_sid:$IDP_SID" 1800 >/dev/null
+    "$RUNTIME" exec "$VALKEY" valkey-cli SET "idp_sid:$IDP_SID" "$SID" >/dev/null
+    "$RUNTIME" exec "$VALKEY" valkey-cli EXPIRE "idp_sid:$IDP_SID" 1800 >/dev/null
   fi
 
   # --- fire two concurrent resolves, one per replica -------------------------
