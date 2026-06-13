@@ -16,15 +16,20 @@ pattern in its split-implementation shape.
 - An API Gateway (APISIX) owns routing and bearer injection.
 - Tokens live in a Redis-compatible server-side state store (Valkey locally).
 
+The Auth Service and Resource Server are the copyable reference; APISIX,
+Keycloak, and Valkey are swappable infrastructure — provider and vendor
+specifics live in config, never in Java or Lua.
+
 Five directories, five components, no cloud.
 
 - `frontend/` — React single-page application (SPA), cookie-authenticated, no in-browser OIDC library.
 - `auth-service/` — Spring Boot Auth Service, OAuth2 confidential client +
   custom Redis-compatible `tx:{state}` and `sess:{sid}` repositories,
   per-session refresh lock, `/internal/resolve` as OAuth Resource Server.
-- `api-gateway/` — APISIX gateway, `/api/**` routing with allowlist,
-  tolerant `sess:{sid}` reader, bearer injection, signed CSRF validation,
-  Client Credentials to call `/internal/resolve`.
+- `api-gateway/` — APISIX gateway: `/api/**` routing with allowlist, signed CSRF
+  validation, bearer injection. Holds no session-store handle — it reads the
+  opaque sid from the cookie and resolves it via `/internal/resolve` (Client
+  Credentials).
 - `backend-resource-server/` — Spring Boot Resource Server, JSON Web Token (JWT) validation
   only.
 - `authorization-server/` — Keycloak realm + Compose.
@@ -44,8 +49,9 @@ Auth Service and API Gateway have separate ownership boundaries:
 
 - The Auth Service owns OAuth/OIDC client behavior and writes `tx:{state}`
   and `sess:{sid}`.
-- The API Gateway owns routing, the `/api/**` allowlist, and the tolerant
-  `sess:{sid}` reader.
+- The API Gateway owns routing, the `/api/**` allowlist, CSRF validation, and
+  bearer injection; it holds no store handle and resolves the sid via
+  `/internal/resolve`.
 - They share only the documented JSON schema in SPEC-0001 §"`sess:{sid}`
   schema contract" and the `/internal/resolve` contract.
 
@@ -77,6 +83,29 @@ Ask first:
   transaction/session repositories, or the OIDC library choices
 - changing directory ownership
 - adding any non-local infrastructure
+
+## Verifying changes
+
+A change is done only when the gates pass — never report "green" off a subset.
+
+- Changes to code, config, realm, or compose files must pass the **full live
+  e2e battery** before they are done or committed, not just unit tests. Don't
+  skip on the grounds that a change "can't affect" a gate.
+- Authoritative gate: `RUN_FULL_STACK_AUTH=1 sh scripts/verify-all.sh` (static
+  gates — lint, type-check, unit suites, secret scan, contract strings — plus
+  the live stack), then `sh scripts/up.sh` → `RUN_LIVE_CONFORMANCE=1 sh
+  scripts/e2e-conformance.sh`. The standalone `e2e-*` scripts are subsets that
+  skip the static gates.
+- Behavior is fixed by `SPEC-0001`; a behavior change updates the spec and its
+  gate in the same change, tests-first (red → green).
+- `.claude/skills/verify-oidc-reference` runs these gates correctly under Docker
+  or Podman; `.claude/skills/extend-oidc-flow` carries the conventions for
+  adding a flow.
+
+## Commits
+
+- Conventional-commit prefixes: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`.
+- No `Co-Authored-By` trailer for AI assistants.
 
 ## Canonical Docs
 
