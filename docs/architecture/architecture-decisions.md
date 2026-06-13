@@ -630,6 +630,12 @@ Production deployments must provide a trusted route from the OP to the Auth
 Service; the browser-facing gateway still does not expose internal refresh or
 session-store surfaces.
 
+Explicit RFC 7009 token revocation on logout is not added: RP-initiated
+`end_session`, this back-channel logout signal, and the local session delete
+already terminate the session on both sides, so a separate revoke call is
+largely redundant. Reconsider if a deployment must revoke specific long-lived
+tokens out of band from session termination.
+
 ### URL-Form Audience
 
 Not adopted because one logical Resource Server audience is simpler for the
@@ -660,7 +666,11 @@ user token: the API Gateway → Auth Service `/internal/resolve` call, and the
 machine client → Resource Server `/api/jobs` call.
 
 Reconsider when the reference grows a real second service the Resource Server
-must call on the user's behalf; add RFC 8693 Token Exchange at that point.
+must call on the user's behalf; add RFC 8693 Token Exchange at that point —
+validated against the provider-portability gate, not assumed portable: RFC 8693
+support is itself uneven across IdPs (feature-flagged or partial on some), so it
+is a deliberate trigger here, not a one-process simplification bolted onto the
+single RS.
 
 ### Global CSP And Referrer-Policy Baseline
 

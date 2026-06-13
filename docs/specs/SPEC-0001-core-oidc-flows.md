@@ -348,6 +348,20 @@ high-value action" pattern. The reference applies this to `POST /api/admin`.
   `/auth/login`. The Auth Service forces a fresh re-auth (`prompt=login`); the
   rotated access token then carries a fresh `auth_time` that satisfies the gate
   on retry.
+- **Assurance axis (planned — `acr`/LoA).** The gate above proves authentication
+  *recency* (`auth_time`), not authentication *strength* (e.g. MFA). The planned
+  companion control requests `acr_values=<required LoA>` on the step-up authorize
+  and has the Resource Server verify the token's `acr` meets that level, mirroring
+  the `auth_time` gate (the same `401 insufficient_user_authentication` when it
+  does not). `acr` is already captured and surfaced on `/auth/me`
+  (`JwtOidcIdTokenValidator`); what is deferred is *requesting and enforcing* it.
+  `acr`/`acr_values` are standard OIDC; the provider-specific part is the realm
+  LoA mapping (as the `auth_time` mapper already is), so this is recorded as a
+  planned axis rather than built into the portable baseline, and proving it in the
+  e2e (request → `acr` claim → RS-enforce, via a realm ACR→LoA mapping) does not
+  require real MFA enrollment — the same simulation boundary as step-up freshness.
+  It flips the `acr` rows in `OIDC-compliance.md` / `RFC9470-compliance.md` from
+  🟡/⏳ to ✅ when implemented.
 
 ### API Gateway Endpoints
 

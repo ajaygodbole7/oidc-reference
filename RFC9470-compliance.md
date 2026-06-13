@@ -7,10 +7,13 @@ Authentication Challenge Protocol).
 **Scope of step-up in this reference.** Step-up is enforced on the sensitive
 route `POST /api/admin` using **`auth_time` freshness** (`max_age` semantics) —
 the portable mechanism that needs no IdP Level-of-Authentication (LoA) config.
-The companion ACR mechanism (`acr_values` / `acr`) is **deferred**: this realm
-emits no `acr`, and adding LoA mapping is provider-specific. Where RFC 9470
+The companion ACR mechanism (`acr_values` / `acr`) is the **planned** assurance
+axis: this realm emits no `acr` today, and the realm LoA mapping is
+provider-specific config (as the `auth_time` mapper already is). Where RFC 9470
 offers both `max_age` and `acr_values`, this reference implements the `max_age`
-half and documents the `acr_values` half as a deliberate non-goal. See also
+half today and records the `acr_values` half as the planned companion (request
+`acr_values`, RS verifies `acr`, mirroring the `auth_time` gate — see the SPEC
+step-up §). See also
 [`OIDC-compliance.md`](OIDC-compliance.md) §2 (`auth_time`/`acr`) and §3.1.2.1
 (`prompt`), and [SPEC-0001 §"Step-up authentication"](docs/specs/SPEC-0001-core-oidc-flows.md).
 
@@ -20,7 +23,7 @@ half and documents the `acr_values` half as a deliberate non-goal. See also
 |---|---|
 | ✅ | Verified by an executable check, concrete local config, or test. |
 | 🟡 | Partial — implemented, with a documented deviation or not asserted on every surface. |
-| ⏳ | Deliberately deferred (companion ACR/LoA mechanism). See "Out of scope". |
+| ⏳ | Planned companion, not yet built (the ACR/LoA mechanism). See the SPEC step-up §. |
 
 ## §3 — Authentication Requirements Challenge (Resource Server → client)
 
@@ -31,7 +34,7 @@ half and documents the `acr_values` half as a deliberate non-goal. See also
 | §3 | Distinct from `insufficient_scope` — the token IS authorized; only its authentication recency is insufficient | ✅ | Scope/role failures remain a `403` `insufficient_scope` (Spring `AccessDeniedHandler`); step-up is a separate `401` path. The `ROLE_admin` check still runs first (`SecurityConfig`), so an unauthorized caller never reaches the step-up gate. |
 | §3 | The challenge MAY include `max_age` indicating the maximum acceptable authentication age | ✅ | `max_age=<app.step-up.max-age in seconds>` is included in the challenge. |
 | §3 | The challenge MAY include `error_description` | ✅ | `error_description="A more recent authentication is required"`. |
-| §3 | The challenge MAY include `acr_values` indicating a required ACR | ⏳ | Not emitted — freshness is enforced via `auth_time`/`max_age`, not ACR/LoA (no LoA mapping in the realm). |
+| §3 | The challenge MAY include `acr_values` indicating a required ACR | ⏳ | Not emitted — freshness is enforced via `auth_time`/`max_age`, not ACR/LoA (no LoA mapping in the realm). Planned companion (SPEC step-up §). |
 
 ## §4 — Client behavior on receiving the challenge
 
@@ -45,7 +48,7 @@ half and documents the `acr_values` half as a deliberate non-goal. See also
 | RFC § | Requirement | Status | Where / How |
 |---|---|---|---|
 | §5 | `auth_time` is available to the resource server to evaluate `max_age` | ✅ | The realm carries an `auth_time` protocol mapper (`oidc-usersessionmodel-note-mapper`, `AUTH_TIME` → `auth_time`) on the Auth Service client, emitting `auth_time` in the **access token** (and ID token). The RS reads the standard claim — provider-agnostic. |
-| §5 | `acr` is available to the resource server to evaluate `acr_values` | ⏳ | `acr` is surfaced into the session/`/auth/me` when the IdP emits it (`JwtOidcIdTokenValidator`) but is neither requested nor enforced — the ACR/LoA mechanism is the deferred companion to the `auth_time` mechanism above. |
+| §5 | `acr` is available to the resource server to evaluate `acr_values` | ⏳ | `acr` is surfaced into the session/`/auth/me` when the IdP emits it (`JwtOidcIdTokenValidator`) but is neither requested nor enforced — the ACR/LoA mechanism is the planned companion to the `auth_time` mechanism above (SPEC step-up §). |
 
 ## §6 / §7 — Security considerations & IANA
 
