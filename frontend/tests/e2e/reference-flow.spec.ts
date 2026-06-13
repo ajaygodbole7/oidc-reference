@@ -1042,10 +1042,12 @@ test("17. a write after a refresh-rotation re-reads the rotated CSRF and forward
 // ---------------------------------------------------------------------------
 // Story 18 — Step-up authentication (OIDC max_age / RFC 9470). The sensitive
 // route POST /api/admin requires a RECENT interactive authentication, not just
-// the admin role. /auth/step-up forces a fresh re-auth (max_age=0) at the IdP,
-// which bumps auth_time so the Resource Server's freshness gate passes.
+// the admin role. /auth/step-up forces a fresh re-auth (prompt=login) at the IdP,
+// which bumps auth_time so the Resource Server's freshness gate passes. (The
+// server uses prompt=login, not max_age=0: Keycloak treats max_age=0 as unset and
+// reuses the SSO session — see the AuthController step-up comment.)
 //
-// Deterministic proof (no timing dependence): max_age=0 makes Keycloak
+// Deterministic proof (no timing dependence): prompt=login makes Keycloak
 // re-prompt for credentials EVEN WITH an active SSO session, so the login form
 // reappears — that is the unambiguous signal a step-up re-auth occurred. The
 // stale-auth_time -> 401 challenge itself is proven deterministically in the
@@ -1066,7 +1068,7 @@ test("18. step-up forces a fresh re-auth (prompt=login) and the admin write pass
   });
   expect(authTimeBefore, "/auth/me exposes auth_time after login").toBeTruthy();
 
-  // Top-level navigation to the step-up entry. max_age=0 makes Keycloak
+  // Top-level navigation to the step-up entry. prompt=login makes Keycloak
   // re-authenticate even though an SSO session exists — the login form returns.
   await page.goto(`/auth/step-up?return_to=${encodeURIComponent("/")}`);
   await page.waitForURL(KEYCLOAK_AUTH_RE);
