@@ -143,7 +143,7 @@ class SecretSentinelValidatorTest {
         "oidc-reference-api-gateway",
         "oidc-reference-auth-internal",
         java.time.Duration.ofSeconds(3),
-        java.time.Duration.ofSeconds(5));
+        java.time.Duration.ofSeconds(5), "");
   }
 
   @SuppressWarnings("unused")

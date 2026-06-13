@@ -48,6 +48,13 @@ app:
   #   Okta:     [groups]
   #   Auth0:    [https://your-app/roles]    (custom-namespaced claim)
   roles-claim-path: ${OIDC_ROLES_CLAIM_PATH:realm_access,roles}
+  # acr_values requested on the /auth/step-up authorize (RFC 9470 assurance
+  # axis). The IdP returns a matching acr that the Resource Server enforces on
+  # sensitive routes (app.step-up.required-acr there). Standard OIDC, so the
+  # code is provider-agnostic; the value is per-IdP config — the local realm's
+  # acr mapper emits "1" for a fresh interactive auth, and a deployment maps a
+  # higher value to MFA in the IdP. Empty omits the parameter.
+  step-up-acr-values: ${STEP_UP_ACR_VALUES:1}
   # Internal trust identifiers — deployment topology, not per-provider OIDC
   # values (real IdPs assign client ids you don't choose). The gateway's
   # confidential client id and the audience its CC token must carry for

@@ -37,14 +37,21 @@ class ApiController {
   // authentication (auth_time) accepted on a sensitive route. Older → an
   // RFC 9470 step-up challenge. Config-driven (app.step-up.max-age).
   private final Duration stepUpMaxAge;
+  // Step-up assurance floor: the acr (LoA) values accepted on a sensitive route,
+  // in ADDITION to recency. Config-driven (app.step-up.required-acr). Empty
+  // disables the acr check (an IdP that emits no acr); the local realm's acr
+  // mapper emits "1" for a fresh interactive auth.
+  private final Set<String> requiredAcr;
 
   ApiController(
       @Value("${app.service-client-ids}") Set<String> serviceClients,
       @Value("${app.jobs-client-id}") String jobsClientId,
-      @Value("${app.step-up.max-age}") Duration stepUpMaxAge) {
+      @Value("${app.step-up.max-age}") Duration stepUpMaxAge,
+      @Value("${app.step-up.required-acr:}") Set<String> requiredAcr) {
     this.serviceClients = Set.copyOf(serviceClients);
     this.jobsClientId = jobsClientId;
     this.stepUpMaxAge = stepUpMaxAge;
+    this.requiredAcr = Set.copyOf(requiredAcr);
     if (!this.serviceClients.contains(this.jobsClientId)) {
       throw new IllegalArgumentException(
           "app.jobs-client-id must be included in app.service-client-ids");
@@ -107,24 +114,34 @@ class ApiController {
         .toList();
   }
 
-  // Sensitive action: requires both ROLE_admin (enforced in SecurityConfig) AND
-  // a recent interactive authentication (enforced here). The role answers "who
-  // may do this"; the step-up gate answers "was the human recently present" —
-  // the eCommerce "re-authenticate before a high-value action" pattern.
+  // Sensitive action: requires ROLE_admin (enforced in SecurityConfig) AND a
+  // step-up authentication (enforced here) — both a recent interactive auth
+  // (auth_time) and a sufficient assurance level (acr). The role answers "who
+  // may do this"; the step-up gate answers "was the human recently present and
+  // strongly enough authenticated" — the "re-authenticate before a high-value
+  // action" pattern.
   @PostMapping("/admin")
   Map<String, String> admin(@AuthenticationPrincipal Jwt jwt) {
-    requireRecentAuthentication(jwt);
+    requireStepUpAuthentication(jwt);
     return Map.of("status", "admin");
   }
 
-  // RFC 9470 step-up gate. The token is valid and correctly authorized; it is
-  // only the authentication recency that may be insufficient. auth_time absent
-  // (provider/realm not emitting it) is treated as "cannot prove a recent
-  // authentication" and fails closed.
-  private void requireRecentAuthentication(Jwt jwt) {
+  // RFC 9470 step-up gate. The token is valid and correctly authorized; only its
+  // authentication strength/recency may be insufficient. Two axes, both fail
+  // closed: recency (auth_time within app.step-up.max-age) and assurance (acr in
+  // app.step-up.required-acr). A missing auth_time or acr is treated as "cannot
+  // prove the required authentication" and is rejected. acr enforcement is
+  // skipped when required-acr is empty (an IdP that emits no acr).
+  private void requireStepUpAuthentication(Jwt jwt) {
     Instant authTime = jwt.getClaimAsInstant("auth_time");
     if (authTime == null || authTime.isBefore(Instant.now().minus(stepUpMaxAge))) {
-      throw new StepUpRequiredException(stepUpMaxAge);
+      throw new StepUpRequiredException(stepUpMaxAge, requiredAcr);
+    }
+    if (!requiredAcr.isEmpty()) {
+      String acr = jwt.getClaimAsString("acr");
+      if (acr == null || !requiredAcr.contains(acr)) {
+        throw new StepUpRequiredException(stepUpMaxAge, requiredAcr);
+      }
     }
   }
 
@@ -132,11 +149,15 @@ class ApiController {
   ResponseEntity<String> handleStepUpRequired(StepUpRequiredException ex) {
     long maxAge = ex.maxAge().toSeconds();
     // RFC 9470 §3: 401 with error="insufficient_user_authentication" and the
-    // max_age the resource requires. The SPA reads this to elevate via
+    // requirements the resource states — max_age (recency) and, when acr is
+    // enforced, acr_values (assurance). The SPA reads this to elevate via
     // /auth/step-up (a fresh re-auth) rather than a full re-login.
     String challenge = "Bearer error=\"insufficient_user_authentication\", "
-        + "error_description=\"A more recent authentication is required\", "
+        + "error_description=\"A stronger or more recent authentication is required\", "
         + "max_age=" + maxAge;
+    if (!ex.requiredAcr().isEmpty()) {
+      challenge += ", acr_values=\"" + String.join(" ", ex.requiredAcr()) + "\"";
+    }
     String body = ("{\"type\":\"about:blank\",\"title\":\"Unauthorized\",\"status\":401,"
         + "\"detail\":\"Step-up authentication required: re-authenticate within the last %d "
         + "seconds.\",\"error\":\"insufficient_user_authentication\"}").formatted(maxAge);

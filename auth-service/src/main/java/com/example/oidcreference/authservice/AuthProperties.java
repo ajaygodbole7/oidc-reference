@@ -122,5 +122,15 @@ public record AuthProperties(
      * for a slow/remote IdP, lower it to fail faster.
      */
     @NotNull @DefaultValue("3s") Duration idpConnectTimeout,
-    @NotNull @DefaultValue("5s") Duration idpReadTimeout) {
+    @NotNull @DefaultValue("5s") Duration idpReadTimeout,
+    /**
+     * acr_values requested on the step-up authorize (RFC 9470 assurance axis).
+     * The IdP returns a matching {@code acr} that the Resource Server enforces
+     * on sensitive routes (app.step-up.required-acr there). Standard OIDC, so
+     * the code is provider-agnostic; the value is per-IdP config — the local
+     * realm's acr mapper emits {@code "1"} for a fresh interactive auth, and a
+     * deployment maps a higher value (e.g. {@code gold}) to MFA in the IdP.
+     * Empty omits the parameter (an IdP/realm that does not use acr).
+     */
+    @DefaultValue("") String stepUpAcrValues) {
 }

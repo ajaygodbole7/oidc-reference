@@ -1041,11 +1041,12 @@ test("17. a write after a refresh-rotation re-reads the rotated CSRF and forward
 
 // ---------------------------------------------------------------------------
 // Story 18 — Step-up authentication (OIDC max_age / RFC 9470). The sensitive
-// route POST /api/admin requires a RECENT interactive authentication, not just
-// the admin role. /auth/step-up forces a fresh re-auth (prompt=login) at the IdP,
-// which bumps auth_time so the Resource Server's freshness gate passes. (The
-// server uses prompt=login, not max_age=0: Keycloak treats max_age=0 as unset and
-// reuses the SSO session — see the AuthController step-up comment.)
+// route POST /api/admin requires a RECENT interactive authentication AND a
+// sufficient assurance level (acr), not just the admin role. /auth/step-up
+// forces a fresh re-auth (prompt=login) and requests acr_values at the IdP,
+// which bumps auth_time and yields acr="1" so both Resource Server step-up gates
+// pass. (The server uses prompt=login, not max_age=0: Keycloak treats max_age=0
+// as unset and reuses the SSO session — see the AuthController step-up comment.)
 //
 // Deterministic proof (no timing dependence): prompt=login makes Keycloak
 // re-prompt for credentials EVEN WITH an active SSO session, so the login form
@@ -1061,13 +1062,16 @@ test("18. step-up forces a fresh re-auth (prompt=login) and the admin write pass
 }) => {
   await loginAs(page, ADMIN);
 
-  // auth_time is surfaced on /auth/me from the realm's auth_time mapper.
-  const authTimeBefore = await page.evaluate(async () => {
+  // auth_time + acr are surfaced on /auth/me from the realm's mappers. acr="1"
+  // is the assurance level (LoA) Keycloak emits for a fresh interactive auth —
+  // the RFC 9470 assurance axis (E1), enforced on /api/admin alongside recency.
+  const meBefore = await page.evaluate(async () => {
     const r = await fetch("/auth/me", { credentials: "include" });
-    const body = (await r.json()) as { auth_time?: number };
-    return body.auth_time;
+    return (await r.json()) as { auth_time?: number; acr?: string };
   });
+  const authTimeBefore = meBefore.auth_time;
   expect(authTimeBefore, "/auth/me exposes auth_time after login").toBeTruthy();
+  expect(meBefore.acr, "/auth/me exposes acr (assurance level) after login").toBe("1");
 
   // Top-level navigation to the step-up entry. prompt=login makes Keycloak
   // re-authenticate even though an SSO session exists — the login form returns.
@@ -1081,20 +1085,23 @@ test("18. step-up forces a fresh re-auth (prompt=login) and the admin write pass
   await Promise.all([page.waitForURL(`${APP_ORIGIN}/`), page.click("#kc-login")]);
   await expect(page.getByText(/signed in as/i)).toBeVisible();
 
-  // The re-auth advanced auth_time (epoch seconds; never regresses).
-  const authTimeAfter = await page.evaluate(async () => {
+  // The re-auth advanced auth_time (epoch seconds; never regresses) and still
+  // carries the step-up acr (assurance).
+  const meAfter = await page.evaluate(async () => {
     const r = await fetch("/auth/me", { credentials: "include" });
-    const body = (await r.json()) as { auth_time?: number };
-    return body.auth_time;
+    return (await r.json()) as { auth_time?: number; acr?: string };
   });
+  const authTimeAfter = meAfter.auth_time;
   expect(authTimeAfter, "auth_time present after step-up").toBeTruthy();
+  expect(meAfter.acr, "acr (assurance level) present after step-up").toBe("1");
   expect(
     authTimeAfter as number,
     "auth_time must not regress after a step-up re-auth"
   ).toBeGreaterThanOrEqual(authTimeBefore as number);
 
   // The sensitive admin write succeeds on the freshly-stepped-up session: the
-  // rotated access token carries a fresh auth_time that satisfies the RS gate.
+  // rotated access token carries a fresh auth_time AND the required acr ("1"),
+  // satisfying both RS step-up gates (recency + assurance).
   const admin = await page.evaluate(async () => {
     const xsrf = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/)?.[1] ?? "";
     const res = await fetch("/api/admin", {

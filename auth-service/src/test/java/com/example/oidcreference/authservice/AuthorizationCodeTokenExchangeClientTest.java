@@ -112,7 +112,7 @@ class AuthorizationCodeTokenExchangeClientTest {
         List.of("realm_access", "roles"),
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         true, "oidc-reference-api-gateway", "oidc-reference-auth-internal",
-        java.time.Duration.ofSeconds(3), java.time.Duration.ofSeconds(5));
+        java.time.Duration.ofSeconds(3), java.time.Duration.ofSeconds(5), "");
   }
 
   private static OidcProviderMetadata metadata() {

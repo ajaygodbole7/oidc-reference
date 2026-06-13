@@ -42,6 +42,13 @@ so API audience, API scopes, and groups claims are under your control.
   - Set `OIDC_ROLES_CLAIM_PATH=groups`.
   - Ensure test users map to `user` and `admin` groups equivalent to the
     local `alice` and `admin` users.
+- Step-up `acr` (assurance axis):
+  - Okta emits its own `acr` values (e.g. `urn:okta:loa:1fa:any` for a single
+    factor, `urn:okta:loa:2fa:any` / `phr` / `phrh` for MFA), not Keycloak's
+    `0`/`1`. Set `STEP_UP_ACR_VALUES` (requested on `/auth/step-up`) and
+    `STEP_UP_REQUIRED_ACR` (enforced by the RS on `POST /api/admin`) to the
+    Okta value your authentication policy returns; the code reads the standard
+    `acr` claim, only the value is per-IdP.
 
 ## Local Overlay Values
 
@@ -63,6 +70,9 @@ OIDC_SCOPES=openid,profile,email,groups,api.read
 OIDC_ROLES_CLAIM_PATH=groups
 OIDC_AUDIENCE=api://oidc-reference-api
 APP_REFRESH_REQUIRE_ROTATION=true
+# Step-up assurance: Okta's acr values, not Keycloak's "1".
+STEP_UP_ACR_VALUES=urn:okta:loa:1fa:any
+STEP_UP_REQUIRED_ACR=urn:okta:loa:1fa:any
 ```
 
 Okta tenant policy decides whether refresh-token rotation is enabled and how

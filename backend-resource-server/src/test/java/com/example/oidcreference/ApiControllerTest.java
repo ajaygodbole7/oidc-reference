@@ -20,7 +20,8 @@ class ApiControllerTest {
 
   private final ApiController controller =
       new ApiController(
-          Set.of("custom-gateway", "custom-service", "custom-jobs"), "custom-jobs", STEP_UP_MAX_AGE);
+          Set.of("custom-gateway", "custom-service", "custom-jobs"), "custom-jobs", STEP_UP_MAX_AGE,
+          Set.of("1"));
 
   @Test
   void meDeniesAConfiguredServiceClient() {
@@ -51,7 +52,8 @@ class ApiControllerTest {
 
   @Test
   void constructorRejectsJobsClientOutsideServiceAllowlist() {
-    assertThatThrownBy(() -> new ApiController(Set.of("custom-gateway"), "custom-jobs", STEP_UP_MAX_AGE))
+    assertThatThrownBy(() -> new ApiController(Set.of("custom-gateway"), "custom-jobs", STEP_UP_MAX_AGE,
+            Set.of("1")))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("app.jobs-client-id");
   }
@@ -59,9 +61,29 @@ class ApiControllerTest {
   // -- step-up freshness on the sensitive route ---------------------------
 
   @Test
-  void adminAcceptsAFreshAuthTime() {
-    Jwt jwt = jwtWithAuthTime(Instant.now().minusSeconds(30));
+  void adminAcceptsAFreshAuthTimeAndSufficientAcr() {
+    // Both step-up axes satisfied: fresh interactive auth (auth_time) AND a
+    // sufficient assurance level (acr "1", the controller's required-acr).
+    Jwt jwt = jwtWithAuthTimeAndAcr(Instant.now().minusSeconds(30), "1");
     assertThat(controller.admin(jwt)).containsEntry("status", "admin");
+  }
+
+  @Test
+  void adminRejectsAFreshAuthTimeWithMissingAcrWithStepUpRequired() {
+    // Recent enough, but no acr at all: the assurance level cannot be confirmed,
+    // so the sensitive action fails closed.
+    Jwt jwt = jwtWithAuthTime(Instant.now().minusSeconds(30));
+    assertThatThrownBy(() -> controller.admin(jwt))
+        .isInstanceOf(StepUpRequiredException.class);
+  }
+
+  @Test
+  void adminRejectsAnInsufficientAcrWithStepUpRequired() {
+    // Recent, but acr "0" (a remembered-SSO session) is below the required "1":
+    // recency alone is not enough for the sensitive action.
+    Jwt jwt = jwtWithAuthTimeAndAcr(Instant.now().minusSeconds(30), "0");
+    assertThatThrownBy(() -> controller.admin(jwt))
+        .isInstanceOf(StepUpRequiredException.class);
   }
 
   @Test
@@ -95,6 +117,16 @@ class ApiControllerTest {
     return Jwt.withTokenValue("t")
         .header("alg", "RS256")
         .claim("auth_time", authTime.getEpochSecond())
+        .issuedAt(Instant.now())
+        .expiresAt(Instant.now().plusSeconds(300))
+        .build();
+  }
+
+  private static Jwt jwtWithAuthTimeAndAcr(Instant authTime, String acr) {
+    return Jwt.withTokenValue("t")
+        .header("alg", "RS256")
+        .claim("auth_time", authTime.getEpochSecond())
+        .claim("acr", acr)
         .issuedAt(Instant.now())
         .expiresAt(Instant.now().plusSeconds(300))
         .build();

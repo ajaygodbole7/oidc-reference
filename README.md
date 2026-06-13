@@ -298,7 +298,7 @@ sequenceDiagram
 | Signed double-submit CSRF (HMAC-SHA256, base64url) | — | `SignedCsrfSupport`, `bff-session.lua` |
 | `oauth_tx` browser-binding cookie | — | `OAuthTxBinding` |
 | RP-initiated logout with `id_token_hint` | OIDC RP-Initiated Logout 1.0 | `AuthController#logout` |
-| Step-up authentication: `auth_time` freshness gate on a sensitive route → step-up challenge | OIDC Core §3.1.2.1 (`prompt=login`), RFC 9470 | RS `ApiController#admin`, `AuthController#stepUp` (`/auth/step-up`), realm `auth_time` mapper |
+| Step-up authentication: `auth_time` recency **and** `acr` assurance gates on a sensitive route → step-up challenge | OIDC Core §3.1.2.1 (`prompt=login`, `acr_values`), RFC 9470 | RS `ApiController#admin` (`app.step-up.required-acr`), `AuthController#stepUp` (`/auth/step-up`), realm `auth_time` + `acr` mappers |
 | `redirect_uri` pinned via `app.base-url` (defeats Host-header injection) | — | `AuthController#baseUrl` |
 | Per-session refresh lock (Java, `RefreshLock`/`InProcessRefreshLock`); `lua-resty-lock` around CC-token fetch (Lua) | — | `InProcessRefreshLock`, `InternalResolveController`, `bff-session.lua` |
 | Rate-limit on `/auth/login` + `/auth/callback/idp` (APISIX `limit-req`) | — | `apisix.yaml.template` |

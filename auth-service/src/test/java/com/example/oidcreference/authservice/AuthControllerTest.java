@@ -76,6 +76,7 @@ import org.springframework.test.web.servlet.MvcResult;
     "app.client-id=oidc-reference-auth",
     "app.client-secret=test-secret",
     "app.scopes=openid,profile,email,roles,api.audience,api.read",
+    "app.step-up-acr-values=1",
     "app.session-refresh-window=60s",
     // 32 zero bytes Base64-encoded. The test helper signs CSRF tokens with
     // the matching raw key so request-time validation succeeds.
@@ -144,6 +145,10 @@ class AuthControllerTest {
     assertThat(txJson).contains("\"tx_cookie_hash\":\"");
     assertThat(location)
         .contains("redirect_uri=http://127.0.0.1:5173/auth/callback/idp");
+    // Ordinary login carries no step-up signals: neither prompt=login nor the
+    // acr_values assurance request — those are added only by /auth/step-up.
+    assertThat(location).doesNotContain("prompt=login");
+    assertThat(location).doesNotContain("acr_values");
   }
 
   @Test
@@ -199,6 +204,9 @@ class AuthControllerTest {
     // (max_age=0 is NOT used — Keycloak treats it as unset and reuses the SSO
     // session; prompt=login is the portable lever.)
     assertThat(location).contains("prompt=login");
+    // RFC 9470 assurance axis: step-up also requests the configured acr_values
+    // (app.step-up-acr-values=1), so the IdP returns an acr the RS can enforce.
+    assertThat(location).contains("acr_values=1");
     assertThat(location).contains("code_challenge_method=S256");
 
     // The transaction is marked step-up so the callback enforces that the

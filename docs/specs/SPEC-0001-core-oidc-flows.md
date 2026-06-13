@@ -348,20 +348,21 @@ high-value action" pattern. The reference applies this to `POST /api/admin`.
   `/auth/login`. The Auth Service forces a fresh re-auth (`prompt=login`); the
   rotated access token then carries a fresh `auth_time` that satisfies the gate
   on retry.
-- **Assurance axis (planned — `acr`/LoA).** The gate above proves authentication
-  *recency* (`auth_time`), not authentication *strength* (e.g. MFA). The planned
-  companion control requests `acr_values=<required LoA>` on the step-up authorize
-  and has the Resource Server verify the token's `acr` meets that level, mirroring
-  the `auth_time` gate (the same `401 insufficient_user_authentication` when it
-  does not). `acr` is already captured and surfaced on `/auth/me`
-  (`JwtOidcIdTokenValidator`); what is deferred is *requesting and enforcing* it.
-  `acr`/`acr_values` are standard OIDC; the provider-specific part is the realm
-  LoA mapping (as the `auth_time` mapper already is), so this is recorded as a
-  planned axis rather than built into the portable baseline, and proving it in the
-  e2e (request → `acr` claim → RS-enforce, via a realm ACR→LoA mapping) does not
-  require real MFA enrollment — the same simulation boundary as step-up freshness.
-  It flips the `acr` rows in `OIDC-compliance.md` / `RFC9470-compliance.md` from
-  🟡/⏳ to ✅ when implemented.
+- **Assurance axis (`acr`/LoA).** The recency gate above proves *when* the human
+  last authenticated, not *how strongly*. The companion control closes that:
+  `/auth/step-up` requests `acr_values` (`app.step-up-acr-values`, default `1`)
+  and the Resource Server requires the access token's `acr` to be one of
+  `app.step-up.required-acr` (default `1`), mirroring the `auth_time` gate — the
+  same `401 insufficient_user_authentication`, now also advertising the required
+  `acr_values` in the challenge. The local realm's `acr` mapper (`oidc-acr-mapper`
+  on the Auth Service client) emits `acr="1"` for a fresh interactive auth and
+  `"0"` for a remembered-SSO session; the claim and its value survive refresh
+  rotation, so a stepped-up session keeps clearing the gate. `acr`/`acr_values`
+  are standard OIDC, so the code is provider-agnostic; the LoA→`acr` mapping is
+  per-IdP config (as the `auth_time` mapper is), and a deployment maps a higher
+  `acr` to real MFA in the IdP. The live e2e (story 18) proves the chain
+  request → `acr` claim → RS-enforce without forcing MFA enrollment — the same
+  simulation boundary as step-up freshness.
 
 ### API Gateway Endpoints
 

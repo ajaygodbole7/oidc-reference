@@ -31,6 +31,14 @@ app:
     # the BFF's /auth/step-up (a fresh re-auth), and the rotated access token
     # carries a fresh auth_time that satisfies this gate on retry.
     max-age: ${STEP_UP_MAX_AGE:300s}
+    # Assurance floor (E1): the access token's acr (LoA) must be one of these
+    # values on a sensitive route, in ADDITION to the auth_time recency gate.
+    # The local realm's acr mapper emits "1" for a fresh interactive auth (and
+    # "0" for a remembered-SSO session); map a higher acr to MFA in the IdP to
+    # raise the bar. A standard claim, so the code is provider-agnostic; the
+    # value is per-IdP config (Okta/Auth0/Entra emit their own acr). Empty
+    # disables the acr check (an IdP that emits no acr). Comma-separated set.
+    required-acr: ${STEP_UP_REQUIRED_ACR:1}
 
 # Actuator is bound to loopback on a dedicated management port (9082, not
 # host-published). NOTE: a user-defined SecurityFilterChain (SecurityConfig)

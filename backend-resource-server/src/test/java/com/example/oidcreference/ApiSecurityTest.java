@@ -184,12 +184,14 @@ class ApiSecurityTest {
     mockMvc.perform(post("/api/admin").with(jwt()))
         .andExpect(status().isForbidden());
 
-    // Happy path now also needs a fresh auth_time: /api/admin is a step-up
-    // gated sensitive action (see adminWithStaleAuthTimeChallengesForStepUp).
+    // Happy path now also needs a fresh auth_time AND a sufficient acr:
+    // /api/admin is a step-up gated sensitive action (recency + assurance —
+    // see adminWithStaleAuthTimeChallengesForStepUp / adminWithMissingAcr...).
     mockMvc.perform(post("/api/admin")
             .with(jwt().jwt(j -> j
                     .claim("realm_access", Map.of("roles", List.of("admin")))
-                    .claim("auth_time", java.time.Instant.now().getEpochSecond()))
+                    .claim("auth_time", java.time.Instant.now().getEpochSecond())
+                    .claim("acr", "1"))
                 .authorities(new SimpleGrantedAuthority("ROLE_admin"))))
         .andExpect(status().isOk());
   }
@@ -210,6 +212,57 @@ class ApiSecurityTest {
         .andExpect(header().string("WWW-Authenticate",
             org.hamcrest.Matchers.containsString("max_age=")))
         .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(jsonPath("$.error").value("insufficient_user_authentication"));
+  }
+
+  @Test
+  void adminWithSufficientAcrAndFreshAuthTimeSucceeds() throws Exception {
+    // Assurance axis (E1): a fresh, sufficiently-assured authentication
+    // (acr in app.step-up.required-acr, default "1") clears the step-up gate.
+    mockMvc.perform(post("/api/admin")
+            .with(jwt().jwt(j -> j
+                    .claim("realm_access", Map.of("roles", List.of("admin")))
+                    .claim("auth_time", java.time.Instant.now().getEpochSecond())
+                    .claim("acr", "1"))
+                .authorities(new SimpleGrantedAuthority("ROLE_admin"))))
+        .andExpect(status().isOk());
+  }
+
+  @Test
+  void adminWithMissingAcrChallengesForStepUp() throws Exception {
+    // Fresh auth_time but NO acr: the resource cannot confirm the authentication
+    // assurance level, so it fails closed with the RFC 9470 challenge and
+    // advertises the acr it requires (acr_values).
+    mockMvc.perform(post("/api/admin")
+            .with(jwt().jwt(j -> j
+                    .claim("realm_access", Map.of("roles", List.of("admin")))
+                    .claim("auth_time", java.time.Instant.now().getEpochSecond()))
+                .authorities(new SimpleGrantedAuthority("ROLE_admin"))))
+        .andExpect(status().isUnauthorized())
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("error=\"insufficient_user_authentication\"")))
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("acr_values=\"1\"")))
+        .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(jsonPath("$.error").value("insufficient_user_authentication"));
+  }
+
+  @Test
+  void adminWithInsufficientAcrChallengesForStepUp() throws Exception {
+    // Fresh auth_time but a lower assurance than required (acr="0", the
+    // remembered-SSO LoA): still a step-up challenge — recency alone is not
+    // enough for the sensitive action.
+    mockMvc.perform(post("/api/admin")
+            .with(jwt().jwt(j -> j
+                    .claim("realm_access", Map.of("roles", List.of("admin")))
+                    .claim("auth_time", java.time.Instant.now().getEpochSecond())
+                    .claim("acr", "0"))
+                .authorities(new SimpleGrantedAuthority("ROLE_admin"))))
+        .andExpect(status().isUnauthorized())
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("error=\"insufficient_user_authentication\"")))
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("acr_values=\"1\"")))
         .andExpect(jsonPath("$.error").value("insufficient_user_authentication"));
   }
 

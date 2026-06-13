@@ -158,6 +158,12 @@ class AuthController {
       // across IdPs (Keycloak treats max_age=0 as unset and would reuse the SSO
       // session); the callback verifies the returned auth_time post-dates this.
       authorizationBuilder.queryParam("prompt", "login");
+      // RFC 9470 assurance axis: ask the IdP for a minimum acr (LoA). The
+      // returned acr is enforced by the Resource Server on sensitive routes.
+      // Optional and config-driven (app.step-up-acr-values) — omitted when unset.
+      if (props.stepUpAcrValues() != null && !props.stepUpAcrValues().isBlank()) {
+        authorizationBuilder.queryParam("acr_values", props.stepUpAcrValues());
+      }
     }
     var authorizationUri = authorizationBuilder.encode().toUriString();
 
