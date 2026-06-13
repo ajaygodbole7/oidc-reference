@@ -19,19 +19,19 @@ Security BCP) and OIDC Core §3.1.3.7 for ID-token validation, across two flows:
 
 What it gives you:
 
-- **The split shape, not a combined demo.** A separate Auth Service and API
-  Gateway, the way production OIDC deployments separate the identity surface
-  from the API edge.
-- **The token invariant, enforced and asserted by a live test.** Access and
-  refresh tokens never reach the browser; the id_token never reaches browser
-  JS, storage, SPA-readable JSON, SPA-visible cookies, or app logs. Only the
-  server's `/auth/logout/continue` → IdP redirect carries `id_token_hint`.
-- **Every control mapped to a standard, a symbol, and a test.** The Security
-  controls table ties each control to its RFC/OIDC section, the code that
-  implements it, and the live gate that proves it.
-- **Provider-portable by configuration.** No provider brand is baked into Java
-  or Lua. `just e2e-portability` proves a token-shape swap end-to-end against a
-  second realm.
+- **A separate Auth Service and API Gateway.** The OIDC client and the gateway
+  run as two services, matching how production OIDC deployments are structured.
+- **Tokens never reach the browser.** Access and refresh tokens stay
+  server-side; the id_token never reaches browser JS, storage, SPA-readable
+  JSON, SPA-visible cookies, or app logs — only the server's
+  `/auth/logout/continue` → IdP redirect carries `id_token_hint`. A live test
+  inspects the browser's storage and cookies to confirm it.
+- **Each control is linked to its spec, code, and test.** The Security controls
+  table maps every control to its RFC/OIDC section, the code that implements it,
+  and the gate that proves it.
+- **Provider differences live in configuration.** No provider name appears in
+  Java or Lua; `just e2e-portability` swaps the token shape against a second
+  realm end to end.
 
 ## Contents
 
@@ -341,16 +341,26 @@ files, and `compose.yaml`.
 
 ## Run locally
 
-Prerequisites: Docker Desktop or equivalent and Node 20+. Java 25 is needed
-only when running the Spring modules directly or their unit tests outside
-Docker.
+Works on macOS, Linux, and Windows.
 
-Keycloak, Valkey, APISIX, Auth Service, and Resource Server run in Compose.
-The SPA runs on the host through Vite for the frontend inner loop.
+**Prerequisites**
+
+- **Docker Desktop** (macOS or Windows) or any Docker-compatible engine.
+- **Node 20+** for the SPA dev server.
+- **A POSIX shell** to run `scripts/*.sh`: built in on macOS/Linux; on Windows
+  use WSL2 (recommended) or Git Bash.
+- **Java 25** only if you run the Spring modules or their unit tests outside Docker.
+- **`just` is optional.** It is a command runner; each recipe is a one-line
+  wrapper over a script (`just up` runs `sh scripts/up.sh`), so you can run the
+  script directly instead. Install with `brew install just` (macOS) or
+  `winget install Casey.Just` / `scoop install just` (Windows).
+
+Keycloak, Valkey, APISIX, the Auth Service, and the Resource Server run in
+Docker Compose; the SPA runs on the host through Vite.
 
 ```sh
 # 1. Bring the reference stack up.
-just up
+just up                 # or, without just:  sh scripts/up.sh
 
 # 2. Start the SPA dev server.
 cd frontend && npm install && npm run dev
@@ -360,12 +370,12 @@ cd frontend && npm install && npm run dev
 - Keycloak admin console: <http://localhost:8080/> — sign in as
   `admin` / `admin` to inspect the seeded realm.
 
-Verification:
+Verification (each `just` recipe also runs as a script directly):
 
 ```sh
-just e2e-auth                            # canonical authenticated proof: login → API → refresh delegation → logout
-./scripts/verify-all.sh                  # per-component checks + secret scan
-RUN_FULL_STACK_AUTH=1 ./scripts/verify-all.sh   # also brings the stack up and runs the gateway suite
+just e2e-auth                                    # or: sh scripts/e2e-auth.sh
+sh scripts/verify-all.sh                         # per-component checks + secret scan
+RUN_FULL_STACK_AUTH=1 sh scripts/verify-all.sh   # also brings the stack up + gateway suite
 ```
 
 `just e2e-auth` is the canonical authenticated local proof. It brings the stack
