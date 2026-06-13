@@ -21,7 +21,7 @@ just check
 
 Runs the spec-drift guard and committed-secret scan. The contract-string check
 is not a runtime security test; it prevents the docs/tasks from drifting back
-to the old public-SPA OAuth shape or framework-session storage.
+to the old public-single-page application (SPA) OAuth shape or framework-session storage.
 
 ## Live Infrastructure Gate
 
@@ -47,7 +47,7 @@ Starts the full Compose topology and runs:
 - XHR/fetch 401 behavior.
 - Authenticated `/api/**` proxying with no browser bearer token.
 - Resource Server role/scope enforcement.
-- RP-initiated logout continuation.
+- Relying Party (RP)-initiated logout continuation.
 - Gateway refresh delegation using a real login-derived `sess:{sid}`.
 
 This is the proof to run before saying the reference implements the target
@@ -67,7 +67,7 @@ reference realm in the places that must be configuration-driven:
 - Resource Server audience is `oidc-reference-alt-api`, not
   `oidc-reference-api`.
 
-This gate is the enforced IdP-portability proof because it is re-runnable
+This gate is the enforced Identity Provider (IdP)-portability proof because it is re-runnable
 without third-party credentials. It does not try to force Keycloak to emit
 `scp`. That branch is covered by Resource Server unit tests and by the
 provider runbooks for IdPs that emit `scp`.

@@ -34,7 +34,7 @@ before commit.
   (`app.service-client-ids`, `app.jobs-client-id`, `app.step-up.max-age`,
   `app.step-up.required-acr`) plus a constructor cross-field invariant check.
 - `backend-resource-server/.../SecurityConfig.java:88-91,138-140` injects more
-  `app.*` `@Value`s. The RS module has no `@ConfigurationProperties` type.
+  `app.*` `@Value`s. The Resource Server (RS) module has no `@ConfigurationProperties` type.
 - The auth-service has an exemplary `@Validated` record `AuthProperties`.
 - Change: add a `@Validated` record `AppProperties` mirroring `AuthProperties`
   (nested typed `step-up` block; cross-field check in the compact constructor).

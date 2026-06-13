@@ -13,7 +13,8 @@ the browser.
 It implements [RFC 9700](https://datatracker.ietf.org/doc/rfc9700/) (OAuth 2.0
 Security BCP) and OIDC Core §3.1.3.7 for ID-token validation, across two flows:
 
-- browser login via Authorization Code + PKCE, with saved-request replay;
+- browser login via Authorization Code + Proof Key for Code Exchange (PKCE),
+  with saved-request replay;
 - service-to-service via Client Credentials.
 
 What it gives you:
@@ -31,6 +32,25 @@ What it gives you:
 - **Provider-portable by configuration.** No provider brand is baked into Java
   or Lua. `just e2e-portability` proves a token-shape swap end-to-end against a
   second realm.
+
+## Terminology
+
+OAuth/OIDC vocabulary, mapped to this repo's components.
+
+| Term | Meaning |
+|---|---|
+| OIDC | OpenID Connect — the identity layer on top of OAuth 2.0. |
+| Relying Party (RP) | The app that delegates login to an identity provider. Here, the Auth Service. |
+| Authorization Server (AS) | The service that authenticates the user and issues tokens. Here, Keycloak. |
+| Identity Provider (IdP) | The Authorization Server in its identity role; used interchangeably here. Keycloak. |
+| Resource Server (RS) | The API that validates access tokens and serves data. Here, `backend-resource-server`. |
+| BFF | Backend-for-Frontend — the server-side component that holds tokens so the browser never does. |
+| PKCE | Proof Key for Code Exchange — binds an authorization code to the client that began the flow. |
+| JWT / JWKS | JSON Web Token / JSON Web Key Set (the public keys that verify a JWT signature). |
+| CSRF / XSS | Cross-Site Request Forgery / Cross-Site Scripting. |
+| SPA | Single-page application — the browser app (here, React). |
+| acr / LoA | Authentication Context Class Reference / Level of Assurance — how strongly the user authenticated. |
+| SSO | Single sign-on. |
 
 ## Design decisions
 

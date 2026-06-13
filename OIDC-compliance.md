@@ -23,7 +23,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 |---|---|
 | ✅ | Verified by an executable check, concrete local config, or test. |
 | 🟡 | Partial — covered in some surface only, or implemented but not asserted. |
-| 🚫 | Not applicable to this reference's architecture (code flow only, single AS, etc.). |
+| 🚫 | Not applicable to this reference's architecture (code flow only, single Authorization Server (AS), etc.). |
 | 🔄 | Production-only concern; documented but not enforced over local HTTP. |
 | ⏳ | Deliberately deferred. See "Out of scope" + README "What's deliberately not here". |
 
@@ -42,7 +42,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 | §2 | `iat` claim (`REQUIRED`) | ✅ | Issued by Keycloak; validated by Nimbus. |
 | §2 | `auth_time` claim (`OPTIONAL` unless `max_age` or `auth_time` essential) | ✅ | Step-up forces a fresh re-auth; `auth_time` is emitted in both tokens (realm `auth_time` mapper), surfaced by `JwtOidcIdTokenValidator`, validated for freshness in the step-up callback, and enforced by the Resource Server on `POST /api/admin`. See [`RFC9470-compliance.md`](RFC9470-compliance.md). |
 | §2 | `nonce` claim (`REQUIRED` if present in auth request) | ✅ | `AuthController#beginLogin` always sends `nonce`. `JwtOidcIdTokenValidator` passes the expected nonce to Nimbus, which fails closed on mismatch. Asserted by `JwtOidcIdTokenValidatorTest#nonceMismatchIsRejected`. |
-| §2 | `acr` claim (`OPTIONAL`) | ✅ | The realm's `oidc-acr-mapper` emits `acr` (`"1"` for a fresh interactive auth, `"0"` for remembered SSO), surfaced on `/auth/me` (`JwtOidcIdTokenValidator`) and **enforced** by the Resource Server on `POST /api/admin` (`app.step-up.required-acr`, default `1`) — the assurance companion to the `auth_time` recency gate. `/auth/step-up` requests it via `acr_values`. `acr=1` is a Level-of-Assurance value, not proof of MFA; the LoA→`acr` mapping is provider-specific config (as the `auth_time` mapper is). See the [SPEC step-up §](docs/specs/SPEC-0001-core-oidc-flows.md) and [`RFC9470-compliance.md`](RFC9470-compliance.md). |
+| §2 | `acr` claim (`OPTIONAL`) | ✅ | The realm's `oidc-acr-mapper` emits `acr` (`"1"` for a fresh interactive auth, `"0"` for remembered single sign-on (SSO)), surfaced on `/auth/me` (`JwtOidcIdTokenValidator`) and **enforced** by the Resource Server on `POST /api/admin` (`app.step-up.required-acr`, default `1`) — the assurance companion to the `auth_time` recency gate. `/auth/step-up` requests it via `acr_values`. `acr=1` is a Level of Assurance (LoA) value, not proof of multi-factor authentication (MFA); the LoA→`acr` mapping is provider-specific config (as the `auth_time` mapper is). See the [SPEC step-up §](docs/specs/SPEC-0001-core-oidc-flows.md) and [`RFC9470-compliance.md`](RFC9470-compliance.md). |
 | §2 | `amr` claim (`OPTIONAL`) | 🚫 | Not validated; not required for this reference. |
 | §2 | `azp` claim semantics (`OPTIONAL`, required when ID Token has single `aud` not equal to client_id; required when multiple `aud`) | ✅ | Validated inside Nimbus's `IDTokenValidator`. |
 
@@ -59,8 +59,8 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 | §3.1.2.1 | `state` (`RECOMMENDED`) | ✅ | `state` generated server-side (`CryptoSupport.randomUrlToken(32)`), used as the `tx:{state}` key, validated on callback. |
 | §3.1.2.1 | `nonce` (`OPTIONAL` for code flow but used here) | ✅ | Generated per-request, stored in `tx:{state}`, validated in the ID Token. |
 | §3.1.2.1 | `prompt` (`OPTIONAL`) | ✅ | `prompt=login` sent by `/auth/step-up` to force a fresh re-authentication (step-up). See [`RFC9470-compliance.md`](RFC9470-compliance.md). |
-| §3.1.2.1 | `acr_values` (`OPTIONAL`) | ✅ | `/auth/step-up` sends `acr_values` (`app.step-up-acr-values`, default `1`); the IdP returns a matching `acr` the Resource Server enforces on `POST /api/admin`. See the [SPEC step-up §](docs/specs/SPEC-0001-core-oidc-flows.md). |
-| §3.1.2.1 | `max_age`, `ui_locales`, `id_token_hint`, `login_hint` (`OPTIONAL`) | 🚫 | Not used for step-up. `prompt=login` is used rather than `max_age` (Keycloak treats `max_age=0` as unset); `id_token_hint` is used only on RP-initiated logout. |
+| §3.1.2.1 | `acr_values` (`OPTIONAL`) | ✅ | `/auth/step-up` sends `acr_values` (`app.step-up-acr-values`, default `1`); the Identity Provider (IdP) returns a matching `acr` the Resource Server enforces on `POST /api/admin`. See the [SPEC step-up §](docs/specs/SPEC-0001-core-oidc-flows.md). |
+| §3.1.2.1 | `max_age`, `ui_locales`, `id_token_hint`, `login_hint` (`OPTIONAL`) | 🚫 | Not used for step-up. `prompt=login` is used rather than `max_age` (Keycloak treats `max_age=0` as unset); `id_token_hint` is used only on Relying Party (RP)-initiated logout. |
 | §3.1.2.1 | `display` (`OPTIONAL`) | 🚫 | Not used. |
 | §3.1.2.2 | Authorization Request validation (`MUST` reject malformed) | ✅ | Keycloak default. |
 | §3.1.2.3 | Authorization Server authenticates the end-user (`MUST`) | ✅ | Keycloak login. |
@@ -72,7 +72,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 
 | Spec | Requirement | Status | Where / How |
 |---|---|---|---|
-| §3.1.3.1 | Token Request: `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id` (`REQUIRED`) | ✅ | `AuthorizationCodeTokenExchangeClient` builds a Nimbus `TokenRequest` with `AuthorizationCodeGrant` + PKCE `CodeVerifier`. |
+| §3.1.3.1 | Token Request: `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id` (`REQUIRED`) | ✅ | `AuthorizationCodeTokenExchangeClient` builds a Nimbus `TokenRequest` with `AuthorizationCodeGrant` + Proof Key for Code Exchange (PKCE) `CodeVerifier`. |
 | §3.1.3.2 | Token Endpoint authentication (`MUST` per client auth method) | ✅ | `ClientSecretBasic` (HTTP Basic over TLS in production). |
 | §3.1.3.3 | Successful Token Response (`access_token`, `token_type`, `id_token`, `expires_in`, `refresh_token`) | ✅ | Parsed via Nimbus `OIDCTokenResponseParser`. |
 | §3.1.3.4 | Token Error Response | ✅ | Surfaced as `IllegalStateException` upstream; the callback returns 401 with `application/problem+json`. |
@@ -123,7 +123,7 @@ The single most-cited OIDC-conformance checklist.
 
 | Spec | Requirement | Status | Where / How |
 |---|---|---|---|
-| §6 | Request Object (JAR / `request` / `request_uri`) | 🚫 | Not used. The exact-match `redirect_uri` + PKCE + `state` + `nonce` + `oauth_tx` defense set covers the demonstrated flow without it. |
+| §6 | Request Object (JWT-Secured Authorization Request (JAR) / `request` / `request_uri`) | 🚫 | Not used. The exact-match `redirect_uri` + PKCE + `state` + `nonce` + `oauth_tx` defense set covers the demonstrated flow without it. |
 
 ### §8 — Subject Identifier Types
 
@@ -139,7 +139,7 @@ The single most-cited OIDC-conformance checklist.
 | §9 | `client_secret_basic` (`MAY`) | ✅ | Used by `AuthorizationCodeTokenExchangeClient` via Nimbus `ClientSecretBasic`. |
 | §9 | `client_secret_post` (`MAY`) | 🚫 | Not used. |
 | §9 | `client_secret_jwt` (`MAY`) | 🚫 | Not used. |
-| §9 | `private_key_jwt` (`MAY`) | ⏳ | Recommended by RFC 9700 §2.5; deferred. Reconsider for FAPI / PSD2. |
+| §9 | `private_key_jwt` (`MAY`) | ⏳ | Recommended by RFC 9700 §2.5; deferred. Reconsider for Financial-grade API (FAPI) / PSD2. |
 | §9 | `none` (only for clients not authenticating, e.g. public clients) | 🚫 | No public client. |
 
 ### §10 — Signatures and Encryption
@@ -148,7 +148,7 @@ The single most-cited OIDC-conformance checklist.
 |---|---|---|---|
 | §10.1.1 | Signing algorithms (`RS256` `REQUIRED`) | ✅ | Pinned. |
 | §10.1.2 | Encryption algorithms (`OPTIONAL`) | 🚫 | Not used. |
-| §10.2 | Signature key rotation via JWKS (`SHOULD`) | ✅ | Nimbus `JWKSourceBuilder` with refresh-ahead cache (300s), outage tolerance (900s), retry, and force-refresh on unknown `kid`. |
+| §10.2 | Signature key rotation via JSON Web Key Set (JWKS) (`SHOULD`) | ✅ | Nimbus `JWKSourceBuilder` with refresh-ahead cache (300s), outage tolerance (900s), retry, and force-refresh on unknown `kid`. |
 
 ### §12 — Using Refresh Tokens
 
@@ -171,7 +171,7 @@ The single most-cited OIDC-conformance checklist.
 ### §16 — Security Considerations
 
 Covered in detail by `RFC9700-compliance.md`. The Core §16 items map to
-the RFC 9700 BCP; no new requirements beyond what that doc tracks.
+the RFC 9700 Best Current Practice (BCP); no new requirements beyond what that doc tracks.
 
 ---
 
@@ -204,7 +204,7 @@ in `docs/architecture/architecture-decisions.md` §F.
 | Spec | Status | Reason / when to revisit |
 |---|---|---|
 | [OIDC Dynamic Registration 1.0](https://openid.net/specs/openid-connect-registration-1_0.html) | 🚫 | Static realm configuration. Reconsider when integrating with SaaS IdPs that mint per-tenant clients dynamically. |
-| [OIDC Session Management 1.0](https://openid.net/specs/openid-connect-session-1_0.html) | 🚫 | Requires the SPA to embed an iframe pointed at the OP; the BFF session model is the canonical state. |
+| [OIDC Session Management 1.0](https://openid.net/specs/openid-connect-session-1_0.html) | 🚫 | Requires the single-page application (SPA) to embed an iframe pointed at the OP; the Backend-for-Frontend (BFF) session model is the canonical state. |
 | [OIDC Front-Channel Logout 1.0](https://openid.net/specs/openid-connect-frontchannel-1_0.html) | 🚫 | Same; RP-initiated logout covers user-driven logout. |
 | [OIDC Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html) | ✅ | Implemented at the Auth Service with signed logout-token validation, replay detection, and `sid`/`sub` session invalidation semantics. Production deployments still need a trusted route from the OP to the Auth Service. |
 | OIDC Form Post Response Mode | 🚫 | `query` response mode used; PKCE + short-lived code cover the threats `form_post` mitigates. |

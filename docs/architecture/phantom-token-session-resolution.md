@@ -6,7 +6,7 @@
 ## The change
 
 The API Gateway used to read `sess:{sid}` **directly from Valkey** (a tolerant
-reader over a shared JSON schema), slide the idle TTL with its own `EXPIRE`, and
+reader over a shared JSON schema), slide the idle time-to-live (TTL) with its own `EXPIRE`, and
 call the Auth Service only to refresh a near-expiry token. The gateway now holds
 **only the opaque session id**. It has no Redis client and no knowledge of the
 session schema. On every `/api/**` request it calls a new Auth Service endpoint,
@@ -20,11 +20,12 @@ token. The gateway injects that token upstream.
 
 What we built has a name. The edge holds an opaque by-reference token (the sid)
 and **introspects it** via a token service (the Auth Service) to obtain the
-by-value JWT it forwards upstream.
+by-value JSON Web Token (JWT) it forwards upstream.
 
 - This is Curity's **phantom-token pattern**; conceptually, RFC 7662 token
   introspection applied to the session reference.
-- It is a conformant implementation of the IETF BFF BCP, which specifies the
+- It is a conformant implementation of the IETF Backend-for-Frontend (BFF)
+  Best Current Practice (BCP), which specifies the
   *behavior* (the BFF "removes the cookie, attaches the access token, and
   forwards it") but deliberately does **not** prescribe the internal mechanics.
 - Both "gateway reads the store directly" and "gateway introspects via a
@@ -76,7 +77,7 @@ and document the revocation window as a deliberate dial. Not now.
 
 ## JWKS cost accounting (a common misconception)
 
-- The per-request **JWT signature validation (JWKS) lives at the Resource Server
+- The per-request **JWT signature validation (JSON Web Key Set (JWKS)) lives at the Resource Server
   in both designs** — it never lived at the gateway, and the redesign does not
   move it. The RS verifies the signature against a *cached* JWKS (refresh-ahead,
   local RSA verify).

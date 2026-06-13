@@ -2,7 +2,7 @@
 
 - Control-by-control status of this reference against
   [RFC 9700 — Best Current Practice for OAuth 2.0 Security](https://datatracker.ietf.org/doc/rfc9700/).
-- For OAuth/OIDC implementers auditing the reference against the BCP, control by control.
+- For OAuth/OpenID Connect (OIDC) implementers auditing the reference against the Best Current Practice (BCP), control by control.
 - RFC 9700 is the security BCP that OAuth 2.1
   ([draft-ietf-oauth-v2-1](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/))
   consolidates into the protocol baseline. A row marked ✅ here is also
@@ -16,7 +16,7 @@
 |---|---|
 | ✅ | Verified by an executable check, concrete local config, or test. |
 | 🟡 | Partial — covered in some surface only, or implemented but not asserted. |
-| 🚫 | Not applicable to this reference's architecture (single AS, no in-browser tokens, etc.). |
+| 🚫 | Not applicable to this reference's architecture (single Authorization Server (AS), no in-browser tokens, etc.). |
 | 🔄 | Production-only concern; documented but not enforced over local HTTP. |
 | ⏳ | Deliberately deferred. See "Known gaps" + README "What's deliberately not here". |
 
@@ -26,9 +26,9 @@
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 2.1, 4.1.3 | Exact redirect-URI matching (`MUST`) | ✅ | Realm: `oidc-reference-auth` `redirectUris: ["http://127.0.0.1:5173/auth/callback/idp"]` (no wildcards; client-registration name is the generic `idp`, not the IdP brand). Realm-static-checks smoke asserts the exact value. |
+| 2.1, 4.1.3 | Exact redirect-URI matching (`MUST`) | ✅ | Realm: `oidc-reference-auth` `redirectUris: ["http://127.0.0.1:5173/auth/callback/idp"]` (no wildcards; client-registration name is the generic `idp`, not the Identity Provider (IdP) brand). Realm-static-checks smoke asserts the exact value. |
 | 2.1, 4.11 | No open redirectors (`MUST NOT`) | ✅ | `AuthController#isValidReturnTo` validates the saved-request URL: same-origin relative path only, rejects absolute / `//` / missing leading slash / overlong / encoded backslash / control chars. Logout post-logout redirect is fixed. Asserted by `AuthControllerTest` return-to negative cases. |
-| 2.1 | CSRF prevention (`MUST`) | ✅ | Login CSRF: `state` validated against `tx:{state}`, PKCE S256, ID-token `nonce`, and `oauth_tx` browser-binding cookie. State-changing calls: `__Host-sid` (`SameSite=Lax`) + signed HMAC-SHA256 double-submit on `XSRF-TOKEN` / `X-XSRF-TOKEN`. Naive double-submit is rejected by `SignedCsrfSupport`. |
+| 2.1 | Cross-Site Request Forgery (CSRF) prevention (`MUST`) | ✅ | Login CSRF: `state` validated against `tx:{state}`, Proof Key for Code Exchange (PKCE) S256, ID-token `nonce`, and `oauth_tx` browser-binding cookie. State-changing calls: `__Host-sid` (`SameSite=Lax`) + signed keyed-hash message authentication code (HMAC)-SHA256 double-submit on `XSRF-TOKEN` / `X-XSRF-TOKEN`. Naive double-submit is rejected by `SignedCsrfSupport`. |
 | 2.1, 4.4 | Mix-up defense (`REQUIRED` when ≥2 AS) | ✅ | Single Keycloak issuer locally; `AuthController#callback` validates the RFC 9207 `iss` query parameter against the configured issuer when present (defense-in-depth on a single AS). |
 | 2.1 | Credential forwarding prevention | ✅ | User credentials live in the Keycloak session and are never forwarded to clients (Keycloak default). |
 
@@ -58,7 +58,7 @@
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 2.2.1 | Sender-constrained tokens via mTLS/DPoP (`SHOULD`) | ⏳ | Tokens are bearer at the API Gateway → Resource Server hop. The BFF pattern removes the browser-leakage motivation. |
+| 2.2.1 | Sender-constrained tokens via mutual TLS (mTLS)/Demonstrating Proof-of-Possession (DPoP) (`SHOULD`) | ⏳ | Tokens are bearer at the API Gateway → Resource Server hop. The Backend-for-Frontend (BFF) pattern removes the browser-leakage motivation. |
 | 2.2.2, 4.14 | Public-client refresh tokens must be sender-constrained OR rotated (`MUST`) | ✅ | No public client. Confidential clients rotate: realm `revokeRefreshToken: true`, `refreshTokenMaxReuse: 0`. |
 
 ## §2.3 — Access-Token Privilege Restriction
@@ -66,8 +66,8 @@
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 2.3 | Least privilege (`SHOULD`) | ✅ | Auth Service client default scopes: `openid profile email roles api.audience api.read` (no admin/write by default). Service client default scopes: `api.audience service.jobs`. |
-| 2.3 | Audience restriction (`SHOULD`); RS verifies (`MUST`) | ✅ | `api.audience` client scope's `oidc-audience-mapper` adds `oidc-reference-api` to `aud`. Resource Server validates `aud` with a custom `JwtClaimValidator` on `app.audience` (env `OIDC_AUDIENCE`, default `oidc-reference-api`) in `SecurityConfig`, accepting both the RFC-7519 string and array shapes. Wrong-audience rejection asserted by `ApiSecurityTest`. |
-| 2.3 | Resource/action restriction (scope or `authorization_details`) | ✅ | Scopes: `api.read`, `api.write`, `admin.read`, `service.jobs`. RAR (RFC 9396) not used. |
+| 2.3 | Audience restriction (`SHOULD`); Resource Server (RS) verifies (`MUST`) | ✅ | `api.audience` client scope's `oidc-audience-mapper` adds `oidc-reference-api` to `aud`. Resource Server validates `aud` with a custom `JwtClaimValidator` on `app.audience` (env `OIDC_AUDIENCE`, default `oidc-reference-api`) in `SecurityConfig`, accepting both the RFC-7519 string and array shapes. Wrong-audience rejection asserted by `ApiSecurityTest`. |
+| 2.3 | Resource/action restriction (scope or `authorization_details`) | ✅ | Scopes: `api.read`, `api.write`, `admin.read`, `service.jobs`. Rich Authorization Requests (RAR) (RFC 9396) not used. |
 
 ## §2.4 — ROPC
 
@@ -80,7 +80,7 @@
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 2.5 | Enforce client authentication (`SHOULD`) | ✅ | All clients confidential; secrets required. |
-| 2.5 | Asymmetric auth (mTLS / Private Key JWT) (`RECOMMENDED`) | ⏳ | Using `client_secret_basic`. |
+| 2.5 | Asymmetric auth (mTLS / Private Key JSON Web Token (JWT)) (`RECOMMENDED`) | ⏳ | Using `client_secret_basic`. |
 
 ## §2.6 — Other Recommendations
 
@@ -92,7 +92,7 @@
 | 2.6 | No unencrypted authz response transport (`MUST NOT`) | 🔄 | Local exception; production HTTPS required. |
 | 2.6, 4.16 | No HTTP redirect URIs except loopback (`MUST NOT`) | ✅ | All redirect URIs are `localhost`/`127.0.0.1` (RFC-permitted loopback exception). |
 | 2.6, 4.17 | In-browser message verification (`MUST`) | 🚫 | No `postMessage` flows; HTTP redirects only. |
-| 2.6 | CORS — never at authz endpoint (`MUST NOT`) | ✅ | Authz endpoint is redirect-driven, not fetched. Resource Server CORS denies all browser origins (defense in depth — the RS is not browser-reachable in any case). |
+| 2.6 | Cross-Origin Resource Sharing (CORS) — never at authz endpoint (`MUST NOT`) | ✅ | Authz endpoint is redirect-driven, not fetched. Resource Server CORS denies all browser origins (defense in depth — the RS is not browser-reachable in any case). |
 
 ## §4.1 — Insufficient Redirect-URI Validation
 
@@ -102,14 +102,14 @@
 | 4.1.3 | Web servers hosting redirect URI: no open redirector (`MUST NOT`) | ✅ | Auth Service callback handler does not accept a user-supplied URL beyond the validated `return_to`. |
 | 4.1.3 | Fragment reattachment prevention (`MAY`) | 🚫 | Using `code` response type; no fragment-bearing response. |
 | 4.1.3 | Prefer code response type (`SHOULD`) | ✅ | Only `code` used. |
-| 4.1.3 | Origin verification via RFC 9101 / RFC 9126 (`MAY`) | ⏳ | JAR / PAR not used (acceptable per BCP `MAY`). |
+| 4.1.3 | Origin verification via RFC 9101 / RFC 9126 (`MAY`) | ⏳ | JWT-Secured Authorization Request (JAR) / Pushed Authorization Requests (PAR) not used (acceptable per BCP `MAY`). |
 
 ## §4.2 — Credential Leakage via Referer
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 4.2.4 | No third-party resources on authz pages (`SHOULD NOT`) | ✅ | Keycloak login page is self-hosted. SPA loads no third-party scripts. |
-| 4.2.4 | `Referrer-Policy` header | 🟡 | `Referrer-Policy: no-referrer` set on every Auth Service response via the security filter chain (`SecurityConfig`), and explicitly on the logout 302 (id_token_hint carries PII) and on both the callback success and callback error redirects. Resource Server / gateway responses use defaults. |
+| 4.2.4 | No third-party resources on authz pages (`SHOULD NOT`) | ✅ | Keycloak login page is self-hosted. The single-page application (SPA) loads no third-party scripts. |
+| 4.2.4 | `Referrer-Policy` header | 🟡 | `Referrer-Policy: no-referrer` set on every Auth Service response via the security filter chain (`SecurityConfig`), and explicitly on the logout 302 (id_token_hint carries personally identifiable information (PII)) and on both the callback success and callback error redirects. Resource Server / gateway responses use defaults. |
 | 4.2.4 | Code response type over access-token types | ✅ | Covered. |
 | 4.2.4 | Code bound to client or PKCE | ✅ | Confidential client + PKCE. |
 | 4.2.4 | Code invalidated on first use (`MUST`) | ✅ | Keycloak default. |
@@ -204,7 +204,7 @@
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 4.14 | Rotation with reuse detection | ✅ | Realm: `revokeRefreshToken: true`, `refreshTokenMaxReuse: 0`. `AuthorizationCodeTokenRefreshClient` surfaces Keycloak's `invalid_grant` as `InvalidRefreshTokenException`; `InternalResolveController` deletes `sess:{sid}` and returns 409. Per-session refresh serialized via `ReentrantLock` keyed on `sid`. Asserted by `InternalResolveControllerTest`. |
-| 4.14 | Audit on refresh rejection (incl. reuse) | ✅ | `InternalResolveController` emits `SecurityAudit.event(... "refresh_token_rejected", "session_invalidated", subjectClaim)` with `sid_hash` (never the raw sid) before the 409. `invalid_grant` is not provably reuse at the RP (RFC 6749 §5.2), so the event is labeled honestly; reuse still invalidates the session. |
+| 4.14 | Audit on refresh rejection (incl. reuse) | ✅ | `InternalResolveController` emits `SecurityAudit.event(... "refresh_token_rejected", "session_invalidated", subjectClaim)` with `sid_hash` (never the raw sid) before the 409. `invalid_grant` is not provably reuse at the Relying Party (RP) (RFC 6749 §5.2), so the event is labeled honestly; reuse still invalidates the session. |
 
 ## §4.15 — Client Impersonating Resource Owner
 
@@ -227,7 +227,7 @@ Items where the reference is short of the BCP, each with its trigger for reconsi
 | Gap | Why | When to revisit |
 |---|---|---|
 | Sender-constrained access tokens (DPoP or mTLS) — §2.2.1, §4.9.3, §4.10.1 | Tokens are bearer on the API Gateway → Resource Server hop. The BFF removes the browser-leakage motivation. | RS exposed to multi-tenant or untrusted callers. |
-| Asymmetric client authentication — §2.5 | All confidential clients use `client_secret_basic`. | FAPI / PSD2 compliance regimes. |
+| Asymmetric client authentication — §2.5 | All confidential clients use `client_secret_basic`. | Financial-grade API (FAPI) / PSD2 compliance regimes. |
 | Global CSP baseline + `Referrer-Policy` on gateway/RS responses — §4.2.4 | Auth Service sets `Referrer-Policy: no-referrer` on all its responses; the gateway and Resource Server responses, and a global CSP, are not yet set. | Production hardening. |
 | Audience as URL form — §4.10.2.2 | Using logical name `oidc-reference-api`. | Multiple Resource Servers. |
 | JAR (RFC 9101) / PAR (RFC 9126) / RAR (RFC 9396) | Exact-match redirect URI + PKCE + state + nonce + `oauth_tx` cover the demonstrated flow. | Multiple authorization servers, untrusted-network authorization request handling, or structured per-resource grants. |

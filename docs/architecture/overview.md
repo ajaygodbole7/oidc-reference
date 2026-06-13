@@ -8,8 +8,9 @@ split implementation:
 
 - The browser never holds an access, refresh, or ID token.
 - Two services divide the BFF role. A confidential **Auth Service** owns the
-  OAuth/OIDC client: Authorization Code + PKCE, the session cookie, ID-token
-  validation, refresh-token rotation, and RP-initiated logout. An **API
+  OAuth/OIDC client: Authorization Code + Proof Key for Code Exchange (PKCE),
+  the session cookie, ID-token validation, refresh-token rotation, and
+  Relying Party (RP)-initiated logout. An **API
   Gateway** owns `/api/**` routing and bearer injection.
 - Both sit behind a single ingress and share a Valkey state store. Tokens live
   in the store, addressed by an opaque `HttpOnly` session cookie.
@@ -40,7 +41,7 @@ contracts, see [`../specs/SPEC-0001-core-oidc-flows.md`](../specs/SPEC-0001-core
 
 ## Components
 
-- **React SPA** (`frontend/`): no OAuth client library. Calls same-origin
+- **React single-page application (SPA)** (`frontend/`): no OAuth client library. Calls same-origin
   endpoints (`/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/me`,
   `/api/*`) fronted by the ingress. Authenticates via an opaque session cookie.
 - **Auth Service** (`auth-service/`): Spring Boot, Nimbus `oauth2-oidc-sdk`.
@@ -54,7 +55,8 @@ contracts, see [`../specs/SPEC-0001-core-oidc-flows.md`](../specs/SPEC-0001-core
   reads the session store; resolves each request to a current access token by
   calling `/internal/resolve` on the Auth Service. Strips inbound `Cookie` and
   hop-by-hop headers; injects `Authorization: Bearer` upstream. Enforces the
-  path-pattern allowlist. Validates signed CSRF on state-changing requests.
+  path-pattern allowlist. Validates signed Cross-Site Request Forgery (CSRF)
+  on state-changing requests.
   Delegates session lookup, the idle-TTL slide, and refresh to the Auth
   Service.
 - **State store** (`valkey`): Valkey locally (Redis-compatible). Holds
@@ -63,7 +65,7 @@ contracts, see [`../specs/SPEC-0001-core-oidc-flows.md`](../specs/SPEC-0001-core
   component that touches the store, for both reads and writes; the API Gateway
   has no store handle and reaches session state only through `/internal/resolve`.
 - **Resource Server** (`backend-resource-server/`): Spring Boot, Spring
-  Security OAuth2 Resource Server. Validates Keycloak JWT access tokens
+  Security OAuth2 Resource Server. Validates Keycloak JSON Web Token (JWT) access tokens
   (issuer, signature, expiration, algorithm, audience, scope, roles). Knows
   nothing of cookies or sessions and is not reachable from the browser.
 - **Keycloak** (`authorization-server/`): local Authorization Server and

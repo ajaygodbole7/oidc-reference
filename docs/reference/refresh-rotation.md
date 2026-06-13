@@ -17,7 +17,7 @@ This is the same path Keycloak's own reuse-detection chain takes when it
 sees a replayed refresh token.
 
 This default exists because silently accepting an un-rotated refresh
-token is indistinguishable, from the BFF's perspective, from a stolen
+token is indistinguishable, from the Backend-for-Frontend (BFF)'s perspective, from a stolen
 token being replayed. There is no signal at the application layer to
 tell those apart, so the safer default is to fail.
 
@@ -35,14 +35,14 @@ behavior kicks in: the old refresh token is reused for the next grant.
 ## Provider matrix
 
 The recommendation below assumes each provider's default configuration.
-If your IdP deployment has changed the rotation behavior at the
+If your Identity Provider (IdP) deployment has changed the rotation behavior at the
 client/realm level, treat that as authoritative over this table.
 
 | Provider                                  | Rotates by default? | Recommended setting              |
 |-------------------------------------------|---------------------|----------------------------------|
 | Keycloak (this reference)                 | Yes (when enabled at the realm — the bundled `oidc-reference` realm has it on) | `true` |
-| Auth0                                     | Yes (when "Rotation" is enabled on the application; default for SPAs and native apps) | `true` |
-| Okta                                      | Yes (default for all OAuth/OIDC apps when refresh tokens are enabled)            | `true` |
+| Auth0                                     | Yes (when "Rotation" is enabled on the application; default for single-page applications (SPAs) and native apps) | `true` |
+| Okta                                      | Yes (default for all OAuth/OpenID Connect (OIDC) apps when refresh tokens are enabled)            | `true` |
 | Microsoft Entra ID (Azure AD)             | Yes (refresh tokens rotate; old ones invalidated after a grace window)            | `true` |
 | AWS Cognito                               | No (returns the same refresh token across the refresh window unless rotation is explicitly enabled)            | `false` (unless the user pool has refresh rotation turned on) |
 | Google Identity                           | No (refresh tokens are long-lived and do not rotate per request)                  | `false` |

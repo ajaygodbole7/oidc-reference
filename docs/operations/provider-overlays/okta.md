@@ -6,12 +6,12 @@ tenant. It needs Okta credentials, so it is non-gating.
 - The enforced gate is `scripts/e2e-portability.sh` — hermetic, re-runnable
   without third-party credentials.
 - Okta is the external validation artifact: it proves the same config surface
-  against a real enterprise IdP.
+  against a real enterprise Identity Provider (IdP).
 
 ## Why Okta First
 
-Okta supports standard OIDC Authorization Code + PKCE and standard
-RP-initiated logout. That matches this reference's logout invariant:
+Okta supports standard OpenID Connect (OIDC) Authorization Code + Proof Key for Code Exchange (PKCE) and standard
+Relying Party (RP)-initiated logout. That matches this reference's logout invariant:
 `id_token_hint` may leave the server only in a server-generated top-level
 redirect to the provider's end-session endpoint. Auth0 is not the first
 external proof because its common logout path is provider-specific.
@@ -46,8 +46,9 @@ so API audience, API scopes, and groups claims are under your control.
   - Ensure test users map to `user` and `admin` groups equivalent to the
     local `alice` and `admin` users.
 - Step-up `acr` (assurance axis):
-  - Okta emits its own `acr` values (e.g. `urn:okta:loa:1fa:any` for a single
-    factor, `urn:okta:loa:2fa:any` / `phr` / `phrh` for MFA), not Keycloak's
+  - Okta emits its own Authentication Context Class Reference (the `acr` claim)
+    values (e.g. `urn:okta:loa:1fa:any` for a single
+    factor, `urn:okta:loa:2fa:any` / `phr` / `phrh` for multi-factor authentication (MFA)), not Keycloak's
     `0`/`1`. Set `STEP_UP_ACR_VALUES` (requested on `/auth/step-up`) and
     `STEP_UP_REQUIRED_ACR` (enforced by the RS on `POST /api/admin`) to the
     Okta value your authentication policy returns; the code reads the standard

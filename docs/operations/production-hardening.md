@@ -9,8 +9,8 @@ architecture is meant to be copied and hardened for a specific platform.
 - Terminate TLS at the real browser ingress and preserve `X-Forwarded-*`
   headers only from trusted proxies.
 - Use `__Host-sid; Secure; HttpOnly; SameSite=Lax; Path=/` on HTTPS.
-- Replace all `CHANGE_BEFORE_DEPLOY` and zero-byte HMAC sentinels.
-- Store Auth Service, Gateway, and IdP secrets in a secret manager.
+- Replace all `CHANGE_BEFORE_DEPLOY` and zero-byte keyed-hash message authentication code (HMAC) sentinels.
+- Store Auth Service, Gateway, and Identity Provider (IdP) secrets in a secret manager.
 - Set explicit non-local Spring profiles and verify the sentinel guard fails
   closed if any local-dev secret remains.
 - Protect the Redis-compatible state store with network isolation, AUTH or
@@ -24,9 +24,9 @@ architecture is meant to be copied and hardened for a specific platform.
   Server, Keycloak/IdP calls, and Redis-compatible state-store calls.
 - Configure provider-specific rate limits for `/auth/login`,
   `/auth/callback/idp`, `/auth/logout`, and `/internal/resolve`.
-- Decide whether local logout or upstream RP-initiated logout is the correct
+- Decide whether local logout or upstream Relying Party (RP)-initiated logout is the correct
   user experience for the chosen IdP.
-- Keep `SESSION_MAX_TTL` less than or equal to the IdP SSO max session
+- Keep `SESSION_MAX_TTL` less than or equal to the IdP single sign-on (SSO) max session
   lifespan.
 
 ## Scale-Out Decisions
@@ -48,7 +48,7 @@ active users out. Making the lock cross-instance is a scale-out step, not a bug.
 the in-process default; the default stays in-process for the single-instance
 reference. It is built on the vendor-neutral `StateStore` (no Redis/Valkey client
 in the lock itself), so it follows whatever store backs `StateStore`. Knobs:
-`app.refresh-lock-ttl` (lease TTL, default `10s` — above the IdP connect+read
+`app.refresh-lock-ttl` (lease time-to-live (TTL), default `10s` — above the IdP connect+read
 budget so the lease covers a full refresh), `app.refresh-lock-max-wait`
 (default `12s`, above the TTL so a crashed holder's lease always lapses within a
 contender's wait), `app.refresh-lock-poll` (default `50ms`).
@@ -98,15 +98,15 @@ store. It is independent of which gateway fronts `/internal/resolve`.
   terminated before APISIX/Auth Service.
 - Keep `sess:{sid}` as the session contract; do not let additional services
   write that keyspace unless the ownership model is redesigned.
-- Run Resource Servers behind the gateway and keep direct browser CORS denied.
+- Run Resource Servers behind the gateway and keep direct browser Cross-Origin Resource Sharing (CORS) denied.
 - Add a gateway allowlist entry deliberately for each new API surface.
 
 ## Security Enhancements To Consider
 
-- `private_key_jwt` or mTLS client authentication to the Authorization Server.
-- Sender-constrained tokens with DPoP or mTLS where the Resource Server is
+- `private_key_jwt` or mutual TLS (mTLS) client authentication to the Authorization Server (AS).
+- Sender-constrained tokens with Demonstrating Proof-of-Possession (DPoP) or mTLS where the Resource Server is
   exposed outside a trusted service boundary.
-- PAR/JAR for higher-assurance authorization request handling.
+- Pushed Authorization Requests (PAR)/JWT-Secured Authorization Request (JAR) for higher-assurance authorization request handling.
 - A trusted provider-to-Auth-Service route for the implemented Back-Channel
   Logout endpoint.
 
@@ -285,7 +285,7 @@ The four preconditions:
   section above);
 - the session store is a single Valkey with no HA (see the SPOF section above);
 - the signing key is a single hard-cutover key — and it is shared by **both** the
-  double-submit CSRF cookie and the `oauth_tx` login-state value, so rotating it
+  double-submit Cross-Site Request Forgery (CSRF) cookie and the `oauth_tx` login-state value, so rotating it
   does not merely break CSRF validation, it also breaks every login already in
   flight at rotation time (blast radius wider than a CSRF-only framing implies);
 - there is no graceful shutdown, so the terminations a rolling deploy performs by

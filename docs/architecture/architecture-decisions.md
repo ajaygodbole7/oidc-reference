@@ -2,7 +2,8 @@
 
 This document explains why the oidc-reference project is shaped the way it
 is. It does not restate the implementation contract. Concrete values such as
-cookie names, TTLs, ports, config keys, scopes, realm settings, and version
+cookie names, time-to-live (TTL) values, ports, config keys, scopes, realm
+settings, and version
 pins live in SPEC-0001.
 
 This is one consolidated decision document, not an ADR per decision. The
@@ -28,13 +29,15 @@ purpose is to keep the rationale discoverable in one read.
 ### A1. BFF Session Pattern, Split-Implementation
 
 Tokens must not be in JavaScript reach. The browser holds no access token,
-refresh token, or ID token. The Backend-for-Frontend is the OAuth/OIDC client,
-and tokens are kept server-side.
+refresh token, or ID token. The Backend-for-Frontend (BFF) is the
+OAuth/OpenID Connect (OIDC) client, and tokens are kept server-side.
 
-A public-client SPA running Authorization Code + PKCE in the browser was
-rejected. It is valid OAuth, but it has three problems:
+A public-client single-page application (SPA) running Authorization Code +
+Proof Key for Code Exchange (PKCE) in the browser was rejected. It is valid
+OAuth, but it has three problems:
 
-- Any successful XSS can use or exfiltrate tokens reachable by JavaScript.
+- Any successful Cross-Site Scripting (XSS) can use or exfiltrate tokens
+  reachable by JavaScript.
 - Browser refresh-token rotation is fragile.
 - Silent iframe renewal is no longer a dependable browser primitive.
 
@@ -60,8 +63,9 @@ Spec: SPEC-0001 Auth Service + API Gateway endpoints.
 OAuth and OIDC library maturity wins over framework-footprint optimization.
 Alternatives considered: Quarkus, Helidon SE, Vert.x, and Node.
 
-Spring Security provides OAuth2 Client, OIDC login, Resource Server, JWT
-validation, and CSRF primitives. The BFF still owns custom repository code for
+Spring Security provides OAuth2 Client, OIDC login, Resource Server, JSON Web
+Token (JWT) validation, and Cross-Site Request Forgery (CSRF) primitives. The
+BFF still owns custom repository code for
 `tx:{state}` and `sess:{sid}`. Spring is not allowed to hide those states
 inside a framework-managed HTTP session. Virtual threads reduce the historical
 need to choose a reactive stack for this mostly IO-bound workload.
@@ -93,7 +97,7 @@ Spec: SPEC-0001 State Store Keys.
 
 The BFF and Resource Server are implemented against standard OAuth/OIDC
 interfaces, not provider-specific APIs. Keycloak is the local reference
-Authorization Server and Identity Provider.
+Authorization Server (AS) and Identity Provider (IdP).
 
 The application code must not branch on AS-specific issuer names, endpoints,
 admin APIs, or claim shapes. Provider differences belong in configuration and
@@ -159,8 +163,9 @@ role obscures both. The split lets each service do one thing.
 The split does not change any protocol-level OIDC decision. The following
 are all unchanged: Authorization Code + PKCE, ID-token validation,
 refresh-token rotation with reuse detection, audience binding, role mapping,
-RP-initiated logout, IdP portability, storage portability, single-wildcard
-`/api/**` with allowlist, RS-side explicit validation, virtual threads on the
+Relying Party (RP)-initiated logout, IdP portability, storage portability,
+single-wildcard `/api/**` with allowlist, RS-side explicit
+validation, virtual threads on the
 Spring services, and dev cookie binding via forwarded headers. It is
 operational topology, not new OIDC content.
 
@@ -191,8 +196,8 @@ operational topology, not new OIDC content.
   is a third confidential client (`oidc-reference-api-gateway` by local
   default) with Client Credentials only. The Auth Service acts as OAuth
   Resource Server for `/internal/*` with the configured internal-refresh
-  audience (`oidc-reference-auth-internal` by local default). mTLS noted as
-  production hardening.
+  audience (`oidc-reference-auth-internal` by local default). Mutual TLS (mTLS)
+  noted as production hardening.
 - **Ingress.** APISIX is itself the ingress in the full Compose stack, with no
   separate Traefik or NGINX in front of it. The frontend dev loop uses the
   Vite proxy with two upstreams (`/auth/*` → Auth Service, `/api/**` →
@@ -242,7 +247,7 @@ is unchanged. Two properties improve:
 - **`pac4j-oidc`.** Misadvertised as framework-agnostic; declares
   hard compile-time deps on `spring-core` and Guava.
 - **`jjwt`.** Cleaner fluent API for the JWT primitive but narrower spec
-  coverage, with no built-in remote JWKS source. Would require pairing with
+  coverage, with no built-in remote JSON Web Key Set (JWKS) source. Would require pairing with
   a separate OAuth client library. Nimbus already covers both.
 - **Quarkus / Micronaut OIDC client modules.** Hard-coupled to their
   framework's filter chain, which defeats the portability property above.
@@ -296,7 +301,8 @@ The session cookie is `__Host-sid` with `HttpOnly`, `Secure`, `SameSite=Lax`,
 `Path=/`, and no `Domain`. After a successful OAuth callback the Auth Service
 returns a direct `302` to the same-origin-validated saved request URL.
 State-changing requests are protected by a signed double-submit CSRF
-token (HMAC-signed or session-bound), not naive cookie-header match.
+token (keyed-hash message authentication code (HMAC)-signed or session-bound),
+not naive cookie-header match.
 
 What was rejected: `SameSite=Strict` plus an intermediate same-origin HTML
 landing page.
@@ -487,7 +493,7 @@ to the Resource Server.
 Per-endpoint Gateway mirrors were rejected because they duplicate Resource
 Server policy in the Gateway. An unrestricted proxy was rejected because it
 creates an SSRF surface. The Resource Server also denies browser origins via
-CORS as defense in depth, even when deployment topology keeps it unreachable
+Cross-Origin Resource Sharing (CORS) as defense in depth, even when deployment topology keeps it unreachable
 from the browser.
 
 Trade-off: adding an RS endpoint requires updating the API Gateway allowlist.
@@ -596,7 +602,7 @@ Spec: SPEC-0001 BFF Client.
 These items capture security extensions that are either deliberately outside the
 local reference or implemented with production deployment caveats.
 
-### Sender-Constrained Tokens (DPoP Or mTLS)
+### Sender-Constrained Tokens (Demonstrating Proof-of-Possession (DPoP) Or mTLS)
 
 Not adopted because the BFF pattern removes the primary browser-token leakage
 threat, and the local RS is isolated behind the API Gateway and the
@@ -612,11 +618,12 @@ assumption.
 secret client authentication is simpler and sufficient for the teaching
 baseline.
 
-Reconsider for production targets or compliance regimes such as FAPI or PSD2.
+Reconsider for production targets or compliance regimes such as Financial-grade API (FAPI) or PSD2.
 
 ### JAR, PAR, And RAR
 
-JAR, PAR, and Rich Authorization Requests are not adopted. Exact redirect URI
+JWT-Secured Authorization Request (JAR), Pushed Authorization Requests (PAR),
+and Rich Authorization Requests (RAR) are not adopted. Exact redirect URI
 matching, PKCE, state, and nonce cover the demonstrated flow; scopes cover the
 demonstrated authorization model.
 

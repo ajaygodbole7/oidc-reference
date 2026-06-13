@@ -1,6 +1,6 @@
 # Documentation
 
-What's here: the deeper reference behind the BFF OAuth 2.1 / OIDC pattern.
+What's here: the deeper reference behind the Backend-for-Frontend (BFF) OAuth 2.1 / OpenID Connect (OIDC) pattern.
 Start with the root [`README.md`](../README.md) for the end-to-end flows, then
 follow "Read in order" below. The other sections are reference, operations, and
 testing material you can reach for as needed.
@@ -33,9 +33,9 @@ testing material you can reach for as needed.
 - [`../SECURITY.md`](../SECURITY.md) — threat model, controls, token
   invariant, key handling.
 - [`../OIDC-compliance.md`](../OIDC-compliance.md) — OpenID Connect
-  Core / Discovery / RP-Initiated Logout conformance matrix.
+  Core / Discovery / Relying Party (RP)-Initiated Logout conformance matrix.
 - [`../RFC9700-compliance.md`](../RFC9700-compliance.md) — RFC 9700
-  (OAuth 2.0 Security BCP) conformance matrix.
+  (OAuth 2.0 Security Best Current Practice (BCP)) conformance matrix.
 - [`../RFC9470-compliance.md`](../RFC9470-compliance.md) — RFC 9470
   (OAuth 2.0 Step Up Authentication Challenge) conformance matrix.
 - [`reference/refresh-rotation.md`](reference/refresh-rotation.md) — refresh

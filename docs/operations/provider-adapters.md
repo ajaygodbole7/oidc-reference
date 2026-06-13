@@ -1,13 +1,13 @@
-# Bring Your Own IdP
+# Bring Your Own Identity Provider (IdP)
 
-What this is: how to swap the local Keycloak for another OIDC provider, and the
+What this is: how to swap the local Keycloak for another OpenID Connect (OIDC) provider, and the
 config surface that swap touches.
 
 This project is IdP-agnostic at the application boundary:
 
 - the Frontend calls only the API Gateway;
 - the Auth Service is the confidential OIDC client;
-- the Resource Server validates standard JWT claims.
+- the Resource Server validates standard JSON Web Token (JWT) claims.
 
 Keycloak is the local reference Authorization Server, not a code dependency.
 
@@ -136,7 +136,7 @@ admin UI and OIDC metadata.
 For a provider to pass the reference's portability bar:
 
 1. Discovery or explicit endpoint configuration starts Auth Service without code changes.
-2. Login uses Authorization Code + PKCE and returns through `/auth/callback/idp`.
+2. Login uses Authorization Code + Proof Key for Code Exchange (PKCE) and returns through `/auth/callback/idp`.
 3. ID token validates: `iss`, `aud=AUTH_CLIENT_ID`, signature, `exp`, and nonce.
 4. Access token validates at the Resource Server: `iss`, signature, `exp`,
    `aud=OIDC_AUDIENCE`, standard `scope` / `scp` authorities, and configured
@@ -163,13 +163,13 @@ For a provider to pass the reference's portability bar:
 - Cognito and Google need provider-specific validation before claiming full
   parity with the Keycloak reference.
 - Back-channel logout is implemented for providers that support the standard
-  logout-token contract and can reach the Auth Service. PAR, JAR, DPoP, mTLS,
+  logout-token contract and can reach the Auth Service. Pushed Authorization Requests (PAR), JWT-Secured Authorization Request (JAR), Demonstrating Proof-of-Possession (DPoP), mutual TLS (mTLS),
   and `private_key_jwt` remain out of scope for the local reference. See
   `docs/architecture/architecture-decisions.md`.
 
 ## What Must Not Change
 
-- No tokens in browser JavaScript, browser storage, or SPA-readable cookies.
+- No tokens in browser JavaScript, browser storage, or single-page application (SPA)-readable cookies.
 - Frontend calls only `/auth/*` and `/api/**` on the gateway origin.
 - Provider-specific behavior stays in config or docs, not `if provider == ...`
   branches.

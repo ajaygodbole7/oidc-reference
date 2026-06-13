@@ -26,10 +26,10 @@ just test-e2e        # or: sh scripts/test-e2e.sh
 ```
 
 The live-infra E2E renders the APISIX config and brings up the Compose stack
-(Keycloak, Valkey, APISIX). It runs the IdP realm/discovery/token smoke and the
+(Keycloak, Valkey, APISIX). It runs the Identity Provider (IdP) realm/discovery/token smoke and the
 gateway behaviour suite against it, then tears the stack down.
 
-For the full browser login flow, use `just up` + `just dev` and drive the SPA at
+For the full browser login flow, use `just up` + `just dev` and drive the single-page application (SPA) at
 `http://127.0.0.1:5173`.
 
 ## Canonical Authenticated Proof
@@ -44,7 +44,7 @@ covers:
 
 - a real Keycloak login through the Auth Service,
 - an authenticated `/api/**` call through APISIX, and
-- RP-initiated logout through the same-origin `/auth/logout/continue` handle.
+- Relying Party (RP)-initiated logout through the same-origin `/auth/logout/continue` handle.
 
 It also asserts the token-isolation invariant: no access/refresh/ID token in
 browser storage, JS-readable cookies, or SPA-readable bodies.
@@ -60,10 +60,10 @@ browser storage, JS-readable cookies, or SPA-readable bodies.
 5. Import the realm.
 6. Wait for Compose health checks: Auth Service and Resource Server stay
    internal-only and are reachable by APISIX through service-name DNS.
-7. Run OIDC discovery + JWKS smoke tests.
-8. Run Resource Server JWT-validation tests (positive + negative).
+7. Run OpenID Connect (OIDC) discovery + JSON Web Key Set (JWKS) smoke tests.
+8. Run Resource Server JSON Web Token (JWT)-validation tests (positive + negative).
 9. Run Client Credentials E2E (no Auth Service or API Gateway in path):
-   `curl` AS for a service-client token; `curl` RS `/api/jobs` with the
+   `curl` Authorization Server (AS) for a service-client token; `curl` RS `/api/jobs` with the
    bearer token; expect `200`.
 10. Start the frontend dev server (Vite proxies `/auth/*` to the Auth
     Service `:8081` and `/api/**` to APISIX `:9080` with
@@ -73,7 +73,7 @@ browser storage, JS-readable cookies, or SPA-readable bodies.
     on the originally-requested URL with `200`.
 12. Run XHR 401 test: `fetch('/api/me')` from the SPA without session
     returns `401` with no `Location`.
-13. Run RP-initiated logout E2E: `POST /auth/logout` with CSRF header, the
+13. Run RP-initiated logout E2E: `POST /auth/logout` with Cross-Site Request Forgery (CSRF) header, the
     Auth Service deletes `sess:{sid}` and returns the same-origin
     `/auth/logout/continue` handle, which redirects through the Keycloak
     `end_session_endpoint`; the browser lands back on the SPA root

@@ -3,14 +3,14 @@
 - Control-by-control status of this reference against
   [RFC 9470](https://datatracker.ietf.org/doc/rfc9470/) (OAuth 2.0 Step Up
   Authentication Challenge Protocol).
-- For OAuth/OIDC implementers verifying the step-up wiring against the RFC text.
+- For OAuth/OpenID Connect (OIDC) implementers verifying the step-up wiring against the RFC text.
 
 **Scope of step-up in this reference.** The sensitive route `POST /api/admin`
 enforces **both** RFC 9470 axes:
 
 - **`auth_time` freshness** (`max_age` semantics — recency).
-- **`acr`** (LoA — assurance). `/auth/step-up` requests `acr_values`
-  (`app.step-up-acr-values`, default `1`); the Resource Server requires the
+- **`acr`** (Level of Assurance (LoA) — assurance). `/auth/step-up` requests `acr_values`
+  (`app.step-up-acr-values`, default `1`); the Resource Server (RS) requires the
   token's `acr` to be in `app.step-up.required-acr` (default `1`), mirroring the
   `auth_time` gate.
 
@@ -19,8 +19,8 @@ Mapping and portability:
 - The realm's `oidc-acr-mapper` emits `acr="1"` for a fresh interactive auth and
   `"0"` for remembered SSO; the value survives refresh rotation.
 - `acr`/`acr_values` are standard OIDC, so the code is provider-agnostic. The
-  LoA→`acr` mapping is per-IdP config (as the `auth_time` mapper is); a
-  deployment maps a higher `acr` to real MFA in the IdP.
+  LoA→`acr` mapping is per-Identity Provider (IdP) config (as the `auth_time` mapper is); a
+  deployment maps a higher `acr` to real multi-factor authentication (MFA) in the IdP.
 - See also [`OIDC-compliance.md`](OIDC-compliance.md) §2 (`auth_time`/`acr`) and
   §3.1.2.1 (`prompt`), and
   [SPEC-0001 §"Step-up authentication"](docs/specs/SPEC-0001-core-oidc-flows.md).
@@ -41,13 +41,13 @@ Mapping and portability:
 | §3 | Distinct from `insufficient_scope` — the token IS authorized; only its authentication recency is insufficient | ✅ | Scope/role failures remain a `403` `insufficient_scope` (Spring `AccessDeniedHandler`); step-up is a separate `401` path. The `ROLE_admin` check still runs first (`SecurityConfig`), so an unauthorized caller never reaches the step-up gate. |
 | §3 | The challenge MAY include `max_age` indicating the maximum acceptable authentication age | ✅ | `max_age=<app.step-up.max-age in seconds>` is included in the challenge. |
 | §3 | The challenge MAY include `error_description` | ✅ | `error_description="A more recent authentication is required"`. |
-| §3 | The challenge MAY include `acr_values` indicating a required ACR | ✅ | The RS step-up challenge advertises `acr_values="<app.step-up.required-acr>"` (alongside `max_age`) when acr enforcement is on (`ApiController#handleStepUpRequired`). Asserted by `ApiSecurityTest#adminWithMissingAcrChallengesForStepUp`. |
+| §3 | The challenge MAY include `acr_values` indicating a required Authentication Context Class Reference (the `acr` claim) | ✅ | The RS step-up challenge advertises `acr_values="<app.step-up.required-acr>"` (alongside `max_age`) when acr enforcement is on (`ApiController#handleStepUpRequired`). Asserted by `ApiSecurityTest#adminWithMissingAcrChallengesForStepUp`. |
 
 ## §4 — Client behavior on receiving the challenge
 
 | RFC § | Requirement | Status | Where / How |
 |---|---|---|---|
-| §4 | On `insufficient_user_authentication`, the client makes a new authorization request that satisfies the stated requirement | 🟡 | The SPA (`auth.ts#callApi`) detects `insufficient_user_authentication` in `WWW-Authenticate` and performs a top-level navigation to `/auth/step-up` instead of a full `/auth/login`. The Auth Service forces a fresh re-authentication with **`prompt=login`** (OIDC Core §3.1.2.1) — a *superset* of the challenge's `max_age` (it always re-authenticates), so the resulting `auth_time` satisfies any advertised `max_age`. The client does not echo the challenge's `max_age` verbatim; the deviation is deliberate (`prompt=login` is portable; Keycloak treats `max_age=0` as unset). Asserted by `auth.test.ts` ("routes an RFC 9470 step-up challenge … to /auth/step-up") and live by `reference-flow.spec.ts` story 18. |
+| §4 | On `insufficient_user_authentication`, the client makes a new authorization request that satisfies the stated requirement | 🟡 | The single-page application (SPA) (`auth.ts#callApi`) detects `insufficient_user_authentication` in `WWW-Authenticate` and performs a top-level navigation to `/auth/step-up` instead of a full `/auth/login`. The Auth Service forces a fresh re-authentication with **`prompt=login`** (OIDC Core §3.1.2.1) — a *superset* of the challenge's `max_age` (it always re-authenticates), so the resulting `auth_time` satisfies any advertised `max_age`. The client does not echo the challenge's `max_age` verbatim; the deviation is deliberate (`prompt=login` is portable; Keycloak treats `max_age=0` as unset). Asserted by `auth.test.ts` ("routes an RFC 9470 step-up challenge … to /auth/step-up") and live by `reference-flow.spec.ts` story 18. |
 | §4 | The new tokens carry authentication information meeting the requirement | ✅ | The re-auth bumps `auth_time`; the rotated access token carries the fresh value, which the RS accepts on retry. The Auth Service callback additionally fails closed (`401`) unless the returned `auth_time` post-dates the step-up request. |
 
 ## §5 — Conveying authentication information via the access token
@@ -61,7 +61,7 @@ Mapping and portability:
 
 | RFC § | Requirement | Status | Where / How |
 |---|---|---|---|
-| §6 | Step-up must not weaken the surrounding flow | ✅ | `/auth/step-up` reuses the full login machinery — PKCE S256, `state`, `nonce`, and the `oauth_tx` browser-binding cookie — and the callback enforces `auth_time` freshness before minting a session. |
+| §6 | Step-up must not weaken the surrounding flow | ✅ | `/auth/step-up` reuses the full login machinery — Proof Key for Code Exchange (PKCE) S256, `state`, `nonce`, and the `oauth_tx` browser-binding cookie — and the callback enforces `auth_time` freshness before minting a session. |
 | §7 | Use the IANA-registered `insufficient_user_authentication` OAuth error code | ✅ | Used as the challenge error code, distinct from `insufficient_scope`. |
 
 ## ACR / LoA: mechanism implemented, MFA mapping is deployment-side

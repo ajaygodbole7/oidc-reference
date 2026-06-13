@@ -1,7 +1,7 @@
 # SPEC-0001: Core OAuth 2.1 and OIDC Flows (BFF Session Pattern, Split Implementation)
 
-The build contract for this reference's OAuth 2.1 / OIDC flows: the wire formats,
-cookie attributes, TTLs, keyspaces, and validation rules an implementer builds
+The build contract for this reference's OAuth 2.1 / OpenID Connect (OIDC) flows: the wire formats,
+cookie attributes, time-to-live values (TTLs), keyspaces, and validation rules an implementer builds
 against. Expert-facing and normative — for someone implementing or auditing the
 Auth Service, API Gateway, or Resource Server.
 
@@ -19,7 +19,7 @@ The canonical end-to-end flow is the Mermaid sequence diagram in the root
 
 ## Goals
 
-- Implement Authorization Code + PKCE driven by a confidential Auth Service,
+- Implement Authorization Code + Proof Key for Code Exchange (PKCE) driven by a confidential Auth Service,
   not by the browser. Tokens live in a Redis-compatible server-side state
   store (Valkey locally); the browser sees only an opaque `HttpOnly` session
   cookie.
@@ -29,7 +29,7 @@ The canonical end-to-end flow is the Mermaid sequence diagram in the root
   three confidential clients (Auth Service, API Gateway, service client).
 - Use Spring Boot for the Auth Service (Spring Security OAuth2 Client plus
   custom Redis-compatible repositories for OAuth transactions and sessions)
-  and the Resource Server (OAuth2 Resource Server, JWT validation only). Use
+  and the Resource Server (OAuth2 Resource Server, JSON Web Token (JWT) validation only). Use
   APISIX (OpenResty / nginx + Lua) for the API Gateway, with a custom
   `bff-session` Lua plugin.
 - Use a Redis-compatible server-side state store for PKCE-transaction and
@@ -43,7 +43,7 @@ The canonical end-to-end flow is the Mermaid sequence diagram in the root
 
 - A production identity platform.
 - Distributing any token to the browser.
-- A public-client SPA (referenced only as a comparison footnote).
+- A public-client single-page application (SPA) (referenced only as a comparison footnote).
 - Implicit flow or password grant for any reference client.
 - Cloud-hosted infrastructure.
 - Hand-implementing OAuth/OIDC protocol primitives, cookies, or session
@@ -57,20 +57,20 @@ exists so a reader does not assume omission is oversight.
 
 - **PAR (RFC 9126, Pushed Authorization Requests).** Recommended by
   RFC 9700 §2.1.1 to prevent authorization-request tampering. Not
-  implemented: the BFF demonstrates the same defenses (PKCE, signed CSRF,
-  exact-match `redirect_uri`, single-AS) through different primitives.
+  implemented: the BFF demonstrates the same defenses (PKCE, signed Cross-Site Request Forgery (CSRF),
+  exact-match `redirect_uri`, single Authorization Server (AS)) through different primitives.
   Adding PAR would require Keycloak PAR enablement and additional
   Nimbus-side code; it is a self-contained future addition.
 
 - **DPoP (RFC 9449, Demonstrating Proof of Possession).** Sender-
   constraining access tokens via per-request JWT proofs. Not implemented:
-  the access token never leaves the gateway → RS hop and never reaches
+  the access token never leaves the gateway → Resource Server (RS) hop and never reaches
   the browser, so the bearer-token exfiltration surface DPoP defends
   against is structurally smaller in a BFF. DPoP becomes interesting if
   the reference ever exposes tokens to mobile/native clients.
 
 - **OIDC Front-Channel Logout 1.0.** Not implemented: the cookie-based
-  BFF pattern keeps browser session state at the BFF, and RP-Initiated
+  BFF pattern keeps browser session state at the BFF, and Relying Party (RP)-Initiated
   Logout plus the Back-Channel Logout endpoint cover this
   reference's local logout contract.
 
@@ -83,7 +83,7 @@ exists so a reader does not assume omission is oversight.
 - **Encrypted-at-rest session storage in Valkey.** The local reference
   stores `access_token`, `refresh_token`, `id_token` in plaintext in
   Valkey. Production derivations targeting compliance regimes (HIPAA,
-  PCI, internal-platform PII rules) must wrap the state store with
+  PCI, internal-platform personally identifiable information (PII) rules) must wrap the state store with
   application-layer encryption (envelope encryption with a KMS-managed
   DEK is the obvious shape) or use a managed store that provides this
   natively. The `StateStore` interface is the seam.
@@ -110,7 +110,7 @@ exists so a reader does not assume omission is oversight.
   §"Distributed refresh lock". It stays out of the default path because the local
   reference is single-instance; enabling it is one config flip, not a rewrite.
 
-- **Multi-IdP mix-up defense via `iss` parameter validation.** RFC 9700
+- **Multi-Identity Provider (IdP) mix-up defense via `iss` parameter validation.** RFC 9700
   §4.4 requires either distinct `redirect_uri` per AS or `iss` parameter
   validation per RFC 9207. The reference targets a single AS (Keycloak)
   and treats this as covered by the single-AS topology. A future
@@ -353,7 +353,7 @@ high-value action" pattern. The reference applies this to `POST /api/admin`.
   `/auth/login`. The Auth Service forces a fresh re-auth (`prompt=login`); the
   rotated access token then carries a fresh `auth_time` that satisfies the gate
   on retry.
-- **Assurance axis (`acr`/LoA).** The recency gate above proves *when* the human
+- **Assurance axis (Authentication Context Class Reference — the `acr` claim — and Level of Assurance (LoA)).** The recency gate above proves *when* the human
   last authenticated, not *how strongly*. The companion control closes that:
   `/auth/step-up` requests `acr_values` (`app.step-up-acr-values`, default `1`)
   and the Resource Server requires the access token's `acr` to be one of
@@ -361,11 +361,11 @@ high-value action" pattern. The reference applies this to `POST /api/admin`.
   same `401 insufficient_user_authentication`, now also advertising the required
   `acr_values` in the challenge. The local realm's `acr` mapper (`oidc-acr-mapper`
   on the Auth Service client) emits `acr="1"` for a fresh interactive auth and
-  `"0"` for a remembered-SSO session; the claim and its value survive refresh
+  `"0"` for a remembered single sign-on (SSO) session; the claim and its value survive refresh
   rotation, so a stepped-up session keeps clearing the gate. `acr`/`acr_values`
   are standard OIDC, so the code is provider-agnostic; the LoA→`acr` mapping is
   per-IdP config (as the `auth_time` mapper is), and a deployment maps a higher
-  `acr` to real MFA in the IdP. The live e2e (story 18) proves the chain
+  `acr` to real multi-factor authentication (MFA) in the IdP. The live e2e (story 18) proves the chain
   request → `acr` claim → RS-enforce without forcing MFA enrollment — the same
   simulation boundary as step-up freshness.
 
@@ -498,13 +498,13 @@ format, validation algorithm, and signing-key handling.
   `X-XSRF-TOKEN` header on every `POST`/`PUT`/`DELETE`/`PATCH`.
 - Validators (Auth Service for `/auth/*`; APISIX `bff-session` plugin for
   `/api/**`) compare cookie to header for exact match, then recompute the
-  HMAC over `token-value-base64 + ":" + sid` and compare in constant time.
+  keyed-hash message authentication code (HMAC) over `token-value-base64 + ":" + sid` and compare in constant time.
   Mismatch or invalid signature → 403.
 - The session cookie (`__Host-sid` in prod, `sid` in local) is `HttpOnly`
   and never readable by JS; it is not part of the double-submit pair.
 - **Naive double-submit is rejected.** Comparing an unsigned
   cookie value to the same value echoed in a header is defeated by
-  cookie injection from a sibling-subdomain XSS or `document.cookie`
+  cookie injection from a sibling-subdomain Cross-Site Scripting (XSS) or `document.cookie`
   write vulnerability. The attacker can set a matching cookie+header
   pair in the victim's browser. Signing breaks the attack because the
   attacker cannot forge a valid HMAC without the server-side signing key.
@@ -527,7 +527,7 @@ format, validation algorithm, and signing-key handling.
 ### JWT Validation
 
 - Issuer (from `OIDC_ISSUER_URI`).
-- Signature via Keycloak JWKS.
+- Signature via Keycloak JSON Web Key Set (JWKS).
 - Expiration; not-before when present.
 - Algorithm allowlist: `RS256` only.
 - Access-token audience contains `oidc-reference-api` (custom
@@ -546,7 +546,7 @@ format, validation algorithm, and signing-key handling.
   rotation the gateway re-issues those via `Set-Cookie` on the proxied response,
   which **replaces** (not appends) any upstream `Set-Cookie`; that replacement is
   safe only because the RS emits none. Any gateway implementation inherits this
-  invariant (§7.1 success-response, §A.2 wire contract #1). CORS denies browser
+  invariant (§7.1 success-response, §A.2 wire contract #1). Cross-Origin Resource Sharing (CORS) denies browser
   origins (defense in depth; the browser is never expected to reach the RS
   directly).
 - Bound to an internal Compose network in the canonical stack.
@@ -647,7 +647,7 @@ add a fourth service that violates them.
 - **Auth Service → Keycloak, Gateway → Keycloak.** Each service
   authenticates to Keycloak as its own confidential client. Tokens
   obtained by one service are never lent to the other. The Gateway's
-  CC token (for `/internal/resolve`) and Auth Service's user-flow
+  Client Credentials (CC) token (for `/internal/resolve`) and Auth Service's user-flow
   tokens (for the OIDC dance) are issued independently.
 
 - **Tokens never reach the browser.** This is preserved verbatim from

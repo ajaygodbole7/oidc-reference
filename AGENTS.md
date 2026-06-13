@@ -8,7 +8,7 @@
 
 ## Project Goal
 
-A local OAuth 2.1 / OIDC reference using the Backend-for-Frontend session
+A local OAuth 2.1 / OpenID Connect (OIDC) reference using the Backend-for-Frontend (BFF) session
 pattern in its split-implementation shape.
 
 - The browser never holds tokens.
@@ -18,14 +18,14 @@ pattern in its split-implementation shape.
 
 Five directories, five components, no cloud.
 
-- `frontend/` — React SPA, cookie-authenticated, no in-browser OIDC library.
+- `frontend/` — React single-page application (SPA), cookie-authenticated, no in-browser OIDC library.
 - `auth-service/` — Spring Boot Auth Service, OAuth2 confidential client +
   custom Redis-compatible `tx:{state}` and `sess:{sid}` repositories,
   per-session refresh lock, `/internal/resolve` as OAuth Resource Server.
 - `api-gateway/` — APISIX gateway, `/api/**` routing with allowlist,
   tolerant `sess:{sid}` reader, bearer injection, signed CSRF validation,
   Client Credentials to call `/internal/resolve`.
-- `backend-resource-server/` — Spring Boot Resource Server, JWT validation
+- `backend-resource-server/` — Spring Boot Resource Server, JSON Web Token (JWT) validation
   only.
 - `authorization-server/` — Keycloak realm + Compose.
 
@@ -64,8 +64,8 @@ Never:
 - store any token, code, or claim in `localStorage`, `sessionStorage`,
   IndexedDB, or JS-readable cookies
 - disable issuer, audience, expiration, signature, or algorithm validation
-- use wildcard redirect URIs or wildcard CORS origins for protected APIs
-- hand-roll crypto, PKCE, OIDC discovery, JWKS parsing, callback
+- use wildcard redirect URIs or wildcard Cross-Origin Resource Sharing (CORS) origins for protected APIs
+- hand-roll crypto, Proof Key for Code Exchange (PKCE), OIDC discovery, JSON Web Key Set (JWKS) parsing, callback
   validation, or session encoding when proven libraries exist
 - proxy arbitrary upstream URLs through the API Gateway — `/api/**` is allowlisted
 

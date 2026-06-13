@@ -8,16 +8,16 @@ reporting for this repo. Deeper rationale lives in:
   §B (cookies/sessions/CSRF) and §C (OAuth/OIDC) — rationale for the
   load-bearing controls.
 - [`OIDC-compliance.md`](OIDC-compliance.md) — conformance matrix against
-  OpenID Connect Core 1.0 / Discovery / RP-Initiated Logout.
+  OpenID Connect (OIDC) Core 1.0 / Discovery / Relying Party (RP)-Initiated Logout.
 - [`RFC9700-compliance.md`](RFC9700-compliance.md) — control-by-control
-  status against RFC 9700 (OAuth 2.0 Security BCP, also the OAuth 2.1
+  status against RFC 9700 (OAuth 2.0 Security Best Current Practice (BCP), also the OAuth 2.1
   baseline).
 - [`docs/specs/SPEC-0001-core-oidc-flows.md`](docs/specs/SPEC-0001-core-oidc-flows.md)
   §"Threat Model" and §"Trust Boundaries".
 
 ## Scope
 
-This is a local reference implementation of the BFF session pattern
+This is a local reference implementation of the Backend-for-Frontend (BFF) session pattern
 for OAuth 2.1 / OpenID Connect. It runs on a developer machine via
 Docker Compose to demonstrate the protocol mechanics and the control
 surface.
@@ -26,11 +26,11 @@ What that means for security claims:
 
 - These controls are implemented and tested at this revision:
   browser-token boundary, OIDC validation, refresh-rotation + reuse
-  detection, signed CSRF, browser binding, redirect-URI pinning,
+  detection, signed Cross-Site Request Forgery (CSRF), browser binding, redirect-URI pinning,
   rate-limit, and the audit-log discipline below.
 - These are documented non-goals for the local reference: local HTTP,
   default sentinel secrets, in-process refresh lock, no encryption-at-rest
-  on Valkey, no DPoP / mTLS, no central session termination.
+  on Valkey, no Demonstrating Proof-of-Possession (DPoP) / mutual TLS (mTLS), no central session termination.
   See [README "What's deliberately not here"](README.md#whats-deliberately-not-here)
   and [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
   §F for the reconsideration triggers.
@@ -52,12 +52,12 @@ Threats grouped by surface. Each row gives:
 
 | # | Threat | Mitigation | Residual | Reference |
 |---|---|---|---|---|
-| B-1 | XSS in SPA exfiltrates tokens | Browser holds no tokens. Session identity is opaque `__Host-sid` with `HttpOnly`. | An XSS can still impersonate the user for the lifetime of the session by issuing same-origin XHRs that ride the sid cookie. The browser-token boundary does not defend against in-page session abuse. | ADR §A1 |
+| B-1 | Cross-Site Scripting (XSS) in single-page application (SPA) exfiltrates tokens | Browser holds no tokens. Session identity is opaque `__Host-sid` with `HttpOnly`. | An XSS can still impersonate the user for the lifetime of the session by issuing same-origin XHRs that ride the sid cookie. The browser-token boundary does not defend against in-page session abuse. | ADR §A1 |
 | B-2 | CSRF on state-changing `/api/**` | Session-bound signed double-submit: `XSRF-TOKEN` carries `<value>.<HMAC-SHA256(value + ":" + sid)>`. The SPA echoes it as `X-XSRF-TOKEN`; both sides validate signature with the shared key and the request sid. | An attacker with `document.cookie` write on a sibling subdomain cannot forge a valid signature for the victim sid; pre-XSS access to the page can still issue same-origin requests (B-1). | ADR §B4 |
-| B-3 | Login CSRF / cross-user session fixation — attacker initiates an OAuth flow, captures `(code, state)`, and induces the victim's browser to load the callback URL | `oauth_tx` browser-binding cookie (`HttpOnly`, `Path=/auth/callback/idp`). HMAC of cookie value stored in `tx:{state}`; callback fails closed when the victim's browser does not present the attacker's cookie. | None within the modelled attack chain. | ADR §B3 |
-| B-4 | Authorization code interception / replay | PKCE S256 with per-request `code_verifier`; `tx:{state}` consumed atomically (`GETDEL`); Keycloak revokes codes on reuse. | None. | OIDC Core §3.1.3, RFC 9700 §4.2 / §4.3 / §4.5 |
+| B-3 | Login CSRF / cross-user session fixation — attacker initiates an OAuth flow, captures `(code, state)`, and induces the victim's browser to load the callback URL | `oauth_tx` browser-binding cookie (`HttpOnly`, `Path=/auth/callback/idp`). keyed-hash message authentication code (HMAC) of cookie value stored in `tx:{state}`; callback fails closed when the victim's browser does not present the attacker's cookie. | None within the modelled attack chain. | ADR §B3 |
+| B-4 | Authorization code interception / replay | Proof Key for Code Exchange (PKCE) S256 with per-request `code_verifier`; `tx:{state}` consumed atomically (`GETDEL`); Keycloak revokes codes on reuse. | None. | OIDC Core §3.1.3, RFC 9700 §4.2 / §4.3 / §4.5 |
 | B-5 | ID-token tampering or substitution | Nimbus `IDTokenValidator`: signature (RS256 pinned), `iss`, `aud`, `exp`, `nonce` validated. `at_hash` validated when present. | None within the spec; key rotation handled by `JWKSourceBuilder` refresh-ahead + outage-tolerant cache. | OIDC Core §3.1.3.7 |
-| B-6 | Authorization Server mix-up (multi-AS) | Single AS locally; `AuthController#callback` validates the RFC 9207 `iss` query parameter against the configured issuer when present. | Multi-AS deployments must add per-issuer `tx:{state}` binding. Out of scope here. | RFC 9700 §4.4, RFC 9207 |
+| B-6 | Authorization Server (AS) mix-up (multi-AS) | Single AS locally; `AuthController#callback` validates the RFC 9207 `iss` query parameter against the configured issuer when present. | Multi-AS deployments must add per-issuer `tx:{state}` binding. Out of scope here. | RFC 9700 §4.4, RFC 9207 |
 | B-7 | Open redirector via `?return_to=` | `AuthController#isValidReturnTo`: same-origin relative path only. Rejects absolute / `//` / missing leading slash / overlong / encoded backslash / control chars. | None. | RFC 9700 §4.11 |
 | B-8 | Open redirector via Host-header injection on `redirect_uri` | `app.base-url` config pins the public origin. When set, X-Forwarded-* is ignored entirely. | Production deployments MUST set `app.base-url`. Dev fall-back to forwarded headers is correct only when the gateway is the sole inbound path. | ADR §A6 (forwarded-header discipline) |
 | B-9 | Click-jacking of the SPA | `X-Frame-Options: DENY` via Spring Security defaults. | None. | — |
@@ -69,7 +69,7 @@ Threats grouped by surface. Each row gives:
 | S-1 | Refresh-token leakage from server-side store | Tokens stored only in `sess:{sid}` after ID-token validation; `SecurityAudit` log lines hash subject + sid; no token bytes ever logged. | Local Valkey runs without AUTH / TLS / encryption-at-rest — production must add these (see "Production hardening"). | RFC 9700 §4.9 |
 | S-2 | Refresh-token reuse | Realm: `revokeRefreshToken: true`, `refreshTokenMaxReuse: 0`. `InternalResolveController` surfaces Keycloak's `invalid_grant` as a 409 + `DEL sess:{sid}` + audit event. Rotation policy and the per-provider matrix: [`docs/reference/refresh-rotation.md`](docs/reference/refresh-rotation.md). | None within the rotation contract. | RFC 9700 §4.14 |
 | S-3 | Concurrent refresh race producing reuse-detection false positives | Per-session `ReentrantLock` keyed on `sid`; under-lock re-read of `sess:{sid}` collapses two callers to one upstream refresh. | Clustered deployments need a state-store-backed lock (`SET NX EX`). Single-instance only here. | ADR §C2 |
-| S-4 | Session lives past intended ceiling | `SessionRecord.absoluteExpiresAt` enforces an 8 h hard cap (kept ≤ the IdP SSO max session lifespan; Keycloak default 10 h). Both `AuthController#session` and `InternalResolveController` `DEL sess:{sid}` when the ceiling is crossed (including the race window during a refresh round-trip). A near-expiry refresh is also short-circuited when the refresh token is past its own expiry — the IdP-supplied `refresh_expires_in`, or the optional `app.max-refresh-token-age` ceiling. | When the IdP omits `refresh_expires_in` (common on Okta/Auth0/Entra; Keycloak sends it), `refreshExpiresAt` is null, so the absolute TTL is the only brake **unless `app.max-refresh-token-age` is set** — an IdP-independent ceiling on refresh-token age (unset by default). | SPEC-0001 §7.2 |
+| S-4 | Session lives past intended ceiling | `SessionRecord.absoluteExpiresAt` enforces an 8 h hard cap (kept ≤ the Identity Provider (IdP) single sign-on (SSO) max session lifespan; Keycloak default 10 h). Both `AuthController#session` and `InternalResolveController` `DEL sess:{sid}` when the ceiling is crossed (including the race window during a refresh round-trip). A near-expiry refresh is also short-circuited when the refresh token is past its own expiry — the IdP-supplied `refresh_expires_in`, or the optional `app.max-refresh-token-age` ceiling. | When the IdP omits `refresh_expires_in` (common on Okta/Auth0/Entra; Keycloak sends it), `refreshExpiresAt` is null, so the absolute time-to-live (TTL) is the only brake **unless `app.max-refresh-token-age` is set** — an IdP-independent ceiling on refresh-token age (unset by default). | SPEC-0001 §7.2 |
 | S-5 | Sub-session fixation: attacker who observed the sid cookie keeps it valid across token refreshes | The `sid` rotates on every refresh (A6). A successful refresh mints a new `sid`, then in ONE atomic store op moves `sess:{sid}` → `sess:{sid'}` AND writes a `rotated:{sid}` → `sid'` breadcrumb (only if the old key still exists — a concurrent logout is not resurrected); it then repoints the `idp_sid:`/`sub_sessions:`/`logout_hint:` indexes and the gateway re-issues the `__Host-sid` cookie. The breadcrumb (a short 10 s grace) forwards concurrent in-flight requests still holding the old `sid` so they don't lose the session; folding it into the move closes the window where a subject-wide logout could see `sess:{sid'}` with no breadcrumb to follow and leave the rotated session alive past revocation. | A once-observed `sid` is valid only until that session's next refresh (or the brief ~10 s rotation-grace window), not the absolute-TTL window. Pair with a short access-token lifetime to bound how long a stolen `sid` survives; `app.max-refresh-token-age` additionally bounds non-rotating refresh tokens. | SPEC-0001 §7.2; ADR §F. |
 
 ### API Gateway and internal RPC
@@ -77,7 +77,7 @@ Threats grouped by surface. Each row gives:
 | # | Threat | Mitigation | Residual | Reference |
 |---|---|---|---|---|
 | G-1 | Attacker forges the upstream `Authorization` header by including one in the inbound request | `bff-session.lua` `HOP_BY_HOP` table strips inbound `authorization` before injecting the gateway-controlled bearer. | None. | `bff-session.lua` |
-| G-2 | SSRF via `/api/**` to arbitrary upstream paths | APISIX route table is an explicit per-path allowlist (`/api/me`, `/api/user-data`, `/api/admin`). Off-allowlist paths return 404 before the plugin runs. | Adding an RS endpoint requires updating the gateway allowlist. | RFC 9700 §"chokepoint" guidance; ADR §C4 |
+| G-2 | SSRF via `/api/**` to arbitrary upstream paths | APISIX route table is an explicit per-path allowlist (`/api/me`, `/api/user-data`, `/api/admin`). Off-allowlist paths return 404 before the plugin runs. | Adding a Resource Server (RS) endpoint requires updating the gateway allowlist. | RFC 9700 §"chokepoint" guidance; ADR §C4 |
 | G-3 | Inbound request bypasses CSRF on state-changing `/api/**` | Lua plugin `csrf_ok` validates `XSRF-TOKEN` cookie + `X-XSRF-TOKEN` header HMAC bound to the request sid for `POST` / `PUT` / `PATCH` / `DELETE`. | Same as B-1 — an XSS issuing same-origin requests can still read the JS-readable XSRF cookie and echo it. The signed-CSRF defense is against cookie-injection, not XSS. | ADR §B4 |
 | G-4 | `/internal/resolve` reachable from the browser | APISIX route table does not expose `/internal/*`; only the in-cluster Lua plugin calls it. Auth Service Order-1 filter chain requires a valid Client-Credentials bearer with `aud=oidc-reference-auth-internal`. | None within the local topology. | SPEC-0001 §7.1 |
 | G-5 | Attacker forges a Client-Credentials bearer for `/internal/resolve` | `SecurityConfig` + `InternalResolveController` validate: signature (RS256), `iss`, `exp`, `aud` contains `oidc-reference-auth-internal`, `azp` or `client_id` is `oidc-reference-api-gateway`. | None. | SPEC-0001 §7.1 |
@@ -184,7 +184,7 @@ and `OIDC-compliance.md`. Address before any non-local deployment:
   Resource Server is exposed to multi-tenant or untrusted callers
   (RFC 9700 §2.2.1, §4.9.3, §4.10.1).
 - Consider asymmetric client authentication (`private_key_jwt` or
-  mTLS) for FAPI / PSD2 (RFC 9700 §2.5).
+  mTLS) for Financial-grade API (FAPI) / PSD2 (RFC 9700 §2.5).
 - Add `Referrer-Policy: no-referrer` and a baseline CSP to every
   response, not only the logout 302 and callback errors.
 - Sid rotation on token refresh if the threat model values defending

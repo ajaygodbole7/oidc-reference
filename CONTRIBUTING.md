@@ -1,6 +1,6 @@
 # Contributing
 
-- **What this is:** a local reference implementation of the BFF session
+- **What this is:** a local reference implementation of the Backend-for-Frontend (BFF) session
   pattern for OAuth 2.1 / OpenID Connect.
 - **Who it's for:** anyone fixing a bug, tightening a control, or improving
   the docs.
