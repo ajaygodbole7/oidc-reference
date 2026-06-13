@@ -97,13 +97,14 @@ For non-local hardening, see
 
 ### Login — Authorization Code + PKCE
 
-Login is triggered two ways: the browser hits a protected `/api/**` URL with no
-session, or the user clicks an explicit "Sign in". On the no-session `/api/**`
-case the gateway bounces a top-level navigation to `/auth/login` (or returns
-`401` to an XHR, so the SPA navigates itself).
+Login starts when the browser hits a protected `/api/**` URL with no session, or
+when the user clicks "Sign in". On the no-session `/api/**` case:
+
+- top-level navigation → the gateway redirects to `/auth/login`;
+- XHR → `401`, and the SPA navigates itself.
 
 The Auth Service then runs the OAuth round-trip and returns the browser to the
-originally requested URL with the session and CSRF cookies attached.
+originally requested URL with the session and CSRF cookies set.
 
 ```mermaid
 sequenceDiagram
@@ -133,12 +134,13 @@ sequenceDiagram
 
 ### Identity and session state — `/auth/me`
 
-The SPA holds no session state of its own. On mount it calls `/auth/me` to learn
-whether a session exists and who the user is. The same endpoint is how it learns
-about logout: a server-side session death — RP logout, back-channel logout, or a
-rejected refresh — surfaces as `401` on the next `/auth/me` or `/api/**` call, and
-the SPA returns to the anonymous state. `/auth/me` is a pure read; it never extends
-the session and never returns a token.
+The SPA holds no session state of its own:
+
+- On mount it calls `/auth/me` to learn whether a session exists and who the user is.
+- `/auth/me` is a pure read — it never extends the session and never returns a token.
+- A server-side session death (RP logout, back-channel logout, or a rejected
+  refresh) surfaces as `401` on the next `/auth/me` or `/api/**` call, and the SPA
+  returns to the anonymous state.
 
 ```mermaid
 sequenceDiagram
@@ -161,14 +163,15 @@ sequenceDiagram
 
 ### Authenticated request — proxy and transparent refresh
 
-Every `/api/**` call carries only the opaque session cookie. The gateway holds no
-session store handle: it resolves the sid via the Auth Service's
-`/internal/resolve` (authenticated with Client Credentials over an internal RPC).
-The Auth Service looks up the session, slides the idle window, refreshes the
-access token when it is near expiry, and returns the current token; the gateway
-injects it as a bearer for the Resource Server. This is the phantom-token pattern
-— only the Auth Service touches the session store (see
-[`docs/architecture/phantom-token-session-resolution.md`](docs/architecture/phantom-token-session-resolution.md)).
+Every `/api/**` call carries only the opaque session cookie — the phantom-token
+pattern, where only the Auth Service touches the session store (see
+[`docs/architecture/phantom-token-session-resolution.md`](docs/architecture/phantom-token-session-resolution.md)):
+
+- The gateway holds no session-store handle; it resolves the sid via the Auth
+  Service's `/internal/resolve` (Client Credentials over an internal RPC).
+- The Auth Service looks up the session, slides the idle window, refreshes the
+  access token if near expiry, and returns the current token.
+- The gateway injects that token as a bearer for the Resource Server.
 
 ```mermaid
 sequenceDiagram
@@ -221,7 +224,7 @@ sequenceDiagram
 ```
 
 The IdP end-session URL carries `id_token_hint` (PII), so it never reaches SPA
-JavaScript: the Auth Service hands back a same-origin, single-use handle and emits
+JavaScript. The Auth Service hands back a same-origin, single-use handle and emits
 the IdP redirect itself from `/auth/logout/continue`.
 
 Wire-level detail — exact cookie attributes, TTLs, validation rules, and the
@@ -381,11 +384,12 @@ RUN_FULL_STACK_AUTH=1 sh scripts/verify-all.sh   # also brings the stack up + ga
 `just e2e-auth` is the canonical authenticated local proof. It brings the stack
 up, runs `frontend/tests/e2e/reference-flow.spec.ts` for the real browser flow,
 then runs the gateway refresh-delegation proof with a real login-derived
-`sess:{sid}`.
+`sess:{sid}`. It covers:
 
-It covers Keycloak login, `/auth/me`, an authenticated `/api/**` call, role
-enforcement, refresh delegation, and RP-initiated logout through the same-origin
-`/auth/logout/continue` handle.
+- Keycloak login and `/auth/me`;
+- an authenticated `/api/**` call and role enforcement;
+- refresh delegation;
+- RP-initiated logout through the same-origin `/auth/logout/continue` handle.
 
 ## Documentation
 
