@@ -33,6 +33,15 @@ What it gives you:
   or Lua. `just e2e-portability` proves a token-shape swap end-to-end against a
   second realm.
 
+## Contents
+
+- [Terminology](#terminology)
+- [Design decisions](#design-decisions)
+- [Architecture](#architecture) — flow diagrams and cookies
+- [Security controls](#security-controls)
+- [What's deliberately not here](#whats-deliberately-not-here)
+- [Stack](#stack) · [Run locally](#run-locally) · [Documentation](#documentation)
+
 ## Terminology
 
 OAuth/OIDC vocabulary, mapped to this repo's components.
@@ -54,55 +63,20 @@ OAuth/OIDC vocabulary, mapped to this repo's components.
 
 ## Design decisions
 
-Each decision states what the reference does and the alternative it rejects.
-Full rationale and reconsideration triggers are in
+Each row states what the reference does and the alternative it rejects. Full
+rationale and reconsideration triggers are in
 [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md).
 
-**BFF, not a public-client SPA running PKCE in the browser.** A server-side
-BFF keeps the access, refresh, and ID tokens off the browser entirely. Browser
-PKCE is valid OAuth, but:
+| Decision | This reference | Rejected |
+|---|---|---|
+| Where tokens live | Server-side BFF; access, refresh, and ID tokens never reach the browser | A public-client SPA running PKCE in the browser (tokens are XSS-reachable), or a backend that still hands the access token to JavaScript |
+| Component shape | Split Auth Service (the OAuth/OIDC client) + API Gateway (routing, bearer injection) | One combined service — valid, but it conflates the identity surface with the API edge |
+| Session state | Two server-side keyspaces, `tx:{state}` (pre-auth, keyed by the OAuth `state`) and `sess:{sid}` (post-auth); no pre-auth session cookie, so no session-fixation class | A framework HTTP-session blob |
+| Provider coupling | Branch on `iss` / `aud` / scopes / claim paths from `.well-known/openid-configuration`; differences live in config (`app.roles-claim-path`, env vars) | Provider-specific APIs baked into Java or APISIX |
 
-- a token reachable by JavaScript can be used or exfiltrated by any successful XSS;
-- browser refresh-token rotation is fragile under cross-origin policies;
-- silent iframe renewal is no longer a dependable browser primitive.
-
-A token-mediating backend that still hands access tokens to JavaScript is
-rejected for the same XSS reason.
-
-**Split into Auth Service + API Gateway, not one combined service.** Production
-OIDC deployments at scale separate the OAuth surface from the API-gateway
-surface:
-
-- different teams own them (identity vs. platform);
-- different expected load profiles, so each can scale independently;
-- different operational concerns.
-
-The "BFF" name (Sam Newman, 2015) originally meant a per-frontend API
-aggregator sitting *after* auth; conflating it with the OAuth client role
-obscures both. A combined BFF is also valid; this reference ships the split to
-match how production OIDC deployments separate the two surfaces.
-
-**A server-side state store, not a framework HTTP-session blob.** The two
-pieces of state have different lifetimes and addressing: a short pre-auth OAuth
-transaction keyed by `state`, and a longer post-auth session keyed by `sid`.
-
-Keeping them as separate keyspaces (`tx:{state}` and `sess:{sid}`) keys the
-transaction by the OAuth `state` itself. There is no pre-auth session cookie,
-and so no session-fixation class to defend against. Both keyspaces are
-inspectable, the right property for a reference and for incident response.
-
-**Standard OAuth/OIDC interfaces, not provider-specific APIs.** Application
-code branches on `iss` / `aud` / scopes / claim paths / endpoints from
-`.well-known/openid-configuration`, never on the provider brand. Provider
-differences live in configuration:
-
-- `app.roles-claim-path` for the claim shape;
-- env vars for the issuer, client credentials, audiences, and the internal
-  trust identifiers (gateway/service client ids, internal-refresh audience).
-
-Nothing provider-facing is baked into Java or APISIX. The alternate-realm gate
-`just e2e-portability` proves the token-shape swap end-to-end; SPEC-0001
-Appendix A and `provider-adapters.md` §"Portability scope" enumerate every knob.
+`just e2e-portability` proves the provider-coupling row — a token-shape swap
+end-to-end against a second realm. SPEC-0001 Appendix A and
+`provider-adapters.md` enumerate every config knob.
 
 ## Architecture
 
@@ -173,7 +147,7 @@ sequenceDiagram
     participant A as Auth Service (BFF)
     participant V as Session Store
 
-    Note over B: On mount, the SPA asks "who am I?" — its only window into session state.
+    Note over B: On mount, the SPA checks who is signed in — its only window into session state.
     B->>A: GET /auth/me (sends the __Host-sid cookie)
     A->>V: Read the session record (pure read, no idle-window slide)
     alt session valid
@@ -237,7 +211,7 @@ sequenceDiagram
 
     B->>A: POST /auth/logout (Cookie: __Host-sid, header: CSRF)
     A->>A: Validate CSRF · delete server-side session · stash single-use logout handle
-    A-->>B: 200 { logoutUrl: "/auth/logout/continue?lc=…" } + evict cookies
+    A-->>B: 200 logoutUrl=/auth/logout/continue?lc=… + evict cookies
     Note over B,A: The SPA receives only a same-origin handle —<br/>never the IdP URL or id_token_hint.
     B->>A: GET /auth/logout/continue?lc=… (top-level navigation)
     A->>A: Resolve single-use handle → IdP end-session URL (with id_token_hint)
@@ -289,18 +263,14 @@ sequenceDiagram
   is rejected: an attacker with a sibling-subdomain `document.cookie` write
   could otherwise forge a matching pair. `SameSite=Strict` (set by the
   signing party) tightens the surface further.
-- **Sid rotation on refresh (A6).** A successful token refresh rotates the
-  `sid`. The Auth Service mints a new sid and, in one atomic store op, moves
-  `sess:{sid}`→`sess:{sid'}` and writes a short (~10 s) `rotated:{sid}`
-  breadcrumb so a request still in flight on the old sid resolves to the new
-  session instead of losing it; a concurrent logout therefore sees either the
-  old session (and fails closed) or the new one with the breadcrumb to follow —
-  never an in-between state. The `/internal/resolve` 200 then carries
-  `rotated_sid`, `rotated_sid_max_age`, and `rotated_csrf`, and the gateway
-  re-issues **both** the `__Host-sid` and `XSRF-TOKEN` cookies — the CSRF token
-  is HMAC-bound to the sid, so it must rotate with it. This bounds a
-  once-observed sid to a single refresh cycle, not the absolute session lifetime
-  (SECURITY S-5).
+- **Sid rotation on refresh (A6).** A token refresh rotates the `sid`: the Auth
+  Service atomically moves `sess:{sid}`→`sess:{sid'}` and leaves a short
+  `rotated:{sid}` breadcrumb so a request in flight on the old sid follows it
+  instead of losing the session. `/internal/resolve` then returns `rotated_sid`,
+  `rotated_sid_max_age`, and `rotated_csrf`, and the gateway re-issues both the
+  `__Host-sid` and the HMAC-bound `XSRF-TOKEN`. This bounds a once-observed sid
+  to one refresh cycle, not the session lifetime (SECURITY S-5). Breadcrumb and
+  logout-race mechanics are in [SPEC-0001](docs/specs/SPEC-0001-core-oidc-flows.md).
 - **Browser-binding cookie.** `oauth_tx` is issued at `/auth/login` with
   `Path=/auth/callback/idp` and `SameSite=Lax`. Its HMAC is stored in
   `tx:{state}`; the callback rejects when the supplied cookie's HMAC
@@ -339,30 +309,19 @@ Each item below has a reconsideration trigger; full rationale in
 [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
 §F.
 
-- **Sender-constrained tokens (DPoP / mTLS).** The BFF pattern removes the
-  primary browser-token leakage vector, and the RS sits behind the API
-  Gateway. But RS bearer tokens are not sender-constrained: any holder of a
-  token with `aud=oidc-reference-api` that reaches the RS over the network can
-  call it directly, so **network isolation of the Resource Server is
-  load-bearing** until DPoP/mTLS is added (SECURITY.md threat-model row G-8).
-  Reconsider when the RS is exposed to multi-tenant or untrusted callers.
+- **Sender-constrained tokens (DPoP / mTLS).** RS bearer tokens are not
+  sender-bound, so network isolation of the Resource Server is load-bearing
+  until added (SECURITY.md row G-8). Reconsider when the RS faces untrusted callers.
 - **Asymmetric client authentication (`private_key_jwt`, mTLS to the AS).**
-  Shared-secret client auth is sufficient for the teaching baseline.
-  Reconsider for FAPI / PSD2 or any compliance regime that mandates it.
-- **JAR, PAR, RAR.** Exact redirect-URI matching + PKCE + state + nonce
-  cover the demonstrated flow; scopes cover the authorization model.
-  Reconsider for multiple authorization servers, untrusted-network
-  authorization request handling, or structured per-resource grants.
-- **OIDC Front-Channel Logout.** RP-initiated logout covers user-driven
-  logout, and OIDC Back-Channel Logout (implemented; `POST
-  /backchannel-logout`) covers IdP-driven revocation. The browser-iframe
-  front-channel variant is not added.
-- **OIDC Session Management.** The cookie-based BFF has no browser↔AS
-  session to monitor; session changes surface via `/auth/me` polling or the
-  next `/api/**` returning 401.
+  Shared-secret auth suffices for the baseline. Reconsider for FAPI / PSD2.
+- **JAR, PAR, RAR.** Exact redirect-URI + PKCE + state + nonce cover the flow;
+  scopes cover authorization. Reconsider for multiple ASes or per-resource grants.
+- **OIDC Front-Channel Logout.** RP-initiated logout + OIDC Back-Channel Logout
+  (implemented, `POST /backchannel-logout`) cover it; the iframe variant is not.
+- **OIDC Session Management.** No browser↔AS session to monitor; changes surface
+  via `/auth/me` or the next `/api/**` returning 401.
 - **Encrypted-at-rest sessions in Valkey.** Local Valkey runs without
-  AUTH/TLS/encryption. Reconsider before any non-local deployment alongside
-  state-store AUTH, TLS, and network isolation.
+  AUTH/TLS/encryption. Add before any non-local deployment.
 
 ## Stack
 
