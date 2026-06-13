@@ -345,7 +345,7 @@ Works on macOS, Linux, and Windows.
 
 **Prerequisites**
 
-- **Docker Desktop** (macOS or Windows) or any Docker-compatible engine.
+- **Docker Desktop** (macOS or Windows) or any Docker-compatible engine, e.g. Podman.
 - **Node 20+** for the SPA dev server.
 - **A POSIX shell** to run `scripts/*.sh`: built in on macOS/Linux; on Windows
   use WSL2 (recommended) or Git Bash.
