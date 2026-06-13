@@ -147,6 +147,15 @@ The BFF pattern (A1) is implemented as two services, not one:
   `/internal/resolve`. Itself a confidential client at Keycloak for the
   Client Credentials token used on `/internal/*`.
 
+The division is **edge vs. policy**: the API Gateway is the swappable edge —
+front-end mechanics (cookie handling, the no-cookie `302`/`401` classification,
+CSRF validation, bearer injection, rate-limiting) — while the Auth Service is the
+copyable policy layer that owns authentication state and the token lifecycle.
+`/internal/resolve` is the seam: it resolves the opaque sid to a live access
+token, refreshing and rotating it as needed. Swapping APISIX for Kong, Envoy, or
+a managed gateway re-implements the edge; the Auth Service contract
+(SPEC-0001 §7.1) is unchanged.
+
 Rationale: adoptability and responsibility clarity. Production OIDC
 deployments at meaningful scale almost always separate the OAuth surface
 from the API-gateway surface. They differ on three axes:

@@ -25,6 +25,13 @@
 --   5. Strip Cookie + hop-by-hop headers; inject Authorization: Bearer.
 --   6. Header_filter phase adds Cache-Control: no-store on the response.
 --
+-- Edge vs. policy: this plugin is the swappable EDGE — front-end mechanics
+-- (cookie read, the no-cookie 302/401 classification, CSRF, bearer injection,
+-- header shaping) with no session store. Authentication POLICY and the
+-- session/token lifecycle live in the copyable Auth Service behind
+-- /internal/resolve. Swapping APISIX for Kong/Envoy/a managed gateway
+-- re-implements steps 1-6 here; the Auth Service contract (§7.1) is unchanged.
+--
 -- The plugin's gateway-client identity and the CSRF signing key are supplied
 -- via plugin conf in apisix.yaml. No secrets are hard-coded in this module.
 --
