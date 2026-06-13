@@ -46,6 +46,18 @@ was caught only here). Never report "green" off the live battery alone.
   → `docker compose down -v`. Run bare after another gate tore the stack down and
   it hits a dead `:9080` and fails (`rc=1`, zero `[FAIL]` lines — a false failure).
 - IdP portability (alt-claim realm): `sh scripts/e2e-portability.sh`
+- Distributed refresh-lock proof (NOT in `verify-all`; on-demand): a separate
+  TWO-replica stack proving concurrent `/internal/resolve` at both replicas for
+  one session collapse to a single upstream refresh. It does NOT bring up its
+  own stack — bring it up first, then drive, then tear down:
+  `docker compose -f compose.yaml -f compose.distributed-lock.yml up -d --build keycloak valkey auth-service auth-service-2`
+  → `bash scripts/e2e-distributed-lock.sh [TRIALS]`
+  → `docker compose -f compose.yaml -f compose.distributed-lock.yml down -v`.
+  The harness **auto-detects docker vs podman** for its Valkey `exec` (it holds
+  no `docker compose` assumption; override with `CONTAINER_RUNTIME=docker|podman`)
+  — no `podman→docker` shim needed on a Docker-only host. Judge by the summary
+  line, NOT the exit code (it exits 0 even on conflict): PASS is
+  `both-200=N  409-conflict=0`; a `409` means the replicas did not share the lock.
 - Java unit: `cd auth-service && ./mvnw test`, `cd backend-resource-server && ./mvnw test`
   (Podman: with the Testcontainers env from `references/environments.md`)
 - Frontend unit: `cd frontend && npx vitest run`
