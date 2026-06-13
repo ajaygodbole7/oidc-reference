@@ -8,7 +8,10 @@ the browser.
 - That service is split into a dedicated Auth Service (the OAuth/OIDC client)
   and a dedicated API Gateway (routing and bearer injection).
 - The browser holds only an opaque `HttpOnly` session cookie.
-- Tokens live in a Redis-compatible state store, keyed by that cookie.
+- Tokens live in a Redis-compatible state store, keyed by the `sid` the cookie carries.
+- On each request the API Gateway exchanges that cookie for an access token
+  through the Auth Service, holding no token store itself — the **phantom-token
+  pattern**.
 
 It implements [RFC 9700](https://datatracker.ietf.org/doc/rfc9700/) (OAuth 2.0
 Security BCP) and OIDC Core §3.1.3.7 for ID-token validation, across two flows:
@@ -29,9 +32,12 @@ What's included:
 - **Each control is linked to its spec, code, and test.** The Security controls
   table maps every control to its RFC/OIDC section, the code that implements it,
   and the gate that proves it.
-- **Provider differences live in configuration.** No provider name appears in
-  Java or Lua; `just e2e-portability` swaps the token shape against a second
-  realm end to end.
+- **Identity Providers (IdP) are configurable.** The reference code carries no
+  provider-specific behavior; it branches on standard OIDC values — `iss`,
+  `aud`, scopes, and claim paths from discovery — not a provider brand.
+
+`just e2e-portability` proves the IdP portability end to end: the same code runs
+against a second realm whose tokens carry a different shape.
 
 ## Contents
 
@@ -54,6 +60,7 @@ OAuth/OIDC vocabulary, mapped to this repo's components.
 | Identity Provider (IdP) | The Authorization Server in its identity role; used interchangeably here. Keycloak. |
 | Resource Server (RS) | The API that validates access tokens and serves data. Here, `backend-resource-server`. |
 | BFF | Backend-for-Frontend — the server-side component that holds tokens so the browser never does. |
+| `sid` / session cookie | The `sid` is the opaque session identifier; the server keys the session record on it (`sess:{sid}`). The browser carries the `sid` in the `__Host-sid` session cookie — its only credential. The cookie is the envelope; the `sid` is the value inside. |
 | PKCE | Proof Key for Code Exchange — binds an authorization code to the client that began the flow. |
 | JWT / JWKS | JSON Web Token / JSON Web Key Set (the public keys that verify a JWT signature). |
 | CSRF / XSS | Cross-Site Request Forgery / Cross-Site Scripting. |
@@ -63,8 +70,7 @@ OAuth/OIDC vocabulary, mapped to this repo's components.
 
 ## Design decisions
 
-Each row states what the reference does and the alternative it rejects. Full
-rationale and reconsideration triggers are in
+Full rationale and reconsideration triggers are in
 [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md).
 
 | Decision | This reference | Rejected |
@@ -73,10 +79,6 @@ rationale and reconsideration triggers are in
 | Component shape | Split Auth Service (the OAuth/OIDC client) + API Gateway (routing, bearer injection) | One combined service — valid, but mixes the OAuth-client and API-gateway roles |
 | Session state | Two server-side keyspaces, `tx:{state}` (pre-auth, keyed by the OAuth `state`) and `sess:{sid}` (post-auth); no pre-auth session cookie, so no session-fixation class | A framework HTTP-session blob |
 | Provider coupling | Branch on `iss` / `aud` / scopes / claim paths from `.well-known/openid-configuration`; differences live in config (`app.roles-claim-path`, env vars) | Provider-specific APIs baked into Java or APISIX |
-
-`just e2e-portability` proves the provider-coupling row — a token-shape swap
-end-to-end against a second realm. SPEC-0001 Appendix A and
-`provider-adapters.md` enumerate every config knob.
 
 ## Architecture
 
@@ -88,12 +90,7 @@ end-to-end against a second realm. SPEC-0001 Appendix A and
 | `backend-resource-server/` | JWT validation only; never sees session cookies. |
 | `authorization-server/` | Keycloak realm + Compose service. |
 
-The vendor choices (Keycloak, APISIX, Valkey) are interchangeable;
-SPEC-0001 Appendix A enumerates the files that change to swap each.
-For a practical IdP swap checklist, see
-[`docs/operations/provider-adapters.md`](docs/operations/provider-adapters.md).
-For non-local hardening, see
-[`docs/operations/production-hardening.md`](docs/operations/production-hardening.md).
+The vendor choices (Keycloak, APISIX, Valkey) are interchangeable.
 
 ### Login — Authorization Code + PKCE
 
@@ -136,11 +133,9 @@ sequenceDiagram
 
 The SPA holds no session state of its own:
 
-- On mount it calls `/auth/me` to learn whether a session exists and who the user is.
+- It calls `/auth/me` to learn whether a session exists and who the user is, on
+  mount or asynchronously.
 - `/auth/me` is a pure read — it never extends the session and never returns a token.
-- A server-side session death (RP logout, back-channel logout, or a rejected
-  refresh) surfaces as `401` on the next `/auth/me` or `/api/**` call, and the SPA
-  returns to the anonymous state.
 
 ```mermaid
 sequenceDiagram
@@ -308,7 +303,7 @@ sequenceDiagram
 
 ## What's deliberately not here
 
-Each item below has a reconsideration trigger; full rationale in
+Full rationale in
 [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
 §F.
 
@@ -352,7 +347,9 @@ Works on macOS, Linux, and Windows.
 - **Node 20+** for the SPA dev server.
 - **A POSIX shell** to run `scripts/*.sh`: built in on macOS/Linux; on Windows
   use WSL2 (recommended) or Git Bash.
-- **Java 25** only if you run the Spring modules or their unit tests outside Docker.
+- **Java 25** — Docker builds the Java images for you (JDK 25 in the build
+  stage), so you need host Java 25 only to run the Spring modules or their unit
+  tests outside Docker.
 - **`just` is optional.** It is a command runner; each recipe is a one-line
   wrapper over a script (`just up` runs `sh scripts/up.sh`), so you can run the
   script directly instead. Install with `brew install just` (macOS) or
@@ -414,4 +411,6 @@ then runs the gateway refresh-delegation proof with a real login-derived
   per-provider rotation behavior.
 - [`docs/operations/provider-adapters.md`](docs/operations/provider-adapters.md) — IdP swap walkthrough
   (Keycloak / Auth0 / Okta / Entra).
+- [`docs/operations/production-hardening.md`](docs/operations/production-hardening.md) —
+  the gap list between this local reference and a real deployment.
 - [`AGENTS.md`](AGENTS.md) — contributor operating contract.
