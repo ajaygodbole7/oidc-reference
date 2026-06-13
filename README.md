@@ -192,9 +192,12 @@ sequenceDiagram
     opt access token near expiry
         A->>K: Refresh-token grant
         K-->>A: rotated access + refresh tokens
-        A->>V: Update session
+        A->>V: Refresh + rotate sid — atomic move sess:{sid}→sess:{sid'} + breadcrumb, repoint indexes
     end
-    A-->>G: 200 access_token
+    A-->>G: 200 access_token (+ rotated_sid, rotated_csrf when the sid rotated)
+    opt resolve rotated the sid
+        Note over B,G: Gateway re-issues __Host-sid and XSRF-TOKEN (bound to sid') on this response.
+    end
     G->>R: GET /api/… + Authorization: Bearer access_token
     Note over G,R: Gateway strips the inbound cookie and injects the bearer.<br/>The browser never sends or sees a token.
     R->>R: Validate JWT (iss, sig, aud, exp, scope/roles)
@@ -260,11 +263,23 @@ sequenceDiagram
   Keycloak → callback redirect; the signed CSRF token provides
   state-change protection.
 - **CSRF cookie.** `XSRF-TOKEN` is JS-readable and carries an
-  HMAC-SHA256-signed value (`<value>.<hmac>`). The SPA echoes it as
-  `X-XSRF-TOKEN` on state-changing requests. Unsigned double-submit is
-  rejected: an attacker with a sibling-subdomain `document.cookie` write
+  HMAC-SHA256-signed value (`<value>.<hmac>`, HMAC bound to the `sid`). The SPA
+  echoes it as `X-XSRF-TOKEN` on state-changing requests. Unsigned double-submit
+  is rejected: an attacker with a sibling-subdomain `document.cookie` write
   could otherwise forge a matching pair. `SameSite=Strict` (set by the
   signing party) tightens the surface further.
+- **Sid rotation on refresh (A6).** A successful token refresh rotates the
+  `sid`. The Auth Service mints a new sid and, in one atomic store op, moves
+  `sess:{sid}`→`sess:{sid'}` and writes a short (~10 s) `rotated:{sid}`
+  breadcrumb so a request still in flight on the old sid resolves to the new
+  session instead of losing it; a concurrent logout therefore sees either the
+  old session (and fails closed) or the new one with the breadcrumb to follow —
+  never an in-between state. The `/internal/resolve` 200 then carries
+  `rotated_sid`, `rotated_sid_max_age`, and `rotated_csrf`, and the gateway
+  re-issues **both** the `__Host-sid` and `XSRF-TOKEN` cookies — the CSRF token
+  is HMAC-bound to the sid, so it must rotate with it. This bounds a
+  once-observed sid to a single refresh cycle, not the absolute session lifetime
+  (SECURITY S-5).
 - **Browser-binding cookie.** `oauth_tx` is issued at `/auth/login` with
   `Path=/auth/callback/idp` and `SameSite=Lax`. Its HMAC is stored in
   `tx:{state}`; the callback rejects when the supplied cookie's HMAC
