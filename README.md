@@ -4,16 +4,17 @@ A complete, runnable reference for the Backend-for-Frontend (BFF) session
 pattern: browser-app OAuth 2.1 and OpenID Connect Core 1.0 with no tokens in
 the browser.
 
-The OIDC client role lives in a confidential server-side service, split into a
-dedicated Auth Service (the OAuth/OIDC client) and a dedicated API Gateway
-(routing and bearer injection). The browser holds only an opaque `HttpOnly`
-session cookie. Tokens live in a Redis-compatible state store keyed by that
-cookie.
+- The OIDC client role lives in a confidential server-side service.
+- That service is split into a dedicated Auth Service (the OAuth/OIDC client)
+  and a dedicated API Gateway (routing and bearer injection).
+- The browser holds only an opaque `HttpOnly` session cookie.
+- Tokens live in a Redis-compatible state store, keyed by that cookie.
 
 It implements [RFC 9700](https://datatracker.ietf.org/doc/rfc9700/) (OAuth 2.0
 Security BCP) and OIDC Core §3.1.3.7 for ID-token validation, across two flows:
-browser login via Authorization Code + PKCE with saved-request replay, and
-service-to-service via Client Credentials.
+
+- browser login via Authorization Code + PKCE, with saved-request replay;
+- service-to-service via Client Credentials.
 
 What it gives you:
 
@@ -58,8 +59,8 @@ surface:
 
 The "BFF" name (Sam Newman, 2015) originally meant a per-frontend API
 aggregator sitting *after* auth; conflating it with the OAuth client role
-obscures both. A combined BFF is also valid. This reference ships the split
-because that is the shape production readers recognize.
+obscures both. A combined BFF is also valid; this reference ships the split to
+match how production OIDC deployments separate the two surfaces.
 
 **A server-side state store, not a framework HTTP-session blob.** The two
 pieces of state have different lifetimes and addressing: a short pre-auth OAuth
@@ -300,15 +301,22 @@ sequenceDiagram
 | RP-initiated logout with `id_token_hint` | OIDC RP-Initiated Logout 1.0 | `AuthController#logout` |
 | Step-up authentication: `auth_time` recency **and** `acr` assurance gates on a sensitive route → step-up challenge | OIDC Core §3.1.2.1 (`prompt=login`, `acr_values`), RFC 9470 | RS `ApiController#admin` (`app.step-up.required-acr`), `AuthController#stepUp` (`/auth/step-up`), realm `auth_time` + `acr` mappers |
 | `redirect_uri` pinned via `app.base-url` (defeats Host-header injection) | — | `AuthController#baseUrl` |
-| Per-session refresh lock (Java, `RefreshLock`/`InProcessRefreshLock`); `lua-resty-lock` around CC-token fetch (Lua) | — | `InProcessRefreshLock`, `InternalResolveController`, `bff-session.lua` |
+| Per-session refresh lock — in-process by default, distributed opt-in via `app.refresh-lock=distributed`; `lua-resty-lock` around CC-token fetch (Lua) | — | `RefreshLock`, `InProcessRefreshLock`, `DistributedRefreshKeyLock`, `RefreshLockConfig`, `bff-session.lua` |
 | Rate-limit on `/auth/login` + `/auth/callback/idp` (APISIX `limit-req`) | — | `apisix.yaml.template` |
 | Sentinel guard refusing default dev secrets | — | `SecretSentinelValidator` (Java, fail-closed at boot for the auth secret + cookie key); `render-apisix-config.sh` (`REQUIRE_NONDEV_SECRETS`, fail-closed at render for the gateway secret + CSRF key); `bff-session.lua` `warn_on_dev_sentinels` (WARN-only at gateway load) |
 
+**`acr` scope (local realm).**
+
+- A fresh interactive login maps to `acr=1`; remembered-SSO maps to `acr=0`.
+- The gate rejects any `acr` below `app.step-up.required-acr` (default `1`).
+- `acr=1` is a Level-of-Assurance value, not proof of MFA. Mapping `acr` to a
+  real MFA level is per-IdP configuration (an `acr`-to-LoA map in the realm),
+  not done here. See [`RFC9470-compliance.md`](RFC9470-compliance.md).
+
 ## What's deliberately not here
 
-For a reference repo, what isn't shipped is part of the contract. Each
-non-adoption below has a reconsideration trigger; the full rationale lives
-in [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
+Each item below has a reconsideration trigger; full rationale in
+[`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md)
 §F.
 
 - **Sender-constrained tokens (DPoP / mTLS).** The BFF pattern removes the
@@ -335,9 +343,6 @@ in [`docs/architecture/architecture-decisions.md`](docs/architecture/architectur
 - **Encrypted-at-rest sessions in Valkey.** Local Valkey runs without
   AUTH/TLS/encryption. Reconsider before any non-local deployment alongside
   state-store AUTH, TLS, and network isolation.
-- **Distributed refresh lock.** The Auth Service uses an in-process
-  `ReentrantLock` keyed by `sid`. Clustered deployments need a state-store
-  `SET NX EX` equivalent.
 
 ## Stack
 
