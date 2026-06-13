@@ -9,8 +9,9 @@ the browser.
   and a dedicated API Gateway (routing and bearer injection).
 - The browser holds only an opaque `HttpOnly` session cookie.
 - Tokens live in a Redis-compatible state store, keyed by the `sid` the cookie carries.
-- On each request the API Gateway exchanges that cookie for an access token
-  through the Auth Service, holding no token store itself — the **phantom-token
+- For each authenticated `/api/**` request, the API Gateway exchanges the opaque
+  session cookie for an access token (resolved by the Auth Service) and injects
+  it as the `Bearer` token proxied to the Resource Server — the **phantom-token
   pattern**.
 
 It implements [RFC 9700](https://datatracker.ietf.org/doc/rfc9700/) (OAuth 2.0
