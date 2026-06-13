@@ -26,9 +26,19 @@ won't boot.
 
 ## Gates (identical commands on both runtimes)
 
-- Per-component + secret scan: `sh scripts/verify-all.sh`
-- Full stack + gateway suite: `RUN_FULL_STACK_AUTH=1 sh scripts/verify-all.sh`
-- Canonical authenticated proof: `just e2e-auth`
+**The authoritative "everything green" gate is `RUN_FULL_STACK_AUTH=1 sh
+scripts/verify-all.sh` PLUS the conformance run below.** That is the only command
+that runs BOTH the static gates (ESLint, type-check, per-module unit suites,
+secret scan, contract strings) AND the live e2e stacks. **The individual live e2e
+scripts (`e2e-auth`, `e2e-portability`, `e2e-c8-altids`, `test-e2e`) run NO ESLint,
+NO type-check, NO per-module units, NO secret scan** — a green live battery has a
+static-analysis blind spot (a real feature shipped a frontend
+`no-unsafe-member-access` error that passed 19/19 Playwright + every unit suite and
+was caught only here). Never report "green" off the live battery alone.
+
+- Per-component + secret scan (static only, no live stack): `sh scripts/verify-all.sh`
+- **Everything (static + live, the mandatory gate):** `RUN_FULL_STACK_AUTH=1 sh scripts/verify-all.sh`
+- Canonical authenticated proof (subset; no lint): `just e2e-auth`
 - Conformance (C8 trust-id, C9 session-window): **needs a stack already up — it
   does NOT bring up its own** (its header says "Requires a running stack (run
   `scripts/up.sh` first)"; it only force-recreates `auth-service --no-deps`).

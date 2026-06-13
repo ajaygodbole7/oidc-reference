@@ -86,11 +86,18 @@ Changes are judged by whether they belong in the substance a reader copies.
    sleeps — poll, or assert by construction).
 4. Update SPEC-0001 + README "Security controls" + the relevant compliance doc.
 5. Verify with the **verify-oidc-reference** skill after **every** change, not
-   just at the end — the bar is the FULL sequential live battery (`test-e2e` +
-   `e2e-conformance` + `e2e-auth` + `e2e-portability` + `e2e-c8-altids`), no
-   skips. A unit suite passing in isolation is not the proof; a green
-   cross-component run is. Do not decide a change "can't affect" a gate and skip
-   it.
+   just at the end. The mandatory "green" gate is
+   `RUN_FULL_STACK_AUTH=1 sh scripts/verify-all.sh` **plus** the separate
+   `sh scripts/up.sh` → `RUN_LIVE_CONFORMANCE=1 sh scripts/e2e-conformance.sh` run
+   — together that is the static/lint/type/per-module-unit/secret-scan gates AND
+   the live e2e stacks. **Running the live e2e scripts directly (`e2e-auth`,
+   `e2e-portability`, …) is NOT sufficient: they run no ESLint, no type-check, no
+   per-module unit suites, no secret scan.** A green live battery alone has a
+   static-analysis blind spot — a real feature once shipped a frontend
+   `no-unsafe-member-access` error that passed 19/19 Playwright and every unit
+   suite and was caught only by `eslint .` inside `verify-all`. Don't substitute
+   the live battery for `verify-all`, and don't decide a change "can't affect" a
+   gate and skip it.
 
 ## Commit convention
 
