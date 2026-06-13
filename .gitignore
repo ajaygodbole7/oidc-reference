@@ -12,8 +12,12 @@ authorization-server/secrets/
 bff/target/
 backend-resource-server/target/
 .DS_Store
-# Per-contributor agent tooling state; never tracked.
-.claude/
+# Per-contributor Claude Code state is NOT tracked (e.g. settings.local.json),
+# EXCEPT the shared project skills under .claude/skills/, which are committed so
+# teammates and CI get them. ".claude/*" ignores the directory's contents but
+# not the directory itself, so "!.claude/skills/" can re-include just the skills.
+.claude/*
+!.claude/skills/
 CLAUDE.md
 .codex/
 .cursor/
