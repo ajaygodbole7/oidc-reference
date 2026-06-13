@@ -1038,3 +1038,69 @@ test("17. a write after a refresh-rotation re-reads the rotated CSRF and forward
   // The token invariant still holds after a rotation.
   await assertNoBrowserTokens(page, context);
 });
+
+// ---------------------------------------------------------------------------
+// Story 18 — Step-up authentication (OIDC max_age / RFC 9470). The sensitive
+// route POST /api/admin requires a RECENT interactive authentication, not just
+// the admin role. /auth/step-up forces a fresh re-auth (max_age=0) at the IdP,
+// which bumps auth_time so the Resource Server's freshness gate passes.
+//
+// Deterministic proof (no timing dependence): max_age=0 makes Keycloak
+// re-prompt for credentials EVEN WITH an active SSO session, so the login form
+// reappears — that is the unambiguous signal a step-up re-auth occurred. The
+// stale-auth_time -> 401 challenge itself is proven deterministically in the
+// RS unit/integration tests (ApiSecurityTest, ApiControllerTest); driving it
+// live would require waiting out the freshness window (the flaky-clock pattern
+// this suite avoids), so the live story proves the happy path end to end.
+// ---------------------------------------------------------------------------
+test("18. step-up forces a fresh re-auth (prompt=login) and the admin write passes", async ({
+  page,
+  context
+}) => {
+  await loginAs(page, ADMIN);
+
+  // auth_time is surfaced on /auth/me from the realm's auth_time mapper.
+  const authTimeBefore = await page.evaluate(async () => {
+    const r = await fetch("/auth/me", { credentials: "include" });
+    return (await r.json()).auth_time as number | undefined;
+  });
+  expect(authTimeBefore, "/auth/me exposes auth_time after login").toBeTruthy();
+
+  // Top-level navigation to the step-up entry. max_age=0 makes Keycloak
+  // re-authenticate even though an SSO session exists — the login form returns.
+  await page.goto(`/auth/step-up?return_to=${encodeURIComponent("/")}`);
+  await page.waitForURL(KEYCLOAK_AUTH_RE);
+  // prompt=login re-prompts for the password even though an SSO session exists
+  // (the username is pre-filled read-only with a "Restart login" link) — the
+  // visible password field is the unambiguous proof a step-up re-auth occurred.
+  await expect(page.locator("#password")).toBeVisible();
+  await page.fill("#password", ADMIN.password);
+  await Promise.all([page.waitForURL(`${APP_ORIGIN}/`), page.click("#kc-login")]);
+  await expect(page.getByText(/signed in as/i)).toBeVisible();
+
+  // The re-auth advanced auth_time (epoch seconds; never regresses).
+  const authTimeAfter = await page.evaluate(async () => {
+    const r = await fetch("/auth/me", { credentials: "include" });
+    return (await r.json()).auth_time as number | undefined;
+  });
+  expect(authTimeAfter, "auth_time present after step-up").toBeTruthy();
+  expect(
+    authTimeAfter as number,
+    "auth_time must not regress after a step-up re-auth"
+  ).toBeGreaterThanOrEqual(authTimeBefore as number);
+
+  // The sensitive admin write succeeds on the freshly-stepped-up session: the
+  // rotated access token carries a fresh auth_time that satisfies the RS gate.
+  const admin = await page.evaluate(async () => {
+    const xsrf = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/)?.[1] ?? "";
+    const res = await fetch("/api/admin", {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "X-XSRF-TOKEN": xsrf }
+    });
+    return { status: res.status, body: await res.text() };
+  });
+  expect(admin.status, "admin reaches /api/admin after step-up").toBe(200);
+
+  await assertNoBrowserTokens(page, context);
+});

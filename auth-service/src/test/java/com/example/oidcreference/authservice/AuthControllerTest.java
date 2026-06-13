@@ -180,6 +180,114 @@ class AuthControllerTest {
         .contains("\"saved_request\":\"/api/user-data\"");
   }
 
+  // -- step-up authentication ---------------------------------------------
+
+  @Test
+  void stepUpForcesFreshAuthAndMarksTransaction() throws Exception {
+    MvcResult result = mockMvc.perform(get("/auth/step-up")
+            .param("return_to", "/api/admin")
+            .header("Host", "127.0.0.1:5173")
+            .header("X-Forwarded-Proto", "http")
+            .header("X-Forwarded-Host", "127.0.0.1:5173"))
+        .andExpect(status().isFound())
+        .andReturn();
+
+    String location = result.getResponse().getHeader(HttpHeaders.LOCATION);
+    // Step-up forces a fresh interactive authentication: prompt=login tells the
+    // IdP to re-authenticate regardless of an existing SSO session, which bumps
+    // auth_time so the Resource Server's freshness check passes on the retry.
+    // (max_age=0 is NOT used — Keycloak treats it as unset and reuses the SSO
+    // session; prompt=login is the portable lever.)
+    assertThat(location).contains("prompt=login");
+    assertThat(location).contains("code_challenge_method=S256");
+
+    // The transaction is marked step-up so the callback enforces that the
+    // returned auth_time post-dates this request (a genuine re-auth happened).
+    String txKey = stateStore.keys().stream()
+        .filter(k -> k.startsWith("tx:")).findFirst().orElseThrow();
+    String txJson = stateStore.get(txKey).orElseThrow();
+    assertThat(txJson).contains("\"step_up\":true");
+    assertThat(txJson).contains("\"saved_request\":\"/api/admin\"");
+  }
+
+  @Test
+  void stepUpRejectsInvalidReturnTo() throws Exception {
+    // The step-up entry reuses the same same-origin return_to contract as
+    // /auth/login — an absolute URL must not weaponize the callback redirect.
+    assertReturnToRejected(mockMvc.perform(get("/auth/step-up")
+            .param("return_to", "https://evil.example/")
+            .header("Host", "127.0.0.1:5173")
+            .header("X-Forwarded-Proto", "http")
+            .header("X-Forwarded-Host", "127.0.0.1:5173"))
+        .andReturn());
+    assertThat(stateStore.keys()).isEmpty();
+  }
+
+  // -- step-up: callback freshness ----------------------------------------
+
+  @Test
+  void stepUpFreshness_nonStepUpLoginIsAlwaysFresh() {
+    OAuthTransaction normal = new OAuthTransaction("v", "n", "/", Instant.now(), "h");
+    assertThat(AuthController.stepUpAuthFresh(normal, Map.of("sub", "alice"))).isTrue();
+  }
+
+  @Test
+  void stepUpFreshness_freshAuthTimeIsAccepted() {
+    OAuthTransaction stepUp = new OAuthTransaction("v", "n", "/", Instant.now().minusSeconds(5), "h", true);
+    Map<String, Object> claims = Map.of("sub", "alice", "auth_time", Instant.now().getEpochSecond());
+    assertThat(AuthController.stepUpAuthFresh(stepUp, claims)).isTrue();
+  }
+
+  @Test
+  void stepUpFreshness_staleAuthTimeIsRejected() {
+    // The id_token came back with an authentication older than the moment we
+    // initiated the step-up — the IdP reused an old SSO session instead of
+    // re-authenticating. Fail closed.
+    OAuthTransaction stepUp = new OAuthTransaction("v", "n", "/", Instant.now(), "h", true);
+    Map<String, Object> claims = Map.of("sub", "alice",
+        "auth_time", Instant.now().minusSeconds(3600).getEpochSecond());
+    assertThat(AuthController.stepUpAuthFresh(stepUp, claims)).isFalse();
+  }
+
+  @Test
+  void stepUpFreshness_missingAuthTimeIsRejected() {
+    OAuthTransaction stepUp = new OAuthTransaction("v", "n", "/", Instant.now(), "h", true);
+    assertThat(AuthController.stepUpAuthFresh(stepUp, Map.of("sub", "alice"))).isFalse();
+  }
+
+  @Test
+  void callbackRejectsStepUpWhenAuthTimeIsStale() throws Exception {
+    String state = "state-stepup-stale";
+    storeStepUpTransaction(state, "/api/admin");
+
+    mockMvc.perform(get("/auth/callback/idp")
+            .param("code", "stepup-stale")
+            .param("state", state)
+            .cookie(txCookie(state)))
+        .andExpect(status().isUnauthorized());
+
+    // Fail closed: no session is minted from a step-up the IdP did not honor.
+    assertThat(stateStore.keys()).noneMatch(k -> k.startsWith("sess:"));
+  }
+
+  @Test
+  void callbackAcceptsStepUpWithFreshAuthTimeAndStoresIt() throws Exception {
+    String state = "state-stepup-fresh";
+    storeStepUpTransaction(state, "/api/admin");
+
+    MvcResult result = mockMvc.perform(get("/auth/callback/idp")
+            .param("code", "stepup-fresh")
+            .param("state", state)
+            .cookie(txCookie(state)))
+        .andExpect(status().isFound())
+        .andReturn();
+
+    // The fresh auth_time is persisted into the session so /auth/me reflects
+    // the elevated assurance and the RS sees it on the injected access token.
+    String sid = result.getResponse().getCookie("sid").getValue();
+    assertThat(stateStore.get("sess:" + sid).orElseThrow()).contains("\"auth_time\":");
+  }
+
   // -- login: return_to validation negatives -------------------------------
 
   @Test
@@ -1067,6 +1175,15 @@ class AuthControllerTest {
   // browser-binding check is exercised. Callers pass the hash they've
   // already computed (via OAuthTxBinding.hash) — the test holds the
   // raw cookie value separately so it can present it on the callback.
+  // A step-up transaction (stepUpMaxAge=0) bound to the test's oauth_tx cookie,
+  // so the callback's browser-binding check passes and its freshness check runs.
+  private void storeStepUpTransaction(String state, String savedRequest) {
+    String hash = OAuthTxBinding.hash(TX_COOKIE_VALUE, COOKIE_SIGNING_KEY);
+    OAuthTransaction transaction = new OAuthTransaction(
+        "verifier", "nonce", savedRequest, Instant.now(), hash, true);
+    stateStore.put("tx:" + state, TestBeans.JSON.encode(transaction), Duration.ofMinutes(5));
+  }
+
   private void storeBoundTransaction(String state, String savedRequest, String txCookieHash) {
     OAuthTransaction transaction = new OAuthTransaction(
         "verifier",
@@ -1164,13 +1281,26 @@ class AuthControllerTest {
           throw new org.springframework.security.authentication.BadCredentialsException(
               "id token rejected");
         }
+        // Step-up callback tests drive auth_time via the code: "stepup-fresh"
+        // returns a just-authenticated token; "stepup-stale" returns one whose
+        // auth_time predates the transaction (an IdP that ignored max_age).
+        Map<String, Object> claims;
+        if ("stepup-fresh".equals(code)) {
+          claims = Map.of("sub", "alice", "preferred_username", "alice",
+              "auth_time", Instant.now().getEpochSecond());
+        } else if ("stepup-stale".equals(code)) {
+          claims = Map.of("sub", "alice", "preferred_username", "alice",
+              "auth_time", Instant.now().minusSeconds(3600).getEpochSecond());
+        } else {
+          claims = Map.of("sub", "alice", "preferred_username", "alice");
+        }
         return new SessionRecord(
             "access-token-1",
             "refresh-token-1",
             "id-token-1",
             Instant.now().plusSeconds(300),
             Instant.now().plusSeconds(1800),
-            Map.of("sub", "alice", "preferred_username", "alice"));
+            claims);
       };
     }
 

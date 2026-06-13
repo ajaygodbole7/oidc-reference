@@ -90,10 +90,35 @@ class AuthController {
       SecurityAudit.event(request, 400, "login_rejected", "invalid_return_to");
       return badReturnTo();
     }
-    return beginLogin(request, returnTo);
+    return beginLogin(request, returnTo, false);
+  }
+
+  // Step-up authentication. Reached when a sensitive resource rejects a session
+  // whose last interactive authentication is too old (the Resource Server's
+  // auth_time freshness gate). Reuses the same same-origin return_to contract as
+  // /auth/login, but adds `prompt=login` so the IdP forces a fresh credential
+  // entry regardless of an existing SSO session; the callback then enforces that
+  // the returned auth_time post-dates this request. We use prompt=login (OIDC
+  // Core §3.1.2.1) rather than max_age=0 because Keycloak — like several IdPs —
+  // treats max_age=0 as "unset" and silently reuses the SSO session; prompt=login
+  // is the portable, reliable "re-authenticate now" lever.
+  @GetMapping("/step-up")
+  ResponseEntity<?> stepUp(
+      @RequestParam(name = "return_to", required = false) String returnTo,
+      HttpServletRequest request) {
+    if (!isValidReturnTo(returnTo)) {
+      SecurityAudit.event(request, 400, "step_up_rejected", "invalid_return_to");
+      return badReturnTo();
+    }
+    return beginLogin(request, returnTo, true);
   }
 
   ResponseEntity<Void> beginLogin(HttpServletRequest request, String savedRequest) {
+    return beginLogin(request, savedRequest, false);
+  }
+
+  ResponseEntity<Void> beginLogin(
+      HttpServletRequest request, String savedRequest, boolean stepUp) {
     var state = CryptoSupport.randomUrlToken(32);
     var codeVerifier = new CodeVerifier();
     var codeChallenge = CodeChallenge.compute(CodeChallengeMethod.S256, codeVerifier);
@@ -113,10 +138,11 @@ class AuthController {
         nonce,
         normalizeSavedRequest(savedRequest),
         Instant.now(),
-        txCookieHash);
+        txCookieHash,
+        stepUp);
     stateStore.put("tx:" + state, json.encode(transaction), TX_TTL);
 
-    var authorizationUri = UriComponentsBuilder
+    var authorizationBuilder = UriComponentsBuilder
         .fromUri(md.authorizationEndpoint())
         .queryParam("response_type", "code")
         .queryParam("client_id", md.clientId())
@@ -125,15 +151,22 @@ class AuthController {
         .queryParam("state", state)
         .queryParam("nonce", nonce)
         .queryParam("code_challenge", codeChallenge.getValue())
-        .queryParam("code_challenge_method", "S256")
-        .encode()
-        .toUriString();
+        .queryParam("code_challenge_method", "S256");
+    if (stepUp) {
+      // OIDC Core §3.1.2.1 prompt=login: the IdP MUST re-authenticate the user,
+      // refreshing auth_time, regardless of an existing SSO session. Portable
+      // across IdPs (Keycloak treats max_age=0 as unset and would reuse the SSO
+      // session); the callback verifies the returned auth_time post-dates this.
+      authorizationBuilder.queryParam("prompt", "login");
+    }
+    var authorizationUri = authorizationBuilder.encode().toUriString();
 
     boolean secure = isSecureRequest(request);
     var txCookieName = OAuthTxBinding.cookieName(state);
     var txCookie = oauthTxCookie(txCookieName, txCookieValue, TX_TTL, secure);
 
-    SecurityAudit.event(request, 302, "login_started", "ok");
+    SecurityAudit.event(
+        request, 302, stepUp ? "step_up_started" : "login_started", "ok");
     return ResponseEntity.status(HttpStatus.FOUND)
         .header(HttpHeaders.LOCATION, authorizationUri)
         .header(HttpHeaders.SET_COOKIE, txCookie.toString())
@@ -225,6 +258,17 @@ class AuthController {
     } catch (RuntimeException e) {
       SecurityAudit.event(request, 401, "callback_failed", "token_exchange_failed");
       return callbackError(HttpStatus.UNAUTHORIZED, "oauth callback rejected", clearTxCookie);
+    }
+    // Step-up gate: if this transaction asked for a fresh authentication, the
+    // returned id_token's auth_time must post-date the request. An IdP that
+    // ignored max_age (returning a stale SSO auth_time) fails closed here, so a
+    // step-up can never "succeed" without a genuine re-auth — which would
+    // otherwise loop the SPA against the Resource Server's freshness gate.
+    if (!stepUpAuthFresh(transaction, session.claims())) {
+      SecurityAudit.event(
+          request, 401, "callback_failed", "step_up_not_fresh", subjectClaim(session));
+      return callbackError(
+          HttpStatus.UNAUTHORIZED, "step-up authentication was not fresh", clearTxCookie);
     }
     var sid = CryptoSupport.randomUrlToken(32);
     // Issue a signed, session-bound CSRF token. The signed shape `<value>.<hmac>` is what every
@@ -382,6 +426,24 @@ class AuthController {
     String handle = CryptoSupport.randomUrlToken(32);
     stateStore.put("logout:" + handle, idpLogout, LOGOUT_TTL);
     return "/auth/logout/continue?lc=" + handle;
+  }
+
+  // Step-up freshness gate. A step-up flow must return an id_token whose
+  // auth_time is at or after the moment the transaction was initiated — proof
+  // the IdP honored max_age and genuinely re-authenticated the user instead of
+  // silently reusing an older SSO session. Ordinary (non-step-up) logins carry
+  // no freshness requirement. A step-up that returns no auth_time, or an
+  // auth_time predating the request, fails closed. Package-private + static so
+  // it is unit-tested directly without a Spring context.
+  static boolean stepUpAuthFresh(OAuthTransaction transaction, Map<String, Object> claims) {
+    if (!transaction.isStepUp()) {
+      return true;
+    }
+    Object authTime = claims == null ? null : claims.get("auth_time");
+    if (!(authTime instanceof Number n)) {
+      return false;
+    }
+    return n.longValue() >= transaction.createdAt().getEpochSecond();
   }
 
   private static String subjectClaim(SessionRecord session) {

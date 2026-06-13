@@ -184,10 +184,33 @@ class ApiSecurityTest {
     mockMvc.perform(post("/api/admin").with(jwt()))
         .andExpect(status().isForbidden());
 
+    // Happy path now also needs a fresh auth_time: /api/admin is a step-up
+    // gated sensitive action (see adminWithStaleAuthTimeChallengesForStepUp).
     mockMvc.perform(post("/api/admin")
-            .with(jwt().jwt(j -> j.claim("realm_access", Map.of("roles", List.of("admin"))))
-                       .authorities(new SimpleGrantedAuthority("ROLE_admin"))))
+            .with(jwt().jwt(j -> j
+                    .claim("realm_access", Map.of("roles", List.of("admin")))
+                    .claim("auth_time", java.time.Instant.now().getEpochSecond()))
+                .authorities(new SimpleGrantedAuthority("ROLE_admin"))))
         .andExpect(status().isOk());
+  }
+
+  @Test
+  void adminWithStaleAuthTimeChallengesForStepUp() throws Exception {
+    // Correct role + audience, but the last interactive authentication is too
+    // old: RFC 9470 — 401 with error="insufficient_user_authentication", NOT a
+    // 403 insufficient_scope (the token is authorized; only its recency fails).
+    mockMvc.perform(post("/api/admin")
+            .with(jwt().jwt(j -> j
+                    .claim("realm_access", Map.of("roles", List.of("admin")))
+                    .claim("auth_time", java.time.Instant.now().minusSeconds(3600).getEpochSecond()))
+                .authorities(new SimpleGrantedAuthority("ROLE_admin"))))
+        .andExpect(status().isUnauthorized())
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("error=\"insufficient_user_authentication\"")))
+        .andExpect(header().string("WWW-Authenticate",
+            org.hamcrest.Matchers.containsString("max_age=")))
+        .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(jsonPath("$.error").value("insufficient_user_authentication"));
   }
 
   @Test

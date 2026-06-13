@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { callApi, fetchMe, signOut } from "./auth";
+import { callApi, fetchMe, signOut, stepUpHref } from "./auth";
 
 describe("BFF auth client", () => {
   beforeEach(() => {
@@ -97,6 +97,63 @@ describe("BFF auth client", () => {
     expect(navigate).toHaveBeenCalledWith(
       `/auth/login?return_to=${encodeURIComponent("/")}`
     );
+  });
+
+  it("routes an RFC 9470 step-up challenge (401 insufficient_user_authentication) to /auth/step-up, not /auth/login", async () => {
+    document.cookie = "XSRF-TOKEN=csrf-abc";
+    // The Resource Server accepted the token's authorization but its last
+    // interactive authentication is too old. The challenge says "elevate",
+    // not "log in again" — the SPA must route to the step-up entry so the
+    // user re-authenticates without losing their session.
+    vi.spyOn(global, "fetch").mockResolvedValue(
+      new Response(null, {
+        status: 401,
+        headers: {
+          "WWW-Authenticate":
+            'Bearer error="insufficient_user_authentication", max_age=300'
+        }
+      })
+    );
+    const navigate = vi.fn();
+
+    await callApi("/api/admin", { method: "POST" }, navigate);
+
+    expect(navigate).toHaveBeenCalledWith(
+      `/auth/step-up?return_to=${encodeURIComponent("/")}`
+    );
+    expect(navigate).not.toHaveBeenCalledWith(
+      `/auth/login?return_to=${encodeURIComponent("/")}`
+    );
+  });
+
+  it("a plain 401 (no step-up challenge) still routes to /auth/login", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(new Response(null, { status: 401 }));
+    const navigate = vi.fn();
+
+    await callApi("/api/user-data", {}, navigate);
+
+    expect(navigate).toHaveBeenCalledWith(
+      `/auth/login?return_to=${encodeURIComponent("/")}`
+    );
+  });
+
+  it("stepUpHref carries the URL-encoded current route as return_to", () => {
+    expect(stepUpHref()).toBe(`/auth/step-up?return_to=${encodeURIComponent("/")}`);
+  });
+
+  it("surfaces auth_time and acr from /auth/me into the User DTO", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue(Response.json({
+      sub: "alice",
+      preferred_username: "alice",
+      roles: ["user"],
+      auth_time: 1781305692,
+      acr: "1"
+    }));
+
+    const user = await fetchMe();
+
+    expect(user?.auth_time).toBe(1781305692);
+    expect(user?.acr).toBe("1");
   });
 
   it("returns null on /auth/me 401 WITHOUT navigating (anonymous home must be reachable)", async () => {

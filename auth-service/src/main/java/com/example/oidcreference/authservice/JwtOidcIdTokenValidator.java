@@ -13,12 +13,14 @@ import com.nimbusds.oauth2.sdk.id.ClientID;
 import com.nimbusds.oauth2.sdk.id.Issuer;
 import com.nimbusds.oauth2.sdk.token.BearerAccessToken;
 import com.nimbusds.openid.connect.sdk.Nonce;
+import com.nimbusds.openid.connect.sdk.claims.ACR;
 import com.nimbusds.openid.connect.sdk.claims.AccessTokenHash;
 import com.nimbusds.openid.connect.sdk.claims.IDTokenClaimsSet;
 import com.nimbusds.openid.connect.sdk.validators.AccessTokenValidator;
 import com.nimbusds.openid.connect.sdk.validators.IDTokenValidator;
 import java.text.ParseException;
 import java.util.Collection;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -142,6 +144,16 @@ class JwtOidcIdTokenValidator implements IdTokenValidator {
     putIfPresent(result, "preferred_username", claims.getStringClaim("preferred_username"));
     putIfPresent(result, "name", claims.getStringClaim("name"));
     putIfPresent(result, "email", claims.getStringClaim("email"));
+    // Step-up assurance signals. auth_time (the epoch-seconds instant the user
+    // last interactively authenticated) is the load-bearing claim the Resource
+    // Server enforces freshness on; acr is surfaced when the IdP emits it. Both
+    // are optional — absent on providers/realms that don't emit them, in which
+    // case a freshness check treats the session as "cannot prove a recent auth".
+    Date authTime = claims.getAuthenticationTime();
+    if (authTime != null) {
+      result.put("auth_time", authTime.toInstant().getEpochSecond());
+    }
+    putIfPresent(result, "acr", claims.getACR() != null ? claims.getACR().getValue() : null);
     result.put("roles", extractRoles(claims, rolesClaimPath));
     return result;
   }

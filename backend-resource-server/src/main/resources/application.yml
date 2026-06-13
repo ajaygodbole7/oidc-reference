@@ -23,6 +23,14 @@ app:
   # service client authorized to POST /api/jobs.
   service-client-ids: ${RS_SERVICE_CLIENT_IDS:oidc-reference-api-gateway,oidc-reference-service}
   jobs-client-id: ${RS_JOBS_CLIENT_ID:oidc-reference-service}
+  step-up:
+    # Max age of the caller's last interactive authentication (the access
+    # token's auth_time) accepted on a sensitive route (POST /api/admin). An
+    # older — or absent — auth_time yields an RFC 9470
+    # "insufficient_user_authentication" challenge; the SPA then elevates via
+    # the BFF's /auth/step-up (a fresh re-auth), and the rotated access token
+    # carries a fresh auth_time that satisfies this gate on retry.
+    max-age: ${STEP_UP_MAX_AGE:300s}
 
 # Actuator is bound to loopback on a dedicated management port (9082, not
 # host-published). NOTE: a user-defined SecurityFilterChain (SecurityConfig)

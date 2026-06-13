@@ -7,6 +7,12 @@ export type User = {
   readonly name?: string;
   readonly email?: string;
   readonly roles?: readonly string[];
+  // Step-up assurance, surfaced from /auth/me when the IdP emits them.
+  // auth_time = epoch seconds of the last interactive authentication; the SPA
+  // can use it to reflect how recently the user authenticated. acr is the
+  // authentication context class reference when configured.
+  readonly auth_time?: number;
+  readonly acr?: string;
 };
 
 function isUser(value: unknown): value is User {
@@ -19,6 +25,8 @@ function isUser(value: unknown): value is User {
   for (const key of ["preferred_username", "name", "email"] as const) {
     if (v[key] !== undefined && typeof v[key] !== "string") return false;
   }
+  if (v.auth_time !== undefined && typeof v.auth_time !== "number") return false;
+  if (v.acr !== undefined && typeof v.acr !== "string") return false;
   return true;
 }
 
@@ -28,7 +36,9 @@ function sanitizeUser(value: User): User {
     ...(value.preferred_username !== undefined ? { preferred_username: value.preferred_username } : {}),
     ...(value.name !== undefined ? { name: value.name } : {}),
     ...(value.email !== undefined ? { email: value.email } : {}),
-    ...(value.roles !== undefined ? { roles: [...value.roles] } : {})
+    ...(value.roles !== undefined ? { roles: [...value.roles] } : {}),
+    ...(value.auth_time !== undefined ? { auth_time: value.auth_time } : {}),
+    ...(value.acr !== undefined ? { acr: value.acr } : {})
   };
 }
 
@@ -41,6 +51,13 @@ const browserNavigate: Navigate = (path) => window.location.assign(path);
 // `/auth/login` is forbidden — every login entry must carry `return_to`.
 export function loginHref(): string {
   return `/auth/login?return_to=${encodeURIComponent(currentRoute())}`;
+}
+
+// Step-up entry. Reached when a sensitive /api call returns an RFC 9470
+// insufficient_user_authentication challenge: the user is still logged in but
+// must re-authenticate to raise assurance. Same return_to contract as login.
+export function stepUpHref(): string {
+  return `/auth/step-up?return_to=${encodeURIComponent(currentRoute())}`;
 }
 
 // Compute the relative route for `return_to`. If pathname is missing or
@@ -123,9 +140,15 @@ export async function callApi(
 
   const res = await fetch(path, init);
   if (res.status === 401) {
-    // Per contract: a 401 from /api/** must NOT navigate to the API URL.
-    // It triggers a top-level navigation to /auth/login?return_to=<current route>.
-    navigate(loginHref());
+    // Per contract: a 401 from /api/** must NOT navigate to the API URL. It
+    // triggers a top-level navigation. RFC 9470: if the challenge is a step-up
+    // (error="insufficient_user_authentication"), the session is still valid —
+    // route to /auth/step-up to re-authenticate and raise assurance, not to a
+    // full /auth/login. Any other 401 is a no-session and routes to login.
+    const challenge = res.headers.get("WWW-Authenticate") ?? "";
+    navigate(
+      challenge.includes("insufficient_user_authentication") ? stepUpHref() : loginHref()
+    );
   }
   return res;
 }

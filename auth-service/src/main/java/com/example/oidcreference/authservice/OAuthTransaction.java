@@ -13,9 +13,29 @@ record OAuthTransaction(
     @JsonProperty("nonce") String nonce,
     @JsonProperty("saved_request") String savedRequest,
     @JsonProperty("created_at") Instant createdAt,
-    @JsonProperty("tx_cookie_hash") String txCookieHash) {
-  // The 4-arg compat constructor was removed: it produced records with
-  // txCookieHash=null, which the callback's fail-closed binding check
-  // unconditionally rejects (400 missing_tx_binding). Keeping it would
-  // have meant ship-able production code that only works in tests.
+    @JsonProperty("tx_cookie_hash") String txCookieHash,
+    // Step-up marker. Persisted so the callback knows to enforce auth_time
+    // freshness when the IdP redirects back. Tolerant-read: existing tx:{state}
+    // records written before this field decode to null (treated as no step-up).
+    @JsonProperty("step_up") Boolean stepUp) {
+
+  // Ordinary (non-step-up) login. Unlike the removed 4-arg constructor — which
+  // produced an INVALID null txCookieHash the callback fail-closes on — a false
+  // stepUp is the correct, valid default: a login with no freshness requirement.
+  OAuthTransaction(
+      String verifier,
+      String nonce,
+      String savedRequest,
+      Instant createdAt,
+      String txCookieHash) {
+    this(verifier, nonce, savedRequest, createdAt, txCookieHash, false);
+  }
+
+  // True when this flow is a step-up: the callback must then enforce that the
+  // returned id_token's auth_time is at or after createdAt — proof that a
+  // genuine re-authentication happened during this transaction rather than the
+  // IdP silently reusing an older SSO session.
+  boolean isStepUp() {
+    return Boolean.TRUE.equals(stepUp);
+  }
 }

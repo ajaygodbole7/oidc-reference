@@ -281,6 +281,56 @@ class JwtOidcIdTokenValidatorTest {
     assertThat(claims).containsEntry("sub", "alice");
   }
 
+  // -- step-up: auth_time / acr capture (P-step-up) -----------------------
+
+  @Test
+  void validateCapturesAuthTimeAndAcrWhenPresent() throws Exception {
+    // Step-up assurance rides on auth_time (when the last interactive
+    // authentication happened) and, when the IdP emits it, acr. The validator
+    // must surface both into the claims map so they reach the session and
+    // /auth/me. auth_time is normalized to epoch seconds (a Long).
+    long authTime = Instant.now().minusSeconds(30).getEpochSecond();
+    String token = signRs256(claimsBuilder()
+        .claim("auth_time", authTime)
+        .claim("acr", "1")
+        .build());
+
+    Map<String, Object> claims = sut.validate(token, ACCESS_TOKEN, transaction);
+
+    assertThat(claims).containsEntry("auth_time", authTime);
+    assertThat(claims).containsEntry("acr", "1");
+  }
+
+  @Test
+  void validateOmitsAuthTimeAndAcrWhenAbsent() throws Exception {
+    // A provider that emits neither (e.g. the minimal local realm without the
+    // auth_time mapper) must not produce null/empty entries — the keys are
+    // simply absent, and downstream freshness checks treat "no auth_time" as
+    // "cannot prove a recent authentication".
+    String token = signRs256(claimsBuilder().build());
+
+    Map<String, Object> claims = sut.validate(token, ACCESS_TOKEN, transaction);
+
+    assertThat(claims).doesNotContainKey("auth_time");
+    assertThat(claims).doesNotContainKey("acr");
+  }
+
+  @Test
+  void validateRefreshedCapturesAuthTimeAndAcr() throws Exception {
+    // The refresh path must surface auth_time/acr too, so a token rotation
+    // keeps the session's assurance level current (a re-auth bumps auth_time).
+    long authTime = Instant.now().minusSeconds(5).getEpochSecond();
+    String token = signRs256(claimsBuilder()
+        .claim("auth_time", authTime)
+        .claim("acr", "2")
+        .build());
+
+    Map<String, Object> claims = sut.validateRefreshed(token, ACCESS_TOKEN);
+
+    assertThat(claims).containsEntry("auth_time", authTime);
+    assertThat(claims).containsEntry("acr", "2");
+  }
+
   // -- helpers --------------------------------------------------------------
 
   private JWTClaimsSet.Builder claimsBuilder() {

@@ -314,8 +314,37 @@ protocol-relative, no leading slash, overlong, encoded backslash).
 | `/auth/callback/idp` | GET | none | Atomically reads and deletes `tx:{state}` from the Redis-compatible state store; exchanges code with the AS (`code` + `verifier` + configured client authentication); validates `id_token` (`iss`, `aud = oidc-reference-auth`, `nonce`, sig RS256, exp/nbf); creates a fresh `sess:{sid}` with a newly minted opaque session id; validates `saved_request` is same-origin (replaces with `/` otherwise); returns `302 {saved_request}` with `Set-Cookie __Host-sid=<opaque>; HttpOnly; Secure; SameSite=Lax; Path=/` and `Set-Cookie XSRF-TOKEN=<signed>; Secure; SameSite=Strict; Path=/` (JS-readable). No prior authenticated session existed, so session fixation is mitigated by construction. |
 | `/auth/logout` | POST | session | Requires signed double-submit CSRF (§7.3). Invalidate session, delete `sess:{sid}`, clear `__Host-sid` and `XSRF-TOKEN` cookies. Builds the IdP `end_session_endpoint` URL with `id_token_hint` **server-side**, stores it under a single-use opaque handle (`logout:{handle}`, TTL 2m), and returns a **same-origin** JSON body `{"logoutUrl":"/auth/logout/continue?lc={handle}"}`. The id_token (PII) never reaches browser JS or any SPA-readable body — only the server emits the IdP redirect (from `/auth/logout/continue`). The SPA performs a real top-level navigation to the same-origin handle. If no local `sess:{sid}` exists (idled out or already deleted), `/auth/logout` still drives IdP logout: it builds the `end_session` URL with `client_id` and a `post_logout_redirect_uri` set to the configured app base URL (or the forwarded SPA origin) — never a logout request parameter, so no open redirect — attaching `id_token_hint` only when the session's `logout_hint:{sid}` index still survives. CSRF is not required on this branch (no session to protect), and the IdP SSO is terminated even when the local session is gone. |
 | `/auth/logout/continue` | GET | none | Resolves the single-use `logout:{handle}` (GET-then-DEL) and `302`s to the IdP `end_session_endpoint` URL with `id_token_hint` and `Referrer-Policy: no-referrer`. Unknown/expired/missing handle → `302` to `/`. No session required (it is already deleted); the opaque handle is the capability. |
-| `/auth/me` | GET | session | Return non-sensitive user claims (`sub`, `preferred_username`, `name`, `email`, `roles`). Never returns a token. Response `Cache-Control: no-store`. |
+| `/auth/step-up` | GET | session (cookie not strictly required) | Step-up authentication entry (OIDC Core §3.1.2.1 `prompt=login`). Same `return_to` contract and same browser-binding/`tx:{state}` machinery as `/auth/login`, but the transaction is flagged `step_up:true` and the authorize request adds `prompt=login` so the IdP re-authenticates the user even when an SSO session exists. On callback, the step-up gate (below) requires the returned `auth_time` to be at or after the transaction's `created_at`; a stale/missing `auth_time` (an IdP that ignored `prompt=login`) fails closed with `401`. `prompt=login` is used rather than `max_age=0` because several IdPs (Keycloak included) treat `max_age=0` as unset and silently reuse the SSO session. |
+| `/auth/me` | GET | session | Return non-sensitive user claims (`sub`, `preferred_username`, `name`, `email`, `roles`, and — when the IdP emits them — `auth_time` and `acr`). Never returns a token. Response `Cache-Control: no-store`. |
 | `/backchannel-logout` | POST | signed `logout_token` (no cookie) | OIDC Back-Channel Logout 1.0 — IdP-to-Auth-Service, `application/x-www-form-urlencoded` with a `logout_token` JWT. Validates the token (IdP JWKS signature, `iss`, `aud` = this client, fresh `iat`, an `events` claim carrying the back-channel-logout event, `sub` and/or `sid` present, **no `nonce`**, `jti` replay-guarded). Resolves the IdP `sid` to the local session via the `idp_sid:{idp_sid}` index and deletes `sess:{sid}`; with only `sub`, deletes every session of that subject. `200` on success, `400` on an invalid/unverifiable token. Never reveals whether a session existed. Reachable only on the internal network. |
+
+### Step-up authentication (auth_time freshness)
+
+A sensitive Resource Server route may require not just the right authorization
+but a *recent* interactive authentication — the "re-authenticate before a
+high-value action" pattern. The reference applies this to `POST /api/admin`.
+
+- **Claim source.** The IdP must emit `auth_time` (epoch seconds of the last
+  interactive authentication). The local Keycloak realm carries a single
+  protocol mapper (`oidc-usersessionmodel-note-mapper`, `AUTH_TIME` → `auth_time`)
+  on the Auth Service client so the claim appears in **both** the ID token (the
+  Auth Service stores it in the session and exposes it on `/auth/me`) and the
+  **access token** (so the Resource Server can enforce on it). Application code
+  reads only the standard `auth_time` claim — provider-agnostic.
+- **Enforcement (Resource Server).** `POST /api/admin` requires
+  `now - auth_time ≤ app.step-up.max-age` (default `300s`, env `STEP_UP_MAX_AGE`).
+  A stale or absent `auth_time` yields an **RFC 9470** challenge: `401` with
+  `WWW-Authenticate: Bearer error="insufficient_user_authentication", max_age=<seconds>`
+  and an `application/problem+json` body carrying `"error":
+  "insufficient_user_authentication"`. The token is otherwise valid — it is only
+  the authentication recency that is insufficient (distinct from a `403`
+  `insufficient_scope`).
+- **Elevation (SPA → BFF).** The SPA detects the challenge (the
+  `insufficient_user_authentication` code in `WWW-Authenticate`) and performs a
+  top-level navigation to `/auth/step-up?return_to=<route>` rather than a full
+  `/auth/login`. The Auth Service forces a fresh re-auth (`prompt=login`); the
+  rotated access token then carries a fresh `auth_time` that satisfies the gate
+  on retry.
 
 ### API Gateway Endpoints
 
