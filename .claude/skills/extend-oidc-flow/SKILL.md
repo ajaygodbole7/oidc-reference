@@ -28,12 +28,18 @@ Changes are judged by whether they belong in the substance a reader copies.
 
 ## The rules (these are how a change gets accepted here)
 
-1. **TDD, red → green.** Write the failing test first and *run it to see it
-   fail*, then implement to green. Security-critical paths get adversarial
+1. **TDD, red → green — and prove the test has teeth.** Write the failing test
+   first and *run it to see it fail for the right reason*, then implement to
+   green. For a test of code that already exists (a characterization or parity
+   test that passes immediately), prove it can fail: mutate the guard it covers,
+   watch THAT test go red, then revert. Security-critical paths get adversarial
    negatives (bad sig / wrong iss-aud-exp / stale / replayed / forged), not just
-   happy paths. Per-component runners: `cd auth-service && ./mvnw -Dtest=Foo
-   test`, `cd backend-resource-server && ./mvnw test`, `cd frontend && npx
-   vitest run`. Validators are tested against real crypto, not mocked away.
+   happy paths; validators are tested against real crypto, not mocked away.
+   Per-component runners: `cd auth-service && ./mvnw -Dtest=Foo test`, `cd
+   backend-resource-server && ./mvnw test`, `cd frontend && npx vitest run`. When
+   TALLYING a Java suite use `./mvnw clean test`, not `test` — surefire reports
+   are not cleaned between runs, so a glob tally sweeps up stale reports from
+   prior runs and invents phantom failures.
 
 2. **SPEC-0001 is the build contract.** `docs/specs/SPEC-0001-core-oidc-flows.md`
    documents every endpoint, wire format, `tx:{state}`/`sess:{sid}` field, and
@@ -64,8 +70,12 @@ Changes are judged by whether they belong in the substance a reader copies.
 6. **Two flows + the two cookies.** Auth Code + PKCE (with `state`, `nonce`,
    `oauth_tx` browser binding) and Client Credentials. Session is an opaque
    `__Host-sid`; CSRF is the signed double-submit `XSRF-TOKEN` bound to the sid.
-   Keep tokens off the browser — the live e2e asserts no token material reaches
-   any JS-readable surface; preserve that invariant.
+   Keep tokens off the browser, *precisely*: access and refresh tokens never
+   reach the browser; the **id_token** never reaches browser JS, storage,
+   SPA-readable JSON, SPA-visible cookies, or app logs — **only** the server's
+   `/auth/logout/continue → IdP` top-level redirect may carry `id_token_hint`.
+   The live e2e asserts this; preserve it. (The loose paraphrase "no tokens in
+   the browser" drops the `id_token_hint` exception that makes the rule precise.)
 
 ## Workflow
 
@@ -75,8 +85,12 @@ Changes are judged by whether they belong in the substance a reader copies.
    the behavior is observable end-to-end; keep it deterministic (no flaky
    sleeps — poll, or assert by construction).
 4. Update SPEC-0001 + README "Security controls" + the relevant compliance doc.
-5. Verify with the **verify-oidc-reference** skill (unit + e2e + conformance +
-   portability) before claiming done.
+5. Verify with the **verify-oidc-reference** skill after **every** change, not
+   just at the end — the bar is the FULL sequential live battery (`test-e2e` +
+   `e2e-conformance` + `e2e-auth` + `e2e-portability` + `e2e-c8-altids`), no
+   skips. A unit suite passing in isolation is not the proof; a green
+   cross-component run is. Do not decide a change "can't affect" a gate and skip
+   it.
 
 ## Commit convention
 
