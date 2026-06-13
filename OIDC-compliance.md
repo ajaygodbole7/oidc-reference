@@ -40,9 +40,9 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 | §2 | `aud` claim (`REQUIRED`) | ✅ | Mapped by realm to include the Auth Service client ID. Validated by Nimbus on every callback. |
 | §2 | `exp` claim (`REQUIRED`) | ✅ | Issued by Keycloak; validated by Nimbus. |
 | §2 | `iat` claim (`REQUIRED`) | ✅ | Issued by Keycloak; validated by Nimbus. |
-| §2 | `auth_time` claim (`OPTIONAL` unless `max_age` or `auth_time` essential) | 🚫 | `max_age` not requested; `auth_time` claim not required for this reference. |
+| §2 | `auth_time` claim (`OPTIONAL` unless `max_age` or `auth_time` essential) | ✅ | Step-up forces a fresh re-auth; `auth_time` is emitted in both tokens (realm `auth_time` mapper), surfaced by `JwtOidcIdTokenValidator`, validated for freshness in the step-up callback, and enforced by the Resource Server on `POST /api/admin`. See [`RFC9470-compliance.md`](RFC9470-compliance.md). |
 | §2 | `nonce` claim (`REQUIRED` if present in auth request) | ✅ | `AuthController#beginLogin` always sends `nonce`. `JwtOidcIdTokenValidator` passes the expected nonce to Nimbus, which fails closed on mismatch. Asserted by `JwtOidcIdTokenValidatorTest#nonceMismatchIsRejected`. |
-| §2 | `acr` claim (`OPTIONAL`) | 🚫 | `acr_values` not requested. |
+| §2 | `acr` claim (`OPTIONAL`) | 🟡 | `acr_values` not requested; `acr` is surfaced into the session / `/auth/me` when the IdP emits it (`JwtOidcIdTokenValidator`), but not enforced — the ACR/LoA step-up axis is deferred in favor of `auth_time`/`max_age`. See [`RFC9470-compliance.md`](RFC9470-compliance.md). |
 | §2 | `amr` claim (`OPTIONAL`) | 🚫 | Not validated; not required for this reference. |
 | §2 | `azp` claim semantics (`OPTIONAL`, required when ID Token has single `aud` not equal to client_id; required when multiple `aud`) | ✅ | Validated inside Nimbus's `IDTokenValidator`. |
 
@@ -58,7 +58,8 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 | §3.1.2.1 | `redirect_uri` (`REQUIRED`) | ✅ | Computed by `AuthController#redirectUri`. Pinned via `app.base-url` when configured; otherwise derived from `X-Forwarded-*` (dev). |
 | §3.1.2.1 | `state` (`RECOMMENDED`) | ✅ | `state` generated server-side (`CryptoSupport.randomUrlToken(32)`), used as the `tx:{state}` key, validated on callback. |
 | §3.1.2.1 | `nonce` (`OPTIONAL` for code flow but used here) | ✅ | Generated per-request, stored in `tx:{state}`, validated in the ID Token. |
-| §3.1.2.1 | `prompt`, `max_age`, `ui_locales`, `id_token_hint`, `login_hint`, `acr_values` (`OPTIONAL`) | 🚫 | Not used in this reference. |
+| §3.1.2.1 | `prompt` (`OPTIONAL`) | ✅ | `prompt=login` sent by `/auth/step-up` to force a fresh re-authentication (step-up). See [`RFC9470-compliance.md`](RFC9470-compliance.md). |
+| §3.1.2.1 | `max_age`, `ui_locales`, `id_token_hint`, `login_hint`, `acr_values` (`OPTIONAL`) | 🚫 | Not used. Step-up uses `prompt=login` rather than `max_age` (Keycloak treats `max_age=0` as unset); ACR/LoA (`acr_values`) deferred. |
 | §3.1.2.1 | `display` (`OPTIONAL`) | 🚫 | Not used. |
 | §3.1.2.2 | Authorization Request validation (`MUST` reject malformed) | ✅ | Keycloak default. |
 | §3.1.2.3 | Authorization Server authenticates the end-user (`MUST`) | ✅ | Keycloak login. |

@@ -408,6 +408,9 @@ enforcement, refresh delegation, and RP-initiated logout through the same-origin
   OpenID Connect Core 1.0 + Discovery + RP-Initiated Logout.
 - [`RFC9700-compliance.md`](RFC9700-compliance.md) — control-by-control
   status against RFC 9700 (OAuth 2.0 Security BCP, also OAuth 2.1 baseline).
+- [`RFC9470-compliance.md`](RFC9470-compliance.md) — control-by-control
+  status against RFC 9470 (OAuth 2.0 Step Up Authentication Challenge), the
+  step-up `auth_time`/`max_age` flow on `POST /api/admin`.
 - [`docs/reference/refresh-rotation.md`](docs/reference/refresh-rotation.md) —
   refresh-token rotation policy, the `app.refresh-require-rotation` knob, and
   per-provider rotation behavior.
