@@ -194,6 +194,19 @@ class AuthController {
     // user clicked "Deny") and omits `code`. Consume the transaction so it
     // does not linger until its TTL, evict the browser-binding cookie, and
     // return the user to the app home rather than a raw framework 400.
+    //
+    // Deliberate tradeoff (applies here AND to the code path below): the tx is
+    // consumed on EVERY callback outcome, including rejection — it is single-use,
+    // and an iss-mismatch / mix-up probe burns it so it cannot be retried (see
+    // the iss check below: "rejected with the tx already consumed"). The cost is
+    // a narrow denial-of-login: a party who knows the 256-bit `state` can fire a
+    // forged error- or code-callback to consume a victim's in-flight tx, so the
+    // victim's genuine callback then fails invalid_state. We accept it: `state`
+    // is a server-generated secret not normally exposed, the window is the tx TTL
+    // (minutes), and the alternative — defer the consume until after the oauth_tx
+    // browser-binding verifies — would forfeit the single-use / mix-up burn that
+    // matters more. Browser binding still gates everything that touches a SESSION
+    // or token (below); only the pending-tx cleanup is state-only.
     if ((error != null && !error.isBlank()) || code == null) {
       stateStore.getAndDelete("tx:" + state);
       String reason = (error != null && !error.isBlank()) ? "idp_error" : "missing_code";
