@@ -76,11 +76,11 @@ export default tseslint.config(
     // The flat config itself + vite config aren't part of the TS project.
     // Lint them with the non-type-aware preset to avoid parserOptions.project
     // errors.
-    files: ["eslint.config.js", "scripts/**/*.js"],
+    files: ["eslint.config.js", "scripts/**/*.{js,mjs}"],
     ...tseslint.configs.disableTypeChecked
   },
   {
-    files: ["scripts/**/*.js"],
+    files: ["scripts/**/*.{js,mjs}"],
     languageOptions: {
       globals: { process: "readonly", console: "readonly" }
     },
