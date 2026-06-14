@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import org.springframework.boot.test.system.CapturedOutput;
@@ -878,6 +879,42 @@ class AuthControllerTest {
   }
 
   @Test
+  void authMeReturnsAllowlistedProjectionAndDropsOtherClaims() throws Exception {
+    // SPEC-0001 §endpoints: /auth/me is the server-owned identity contract — a
+    // typed projection of exactly sub, preferred_username, name, email, roles,
+    // auth_time, acr. Anything else in the stored claim map (a future IdP claim,
+    // a nested provider object, token-shaped material, the raw provider role
+    // claim) must NOT reach the browser. The server enforces this, not the SPA.
+    Map<String, Object> claims = new java.util.LinkedHashMap<>();
+    claims.put("sub", "alice");
+    claims.put("preferred_username", "alice");
+    claims.put("name", "Alice Example");
+    claims.put("email", "alice@example.com");
+    claims.put("roles", List.of("user", "admin"));
+    claims.put("auth_time", 1781305692L);
+    claims.put("acr", "1");
+    // Must be dropped by the projection:
+    claims.put("id_token", "eyJhbGciOiJSUzI1NiJ9.body.sig");
+    claims.put("groups", List.of("secret-internal-group"));
+    claims.put("provider_internal", java.util.Map.of("nested", "leak"));
+    Cookie sid = createSessionCookieWithClaims("sid-me-projection", claims);
+
+    mockMvc.perform(get("/auth/me").cookie(sid))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.sub").value("alice"))
+        .andExpect(jsonPath("$.preferred_username").value("alice"))
+        .andExpect(jsonPath("$.name").value("Alice Example"))
+        .andExpect(jsonPath("$.email").value("alice@example.com"))
+        .andExpect(jsonPath("$.roles", org.hamcrest.Matchers.containsInAnyOrder("user", "admin")))
+        .andExpect(jsonPath("$.auth_time").value(1781305692))
+        .andExpect(jsonPath("$.acr").value("1"))
+        // Non-allow-listed material is dropped, not serialized:
+        .andExpect(jsonPath("$.id_token").doesNotExist())
+        .andExpect(jsonPath("$.groups").doesNotExist())
+        .andExpect(jsonPath("$.provider_internal").doesNotExist());
+  }
+
+  @Test
   void expiredAbsoluteSessionIsRejectedAndDeleted() throws Exception {
     // Sliding TTL has a hard ceiling at absoluteExpiresAt. Even if the
     // record is still in the state store, an absolute-expired session
@@ -1254,6 +1291,22 @@ class AuthControllerTest {
         Map.of("sub", "alice"));
     stateStore.put("sess:" + sid, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     new SessionIndexes(stateStore, TestBeans.JSON).index(sid, session);
+    return new Cookie("sid", sid);
+  }
+
+  private Cookie createSessionCookieWithClaims(String sid, Map<String, Object> claims) {
+    Instant createdAt = Instant.now();
+    SessionRecord session = new SessionRecord(
+        "access-token-1",
+        "refresh-token-1",
+        "id-token-1",
+        createdAt.plusSeconds(300),
+        createdAt.plusSeconds(1800),
+        createdAt,
+        createdAt.plus(Duration.ofHours(12)),
+        createdAt,
+        claims);
+    stateStore.put("sess:" + sid, TestBeans.JSON.encode(session), Duration.ofMinutes(30));
     return new Cookie("sid", sid);
   }
 

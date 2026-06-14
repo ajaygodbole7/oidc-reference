@@ -1,5 +1,7 @@
 package com.example.oidcreference.authservice;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.nimbusds.oauth2.sdk.pkce.CodeChallenge;
 import com.nimbusds.oauth2.sdk.pkce.CodeChallengeMethod;
 import com.nimbusds.oauth2.sdk.pkce.CodeVerifier;
@@ -9,6 +11,9 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -338,7 +343,7 @@ class AuthController {
   }
 
   @GetMapping("/me")
-  ResponseEntity<Map<String, Object>> me(HttpServletRequest request) {
+  ResponseEntity<MeResponse> me(HttpServletRequest request) {
     Optional<SessionRecord> session = session(request);
     if (session.isEmpty()) {
       SecurityAudit.event(request, 401, "auth_denied", "no_session");
@@ -355,7 +360,57 @@ class AuthController {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
         .header(HttpHeaders.VARY, "Cookie")
-        .body(session.get().claims());
+        .body(projectMe(session.get().claims()));
+  }
+
+  // /auth/me is the server-owned public identity contract. Project the stored
+  // claim map to a typed, allow-listed record so a future IdP claim, a nested
+  // provider object, or token-shaped material in the session can never reach the
+  // browser regardless of what the validator wrote — the server enforces the
+  // contract, not the SPA's sanitizer. snake_case wire names match what the SPA
+  // reads; NON_NULL omits absent optional fields (the prior putIfPresent shape).
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  record MeResponse(
+      @Nullable String sub,
+      @JsonProperty("preferred_username") @Nullable String preferredUsername,
+      @Nullable String name,
+      @Nullable String email,
+      List<String> roles,
+      @JsonProperty("auth_time") @Nullable Long authTime,
+      @Nullable String acr) {}
+
+  private static MeResponse projectMe(Map<String, Object> claims) {
+    return new MeResponse(
+        claimString(claims, "sub"),
+        claimString(claims, "preferred_username"),
+        claimString(claims, "name"),
+        claimString(claims, "email"),
+        claimStringList(claims, "roles"),
+        claimEpochSeconds(claims, "auth_time"),
+        claimString(claims, "acr"));
+  }
+
+  private static @Nullable String claimString(Map<String, Object> claims, String key) {
+    return claims.get(key) instanceof String s ? s : null;
+  }
+
+  // auth_time is stored as epoch seconds; a JSON round-trip through the state
+  // store may bring it back as Integer or Long, so read any Number.
+  private static @Nullable Long claimEpochSeconds(Map<String, Object> claims, String key) {
+    return claims.get(key) instanceof Number n ? n.longValue() : null;
+  }
+
+  private static List<String> claimStringList(Map<String, Object> claims, String key) {
+    if (!(claims.get(key) instanceof Collection<?> values)) {
+      return List.of();
+    }
+    List<String> result = new ArrayList<>();
+    for (Object value : values) {
+      if (value instanceof String s) {
+        result.add(s);
+      }
+    }
+    return List.copyOf(result);
   }
 
   @PostMapping("/logout")
