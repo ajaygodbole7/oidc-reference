@@ -137,8 +137,18 @@ test_no_cookie_navigation_returns_302_to_login() {
   esac
 }
 
-test_x_forwarded_proto_drives_secure_cookie_handling() {
-  name="x_forwarded_proto_drives_secure_cookie_handling"
+test_host_sid_accepted_regardless_of_forwarded_proto() {
+  # __Host-sid acceptance is NAME-based, not scheme-based: the plugin honors it
+  # whether or not X-Forwarded-Proto is present (bff-session.lua:181). Cookie
+  # handling must NOT be driven by the client-supplied, spoofable X-Forwarded-Proto
+  # — the bare `sid` fallback is gated by the allow_insecure_sid CONFIG flag, never
+  # by the forwarded scheme — so __Host-sid forwards through the plugin both with
+  # and without the header. (A browser never sends a __Host- cookie over plaintext
+  # anyway; the prefix requires Secure. These are curl-only requests, and the RS
+  # then 401s the placeholder token — that is upstream, not a plugin short-circuit,
+  # which is exactly what the earlier "plaintext_rejects_host_sid" assertion
+  # mis-read as a gateway rejection.)
+  name="host_sid_accepted_regardless_of_forwarded_proto"
   sid="xfp-secure-1"
   setup_session "$sid" "test-jwt-xfp" 300
 
@@ -147,14 +157,15 @@ test_x_forwarded_proto_drives_secure_cookie_handling() {
     -H 'X-Forwarded-Proto: https' \
     -H "Cookie: __Host-sid=$sid" \
     "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-  assert_plugin_forwarded "$name forwarded_https_accepts_host_sid" \
+  assert_plugin_forwarded "$name with_forwarded_proto_https" \
     "$status" "$HEADERS_TMP" "$BODY_TMP"
 
   status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" \
     -w '%{http_code}' \
     -H "Cookie: __Host-sid=$sid" \
     "$GATEWAY_BASE/api/me" 2>/dev/null || true)"
-  assert_status "$name plaintext_rejects_host_sid" 401 "$status"
+  assert_plugin_forwarded "$name without_forwarded_proto" \
+    "$status" "$HEADERS_TMP" "$BODY_TMP"
 
   clear_session "$sid"
 }
@@ -905,7 +916,7 @@ test_transient_auth_service_failure_returns_503_keeps_cookie() {
 printf -- '---- gateway integration tests ----\n'
 test_no_cookie_xhr_returns_401_no_redirect          || true
 test_no_cookie_navigation_returns_302_to_login      || true
-test_x_forwarded_proto_drives_secure_cookie_handling || true
+test_host_sid_accepted_regardless_of_forwarded_proto || true
 test_unknown_path_returns_404                       || true
 test_internal_path_is_not_routable_through_gateway  || true
 test_valid_session_returns_200_with_bearer_injected || true
