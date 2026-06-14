@@ -142,7 +142,7 @@ class InternalResolveController {
     // 500) so the gateway keeps the session cookie and retries.
     try {
       return refreshLock.withLock(req.sid(), () -> refreshUnderLock(req.sid(), sessKey, request));
-    } catch (RuntimeException e) {
+    } catch (RefreshLockUnavailableException e) {
       log.warn("refresh lock unavailable; failing closed (transient) for sid_hash={}",
           SecurityAudit.hashSid(req.sid()));
       SecurityAudit.event(request, 503, "refresh_failed", "refresh_lock_unavailable");

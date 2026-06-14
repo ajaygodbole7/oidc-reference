@@ -57,22 +57,36 @@ class DistributedRefreshKeyLock implements RefreshLock {
   public <T> T withLock(String key, Supplier<T> action) {
     String lockKey = LOCK_PREFIX + key;
     String token = CryptoSupport.randomUrlToken(16);
-    long deadlineNanos = System.nanoTime() + maxWait.toNanos();
-
-    while (!store.putIfAbsent(lockKey, token, ttl)) {
-      if (System.nanoTime() >= deadlineNanos) {
-        // Fail closed: never run the refresh unguarded (double-spend the refresh
-        // token -> reuse detection -> user logged out). Surface as a transient
-        // failure instead.
-        log.warn("refresh lock not acquired within {} for a session; failing closed", maxWait);
-        throw new IllegalStateException("could not acquire refresh lock within " + maxWait);
-      }
-      sleep(poll);
-    }
+    acquire(lockKey, token, System.nanoTime() + maxWait.toNanos());
     try {
       return action.get();
     } finally {
       store.compareAndDelete(lockKey, token);
+    }
+  }
+
+  // Acquire the lease, or throw RefreshLockUnavailableException so the caller
+  // fails closed — never run the refresh unguarded (double-spend the refresh
+  // token -> reuse detection -> user logged out). A store error WHILE ACQUIRING
+  // is also a transient lock-acquire failure, deliberately distinct from a
+  // failure in the refresh action itself (which the controller maps separately,
+  // so an action error is never mislabeled "lock unavailable").
+  private void acquire(String lockKey, String token, long deadlineNanos) {
+    while (true) {
+      boolean acquired;
+      try {
+        acquired = store.putIfAbsent(lockKey, token, ttl);
+      } catch (RuntimeException e) {
+        throw new RefreshLockUnavailableException("refresh lock acquire failed (store error)", e);
+      }
+      if (acquired) {
+        return;
+      }
+      if (System.nanoTime() >= deadlineNanos) {
+        log.warn("refresh lock not acquired within {} for a session; failing closed", maxWait);
+        throw new RefreshLockUnavailableException("could not acquire refresh lock within " + maxWait);
+      }
+      sleep(poll);
     }
   }
 
@@ -83,7 +97,7 @@ class DistributedRefreshKeyLock implements RefreshLock {
       Thread.currentThread().interrupt();
       // An interrupt mid-wait must not silently fall through to an unguarded
       // refresh — fail closed.
-      throw new IllegalStateException("interrupted waiting for refresh lock", e);
+      throw new RefreshLockUnavailableException("interrupted waiting for refresh lock", e);
     }
   }
 }

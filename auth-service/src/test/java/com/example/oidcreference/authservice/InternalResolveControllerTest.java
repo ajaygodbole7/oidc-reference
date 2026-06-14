@@ -825,7 +825,7 @@ class InternalResolveControllerTest {
     @Override
     public <T> T withLock(String key, java.util.function.Supplier<T> action) {
       if (failAcquire) {
-        throw new IllegalStateException("could not acquire refresh lock within PT12S");
+        throw new RefreshLockUnavailableException("could not acquire refresh lock within PT12S");
       }
       return delegate.withLock(key, action);
     }
