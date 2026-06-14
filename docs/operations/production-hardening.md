@@ -147,8 +147,17 @@ fast instead of stalling the whole `/api` surface.
 
 Before a real deployment:
 
-- Run a replicated topology (Sentinel or Cluster, or a managed
-  Redis-compatible service with automatic failover).
+- Run a replicated single-primary topology (Sentinel, or a managed
+  Redis-compatible service with automatic primary failover). Do not use a
+  sharded Redis Cluster: the atomic sid-rotation script (`rotateIfPresent`)
+  moves `sess:{old}` to `sess:{new}` and writes the `rotated:{old}` breadcrumb
+  in one Lua call across three keys, and a sharded cluster cannot keep three
+  keys built from independent random sids in one hash slot, so the call returns
+  CROSSSLOT. A single primary keeps the whole keyspace in one slot space, so the
+  multi-key scripts hold; hash tags cannot fix this because the old and new sids
+  share no common entity to tag. The per-user index sets (`idp_sid:{idp_sid}`,
+  `sub_sessions:{sub}`) hold only one user's live session ids, so the
+  logout-time `SMEMBERS` enumeration stays cheap.
 - Decide the failover behavior for in-flight refreshes explicitly. A failover
   mid-refresh can lose the rotated token before it is persisted; pair this with
   the graceful-shutdown and distributed-lock decisions below so an interrupted
