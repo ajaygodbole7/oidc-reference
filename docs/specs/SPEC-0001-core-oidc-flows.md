@@ -386,6 +386,11 @@ high-value action" pattern. The reference applies this to `POST /api/admin`.
 - Name in production: `__Host-sid`. In local HTTP mode the name downgrades
   to `sid` and `Secure` is dropped (browsers reject `__Host-` without
   `Secure`).
+- Acceptance: on a secure (HTTPS) request the Auth Service accepts **only**
+  `__Host-sid`; the bare `sid` name is honored solely over local plaintext HTTP.
+  A bare `sid` is tossable from a sibling subdomain, exactly what the `__Host-`
+  prefix blocks at set time, so honoring it on HTTPS would re-open
+  forced-login / session fixation. The read path fails closed accordingly.
 - Attributes: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`.
 - Value: opaque, ≥128 bits of entropy. Not a token; carries no claims.
 - The Auth Service sets the cookie on the `302` response from

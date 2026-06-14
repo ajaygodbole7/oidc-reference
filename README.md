@@ -258,6 +258,7 @@ Each control maps to its reference and the code that implements it.
 | RP-initiated logout with `id_token_hint` | OIDC RP-Initiated Logout 1.0 | `AuthController#logout` |
 | Step-up: `auth_time` recency **and** `acr` assurance gates on a sensitive route | OIDC Core §3.1.2.1, [RFC 9470](https://datatracker.ietf.org/doc/rfc9470/) | RS `ApiController#admin`, `AuthController#stepUp`, realm `auth_time` + `acr` mappers |
 | `redirect_uri` pinned via `app.base-url` (defeats Host-header injection) | — | `AuthController#baseUrl` |
+| Session cookie accepted only as `__Host-sid` on secure requests (cookie-tossing / forced-login defense) | — | `AuthController#sessionId` |
 | Per-session refresh lock (in-process default, distributed opt-in) | — | `RefreshLock`, `InProcessRefreshLock`, `DistributedRefreshKeyLock`, `RefreshLockConfig`, `bff-session.lua` |
 | Sid rotation on refresh: atomic `sess:{sid}`→`sess:{sid'}` move + `rotated:{sid}` breadcrumb so in-flight requests follow it | — | `InternalResolveController` (A6); proven by `reference-flow.spec.ts` story 17 and `e2e-distributed-lock.sh` |
 | Rate-limit on `/auth/login` + `/auth/callback/idp` | — | `apisix.yaml.template` |

@@ -471,6 +471,13 @@ class AuthController {
     if (fromHost.isPresent()) {
       return fromHost;
     }
+    // Cookie-tossing / forced-login defense: on a secure (HTTPS) request accept
+    // ONLY __Host-sid. The bare `sid` name is minted only over local plaintext
+    // HTTP (sidCookie); honoring it on HTTPS would re-open the sibling-subdomain
+    // cookie injection the __Host- prefix exists to block at set time. Fail closed.
+    if (isSecureRequest(request)) {
+      return Optional.empty();
+    }
     return SignedCsrfSupport.cookieValue(request, LOCAL_SID_NAME);
   }
 

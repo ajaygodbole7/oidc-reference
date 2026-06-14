@@ -904,6 +904,40 @@ class AuthControllerTest {
         .isZero();
   }
 
+  @Test
+  void secureRequestRejectsBareSidCookie() throws Exception {
+    // Cookie-tossing / forced-login defense: over HTTPS the Auth Service must
+    // accept ONLY __Host-sid. A bare `sid` is minted only over local plaintext
+    // HTTP (sidCookie); an attacker controlling a sibling subdomain can set a
+    // Domain-scoped `sid` the browser then sends to the app — exactly what the
+    // __Host- prefix blocks at set time. Honoring a bare `sid` on a secure
+    // request would let an attacker pin the victim to an attacker-supplied
+    // session (session fixation). On HTTPS the bare `sid` is ignored -> 401, and
+    // the real session is left untouched (the bare cookie never reaches lookup).
+    Cookie bareSid = createSessionCookie();
+
+    mockMvc.perform(get("/auth/me")
+            .header("X-Forwarded-Proto", "https")
+            .cookie(bareSid))
+        .andExpect(status().isUnauthorized());
+
+    assertThat(stateStore.get("sess:" + bareSid.getValue()))
+        .as("a bare sid presented over HTTPS is ignored, not consumed")
+        .isPresent();
+  }
+
+  @Test
+  void secureRequestAcceptsHostSidCookie() throws Exception {
+    // The legitimate HTTPS credential is __Host-sid, which must still resolve.
+    Cookie bareSid = createSessionCookie();
+    Cookie hostSid = new Cookie("__Host-sid", bareSid.getValue());
+
+    mockMvc.perform(get("/auth/me")
+            .header("X-Forwarded-Proto", "https")
+            .cookie(hostSid))
+        .andExpect(status().isOk());
+  }
+
   // -- logout (signed CSRF) ------------------------------------------------
 
   @Test
