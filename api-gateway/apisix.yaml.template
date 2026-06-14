@@ -117,6 +117,9 @@ routes:
     upstream_id: resource-server
     plugin_config_id: bff-session-api
 
+  # >>> test-only routes (render-apisix-config.sh strips this block when
+  # REQUIRE_NONDEV_SECRETS=1, so a production-intent render carries no test
+  # surface at all).
   # Test harness only. The Resource Server endpoint exists only when the
   # `gateway-test` Spring profile is active; default/prod profile returns
   # 404 even for authenticated callers. This route lets the live gateway
@@ -127,6 +130,7 @@ routes:
     methods: [GET]
     upstream_id: resource-server
     plugin_config_id: bff-session-api
+  # <<< test-only routes
 
   # ---- /auth/* passthrough with rate-limiting on the kickoff edge ----
   # The Auth Service owns its own auth on /auth/* (session cookie + its

@@ -57,6 +57,38 @@ if [ -n "$missing" ]; then
   exit 2
 fi
 
+# CSRF signing-key shape guard — the render-time analogue of the Auth Service's
+# boot-time SecretSentinelValidator. CSRF_SIGNING_KEY is HMAC material for the
+# signed double-submit token; the gateway verifies it in Lua with the SAME key,
+# so a non-base64 or too-short key makes the HMAC silently weak/wrong. Require
+# base64 that decodes to >= 32 bytes (256-bit). Computed arithmetically so we
+# need no base64 binary (portable across macOS/Linux sh). Always enforced — the
+# dev sentinel is valid 32-byte base64, so the dev render is unchanged.
+csrf_invalid() {
+  printf 'fatal: CSRF_SIGNING_KEY %s (need base64 decoding to >= 32 bytes / 256-bit)\n' "$1" >&2
+  exit 3
+}
+case "$CSRF_SIGNING_KEY" in
+  *[!A-Za-z0-9+/=]*) csrf_invalid "is not base64" ;;
+esac
+csrf_body="$CSRF_SIGNING_KEY"
+case "$csrf_body" in
+  *==) csrf_body="${csrf_body%==}"; csrf_pad=2 ;;
+  *=)  csrf_body="${csrf_body%=}";  csrf_pad=1 ;;
+  *)   csrf_pad=0 ;;
+esac
+case "$csrf_body" in
+  *=*) csrf_invalid "has misplaced '=' padding" ;;
+esac
+csrf_len=${#CSRF_SIGNING_KEY}
+if [ "$csrf_len" -eq 0 ] || [ $((csrf_len % 4)) -ne 0 ]; then
+  csrf_invalid "is not a whole number of base64 quanta"
+fi
+csrf_bytes=$(( csrf_len / 4 * 3 - csrf_pad ))
+if [ "$csrf_bytes" -lt 32 ]; then
+  csrf_invalid "decodes to ${csrf_bytes} bytes"
+fi
+
 # Fail-closed sentinel guard for the gateway's secrets. The Auth Service has
 # SecretSentinelValidator, which refuses to BOOT on a dev sentinel; the gateway
 # has no equivalent, because APISIX's plugin check_schema cannot safely fail a
@@ -94,6 +126,17 @@ fi
 # shellcheck disable=SC2016
 envsubst '${GATEWAY_CLIENT_SECRET} ${CSRF_SIGNING_KEY} ${APISIX_IDP_TOKEN_URL} ${GATEWAY_CLIENT_ID}' \
   < "$TEMPLATE" > "$RENDERED"
+
+# Strip test-only routes from a production-intent render. The block is delimited
+# by sentinel comments in the template. The Resource Server endpoint behind
+# /api/_test/echo is gateway-test profile only (404 in prod), but a production
+# gateway config should not carry the route at all. The default dev/test render
+# keeps it for the gateway behaviour suite (which does not set this flag).
+if [ "${REQUIRE_NONDEV_SECRETS:-0}" = "1" ]; then
+  noecho="$(mktemp)"
+  sed '/# >>> test-only routes/,/# <<< test-only routes/d' "$RENDERED" > "$noecho"
+  mv "$noecho" "$RENDERED"
+fi
 
 # Startup guard: a REPLACE_ME_ in the rendered file means an unsubstituted
 # placeholder. Refuse to leave a foot-gun for the next compose up. Skip

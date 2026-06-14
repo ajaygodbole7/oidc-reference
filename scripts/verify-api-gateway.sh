@@ -82,7 +82,8 @@ assert_render_rc() { # label  eq|ne  expected_rc  ENV=VAL...
 DEV_GW='LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY'
 DEV_CSRF='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 REAL_GW='render-test-nondev-gateway-placeholder'
-REAL_CSRF='render-test-nondev-csrf-placeholder'
+# Valid base64, 32 bytes (256-bit), and NOT the all-A dev sentinel.
+REAL_CSRF='BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB='
 
 assert_render_rc "refuses dev gateway secret" eq 3 \
   REQUIRE_NONDEV_SECRETS=1 GATEWAY_CLIENT_SECRET="$DEV_GW" CSRF_SIGNING_KEY="$REAL_CSRF"
@@ -92,6 +93,30 @@ assert_render_rc "allows real secrets under prod flag" ne 3 \
   REQUIRE_NONDEV_SECRETS=1 GATEWAY_CLIENT_SECRET="$REAL_GW" CSRF_SIGNING_KEY="$REAL_CSRF"
 assert_render_rc "dev path unaffected (no prod flag)" ne 3 \
   GATEWAY_CLIENT_SECRET="$DEV_GW" CSRF_SIGNING_KEY="$DEV_CSRF"
+
+# ---- CSRF key shape (render-time analogue of the Auth Service boot check) ----
+# CSRF_SIGNING_KEY is HMAC material for the signed double-submit token (the
+# gateway verifies it in Lua with the same key). It must be base64-decodable and
+# >= 32 bytes (256-bit) or the HMAC is silently weak/wrong. Validated on EVERY
+# render — the dev sentinel is valid 32-byte base64, so the dev path is unchanged.
+assert_render_rc "refuses non-base64 csrf key" eq 3 \
+  GATEWAY_CLIENT_SECRET="$DEV_GW" CSRF_SIGNING_KEY='not_valid_base64_!!!'
+assert_render_rc "refuses short (<256-bit) csrf key" eq 3 \
+  GATEWAY_CLIENT_SECRET="$DEV_GW" CSRF_SIGNING_KEY='c2hvcnQ='
+
+# ---- Test-only route is excluded from a production-intent render ----
+# /api/_test/echo is a test-harness surface (the RS endpoint is gateway-test
+# profile only, 404 in prod). A production render (REQUIRE_NONDEV_SECRETS=1)
+# must omit the route entirely; the default dev/test render keeps it for the
+# gateway behaviour suite.
+# Match the route definition (id: api-test-echo), not the header doc comment
+# that also mentions /api/_test/echo.
+env REQUIRE_NONDEV_SECRETS=1 GATEWAY_CLIENT_SECRET="$REAL_GW" CSRF_SIGNING_KEY="$REAL_CSRF" \
+  sh scripts/render-apisix-config.sh >/dev/null 2>&1 || fail "prod-intent render failed"
+grep -q 'id: api-test-echo' "$render_local" && fail "prod render must omit the test echo route"
+env GATEWAY_CLIENT_SECRET="$DEV_GW" CSRF_SIGNING_KEY="$DEV_CSRF" \
+  sh scripts/render-apisix-config.sh >/dev/null 2>&1 || fail "dev render failed"
+grep -q 'id: api-test-echo' "$render_local" || fail "dev render must include the test echo route"
 
 if [ -n "$guard_backup" ]; then mv "$guard_backup" "$render_local"; else rm -f "$render_local"; fi
 echo "sentinel-guard checks passed"
