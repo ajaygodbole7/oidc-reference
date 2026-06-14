@@ -30,8 +30,8 @@ npm install
 npm run dev
 npm run build
 npm run test                              # Vitest unit tests
-npm run test:e2e                          # Playwright (anonymous always)
-E2E_FULL_STACK=1 npm run test:e2e         # Includes authenticated session
+npm run test:e2e                          # Playwright anonymous flow (auth.spec.ts)
+just e2e-auth                             # Authenticated full-stack proof (reference-flow.spec.ts)
 ../scripts/verify-frontend.sh
 ```
 
