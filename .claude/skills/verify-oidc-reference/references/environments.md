@@ -50,12 +50,14 @@ runtime's `compose` per the SKILL gate.
    false-fails (rg exits non-zero → "missing contract string"). Install it:
    `brew install ripgrep` / `apt-get install -y ripgrep`.
 
-3. **Node: any version ≥ 20.19** (`frontend/package.json` `engines`). The suite is
-   Node-version-agnostic — `frontend/src/test-setup.ts` binds jsdom's Web Storage
-   so the tests pass on whatever Node is installed, including Node 24+ where the
-   native `localStorage` global would otherwise shadow jsdom's and break the
-   token-isolation assertions. `.nvmrc` records a known-good version but is not
-   required; no `nvm use` needed.
+3. **Node: any version ≥ 20.19** (`frontend/package.json` `engines`, a floor — each
+   machine uses its own installed Node, no pin). The suite is Node-version-agnostic:
+   `frontend/src/test-setup.ts` binds jsdom's Web Storage so the tests pass on
+   whatever Node is installed, including Node 24+ where the native `localStorage`
+   global would otherwise shadow jsdom's and break the token-isolation assertions.
+   Run `npm install` (or `npm ci`) per machine so the platform/Node-appropriate
+   native bindings (e.g. the rolldown prebuilt vitest/vite uses) are fetched and,
+   on macOS, ad-hoc signed by the `postinstall` hook.
 
 4. **Manual Playwright runs** (the scripts handle this themselves) route `/auth`
    through APISIX because the Auth Service isn't host-published: set
