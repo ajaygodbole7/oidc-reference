@@ -13,7 +13,7 @@ purpose is to keep the rationale discoverable in one read.
 
 - Skim the headings for the system shape.
 - Read A6 for the split-implementation topology.
-- Read B2, B3, B4, B5, C4, and C5 for the load-bearing security choices.
+- Read B2, B3, B4, B5, C4, C5, and C6 for the load-bearing security choices.
 - Section F lists deliberate non-adoptions and reconsideration triggers.
 
 ## Decision Categories
@@ -537,6 +537,43 @@ defaults are pinned to avoid algorithm-confusion classes.
 Trade-off: an explicit JWT validator chain and custom authority converter.
 
 Spec: SPEC-0001 Resource Server; SPEC-0001 Threat Model.
+
+### C6. Stateless Token Validation And Bounded Revocation
+
+Every `/api/**` request is authorized from the access token itself. Nothing on
+the per-request path calls back to the IdP. Two layers validate, and neither
+puts an IdP round-trip in the request hot path:
+
+- The Resource Server validates the JWT on every request — signature, issuer,
+  expiration, algorithm, audience, scope, and roles (C5) — against a cached
+  JWK set. The signing keys are fetched once and refreshed only on cache expiry
+  or an unknown key id (key rotation), so the JWKS endpoint is not called per
+  request.
+- The Auth Service `/internal/resolve` does not re-validate the token it
+  returns. It obtained and stored that token, so on the hot path it checks the
+  stored expiry against a refresh-ahead window and returns the current access
+  token, calling the IdP token endpoint only when a refresh is actually due.
+
+Per-request token introspection (RFC 7662), or a JWKS/IdP round-trip on every
+call, was rejected. It would make revocation immediate but place a network call
+to the IdP in the hot path of every request — the bottleneck this split
+architecture exists to avoid.
+
+The consequence is a bounded revocation window. A still-valid access token is
+honored even if the IdP session was revoked moments earlier, because nothing on
+the per-request path asks the IdP. The window is bounded by the access-token
+lifespan (`accessTokenLifespan`, 120s in the local realm). At the next resolve
+within the refresh-ahead window the Auth Service calls the token endpoint, and a
+revoked session fails there: refresh-token rotation with reuse detection
+(`revokeRefreshToken`, `refreshTokenMaxReuse=0`) terminates it (C2). Logout
+terminates both sides at once via RP-initiated logout; explicit RFC 7009
+revocation on logout is a separate, deliberately omitted control (Section F).
+
+Trade-off: revocation latency is bounded by the access-token lifespan rather
+than enforced per request. Shorten `accessTokenLifespan` to tighten it, or add
+introspection on sensitive routes where a deployment needs immediate revocation.
+
+Spec: SPEC-0001 Resource Server; SPEC-0001 Refresh and Rotation.
 
 ## D. Runtime
 
