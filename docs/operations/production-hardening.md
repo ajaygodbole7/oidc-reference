@@ -51,7 +51,10 @@ in the lock itself), so it follows whatever store backs `StateStore`. Knobs:
 `app.refresh-lock-ttl` (lease time-to-live (TTL), default `10s` — above the IdP connect+read
 budget so the lease covers a full refresh), `app.refresh-lock-max-wait`
 (default `12s`, above the TTL so a crashed holder's lease always lapses within a
-contender's wait), `app.refresh-lock-poll` (default `50ms`).
+contender's wait), `app.refresh-lock-poll` (default `50ms`). These relationships
+(max-wait > ttl, poll < max-wait, every duration positive) are validated by
+`RefreshLockProperties` at boot, so a violating override fails closed loudly
+rather than booting a misconfigured lock.
 
 The algorithm (`DistributedRefreshKeyLock`, proven by `DistributedRefreshKeyLockTest`
 and the `compareAndDelete` parity cases in `RedisStateStoreParityTest`):
@@ -65,8 +68,10 @@ and the `compareAndDelete` parity cases in `RedisStateStoreParityTest`):
   then DEL`) so an instance never deletes a lease another acquired after ours
   expired by TTL.
 - **Fail closed**: if the lease cannot be acquired within `max-wait` (or the store
-  errors), throw rather than refresh unguarded — the controller surfaces a transient
-  5xx and the gateway keeps the session cookie and retries.
+  errors), throw rather than refresh unguarded. The controller maps the throw to a
+  deliberate, audited (`refresh_failed` / `refresh_lock_unavailable`),
+  `Cache-Control: no-store` `503` response (not an unmapped 500), so the gateway
+  keeps the session cookie and retries.
 
 **Proof (two real replicas).** `scripts/e2e-distributed-lock.sh` with
 `compose.distributed-lock.yml` runs **two** `auth-service` replicas on one shared

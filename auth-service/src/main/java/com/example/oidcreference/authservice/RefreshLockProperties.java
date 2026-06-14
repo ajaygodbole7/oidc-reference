@@ -45,6 +45,32 @@ public record RefreshLockProperties(
           "app.refresh-lock must be 'in-process' or 'distributed' (case-insensitive), got: "
               + refreshLock);
     }
+    // Validate the lease relationships, not just the mode. @NotNull only proves
+    // the values were bound; it does not catch a misconfiguration that makes the
+    // distributed lock unsafe — e.g. max-wait <= ttl (a crashed holder's lease
+    // would not lapse within a contender's wait, so the contender always times
+    // out) or poll >= max-wait (it would never poll). The defaults satisfy these;
+    // an override that breaks them fails closed at boot, loudly.
+    requirePositive("app.refresh-lock-ttl", refreshLockTtl);
+    requirePositive("app.refresh-lock-max-wait", refreshLockMaxWait);
+    requirePositive("app.refresh-lock-poll", refreshLockPoll);
+    if (refreshLockMaxWait.compareTo(refreshLockTtl) <= 0) {
+      throw new IllegalArgumentException(
+          "app.refresh-lock-max-wait (" + refreshLockMaxWait + ") must be GREATER THAN "
+              + "app.refresh-lock-ttl (" + refreshLockTtl + ") so a crashed holder's lease "
+              + "lapses within a contender's wait");
+    }
+    if (refreshLockPoll.compareTo(refreshLockMaxWait) >= 0) {
+      throw new IllegalArgumentException(
+          "app.refresh-lock-poll (" + refreshLockPoll + ") must be LESS THAN "
+              + "app.refresh-lock-max-wait (" + refreshLockMaxWait + ")");
+    }
+  }
+
+  private static void requirePositive(String name, Duration value) {
+    if (value == null || value.isZero() || value.isNegative()) {
+      throw new IllegalArgumentException(name + " must be a positive duration, got: " + value);
+    }
   }
 
   boolean distributed() {

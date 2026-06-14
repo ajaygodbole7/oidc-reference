@@ -83,10 +83,14 @@ class InternalResolveControllerTest {
   @jakarta.annotation.Resource
   private RecordingTokenRefreshClient tokenRefreshClient;
 
+  @jakarta.annotation.Resource
+  private ToggleableRefreshLock refreshLock;
+
   @BeforeEach
   void resetState() {
     stateStore.clear();
     tokenRefreshClient.reset();
+    refreshLock.failAcquire = false;
   }
 
   @Test
@@ -569,6 +573,42 @@ class InternalResolveControllerTest {
   }
 
   @Test
+  void resolveReturns503WhenRefreshLockCannotBeAcquired(CapturedOutput output) throws Exception {
+    // The distributed lock failed to acquire within max-wait, so withLock throws
+    // to fail closed (never refresh unguarded). The controller must map that to a
+    // deliberate, AUDITED, no-store, transient 503 — not an unmapped 500 — so the
+    // gateway keeps the session cookie and retries. The session is left intact
+    // (a transient infra failure, not a revocation).
+    refreshLock.failAcquire = true;
+    String sid = "sid-lock-unavailable";
+    SessionRecord expiring = new SessionRecord(
+        "stale-access",
+        "refresh-1",
+        "id-token-1",
+        Instant.now().plusSeconds(10),
+        Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    storeSession(sid, expiring);
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+            .header().string("Cache-Control", "no-store"))
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+
+    assertThat(stateStore.get("sess:" + sid))
+        .as("a transient lock failure must NOT invalidate the session")
+        .isPresent();
+    assertThat(output.getOut())
+        .contains("event=refresh_failed")
+        .contains("status=503")
+        .contains("reason=refresh_lock_unavailable");
+  }
+
+  @Test
   void resolveDeletesSessionWhenRefreshedRecordCrossesAbsoluteTtl(CapturedOutput output)
       throws Exception {
     // Race: the absolute ceiling crosses during the upstream refresh network
@@ -733,6 +773,12 @@ class InternalResolveControllerTest {
 
     @Bean
     @Primary
+    ToggleableRefreshLock refreshLock() {
+      return new ToggleableRefreshLock();
+    }
+
+    @Bean
+    @Primary
     OidcProviderMetadata oidcProviderMetadata() {
       return new OidcProviderMetadata(
           "oidc-reference-auth",
@@ -764,6 +810,24 @@ class InternalResolveControllerTest {
         throw new UnsupportedOperationException(
             "test stub — real decoding bypassed by jwt() post-processor");
       };
+    }
+  }
+
+  // A RefreshLock that delegates to the real per-JVM lock but can be flipped to
+  // simulate the DISTRIBUTED lock failing to acquire (DistributedRefreshKeyLock
+  // throws to fail closed on a max-wait timeout / store error / interrupt). Lets
+  // the controller's transient-mapping be tested without a two-replica stack;
+  // delegating to a real InProcessRefreshLock keeps the serialization test honest.
+  static class ToggleableRefreshLock implements RefreshLock {
+    volatile boolean failAcquire = false;
+    private final RefreshLock delegate = new InProcessRefreshLock();
+
+    @Override
+    public <T> T withLock(String key, java.util.function.Supplier<T> action) {
+      if (failAcquire) {
+        throw new IllegalStateException("could not acquire refresh lock within PT12S");
+      }
+      return delegate.withLock(key, action);
     }
   }
 

@@ -58,4 +58,39 @@ class RefreshLockPropertiesTest {
         .rootCause()
         .hasMessageContaining("app.refresh-lock");
   }
+
+  @Test
+  void maxWaitNotGreaterThanTtlIsRejected() {
+    // max-wait must EXCEED the lease TTL so a crashed holder's lease lapses
+    // within a contender's wait; equal would mean the contender always times out.
+    assertThatThrownBy(() -> bind(Map.of(
+        "app.refresh-lock", "distributed",
+        "app.refresh-lock-ttl", "10s",
+        "app.refresh-lock-max-wait", "10s")))
+        .hasRootCauseInstanceOf(IllegalArgumentException.class)
+        .rootCause()
+        .hasMessageContaining("max-wait");
+  }
+
+  @Test
+  void pollNotLessThanMaxWaitIsRejected() {
+    assertThatThrownBy(() -> bind(Map.of(
+        "app.refresh-lock", "distributed",
+        "app.refresh-lock-ttl", "10s",
+        "app.refresh-lock-max-wait", "12s",
+        "app.refresh-lock-poll", "12s")))
+        .hasRootCauseInstanceOf(IllegalArgumentException.class)
+        .rootCause()
+        .hasMessageContaining("poll");
+  }
+
+  @Test
+  void nonPositiveTtlIsRejected() {
+    assertThatThrownBy(() -> bind(Map.of(
+        "app.refresh-lock", "distributed",
+        "app.refresh-lock-ttl", "0s")))
+        .hasRootCauseInstanceOf(IllegalArgumentException.class)
+        .rootCause()
+        .hasMessageContaining("ttl");
+  }
 }

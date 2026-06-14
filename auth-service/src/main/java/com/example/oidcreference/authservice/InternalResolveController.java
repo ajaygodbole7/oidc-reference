@@ -132,7 +132,22 @@ class InternalResolveController {
     // Refresh due: serialize under the per-session lock so concurrent resolves
     // on one sid collapse to a single upstream refresh (the loser re-reads
     // sess:{sid} under the lock and finds the rotated token).
-    return refreshLock.withLock(req.sid(), () -> refreshUnderLock(req.sid(), sessKey, request));
+    //
+    // refreshUnderLock maps its own outcomes (invalid_grant 409, upstream 502,
+    // ...) and RETURNS them, so the only throwable out of withLock is a lock
+    // INFRASTRUCTURE failure: the distributed lock failing to acquire within
+    // max-wait, a store error, or an interrupt — which it throws to fail closed
+    // rather than refresh unguarded (the in-process default never throws here).
+    // Map it to a deliberate, audited, no-store transient 503 (not an unmapped
+    // 500) so the gateway keeps the session cookie and retries.
+    try {
+      return refreshLock.withLock(req.sid(), () -> refreshUnderLock(req.sid(), sessKey, request));
+    } catch (RuntimeException e) {
+      log.warn("refresh lock unavailable; failing closed (transient) for sid_hash={}",
+          SecurityAudit.hashSid(req.sid()));
+      SecurityAudit.event(request, 503, "refresh_failed", "refresh_lock_unavailable");
+      return transientProblem(503, "refresh temporarily unavailable, retry");
+    }
   }
 
   // Runs while holding the per-session refresh lock. Re-reads sess:{sid} — a
@@ -336,6 +351,22 @@ class InternalResolveController {
         .body(pd);
   }
 
+  // Like problem(), but for a transient/retryable outcome (the refresh lock could
+  // not be acquired): explicit Cache-Control: no-store — a token-adjacent error
+  // response must never be cached — plus a short Retry-After to invite the
+  // gateway's retry while it keeps the session cookie.
+  private static ResponseEntity<ProblemDetail> transientProblem(int status, String detail) {
+    var pd = ProblemDetail.forStatus(status);
+    pd.setTitle(titleFor(status));
+    pd.setDetail(detail);
+    pd.setType(URI.create("about:blank"));
+    return ResponseEntity.status(status)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .header("Cache-Control", "no-store")
+        .header("Retry-After", "1")
+        .body(pd);
+  }
+
   private static String titleFor(int status) {
     return switch (status) {
       case 400 -> "Bad Request";
@@ -343,6 +374,7 @@ class InternalResolveController {
       case 404 -> "Not Found";
       case 409 -> "Conflict";
       case 502 -> "Bad Gateway";
+      case 503 -> "Service Unavailable";
       default -> "Error";
     };
   }
