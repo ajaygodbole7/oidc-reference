@@ -170,8 +170,8 @@ Before a real deployment:
 
 - Establish a correlation-ID contract: the gateway mints an `X-Request-Id` (or
   W3C `traceparent`) if absent, forwards it on every hop, and both services log
-  it on every line including the audit events. This is cheap, high-value, and a
-  precondition for the distributed tracing this document already calls for.
+  it on every line including the audit events. It is also a precondition for the
+  distributed tracing this document already calls for.
 - Add RED metrics (rate, errors, duration) per route and an explicit SLO for the
   IdP token-endpoint dependency, since refresh latency and availability are
   bounded by the IdP, not by this stack.

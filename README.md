@@ -1,19 +1,19 @@
 # oidc-reference
 
-A complete, **runnable** reference for the Backend-for-Frontend (BFF) session pattern: browser-app OAuth 2.1 and OpenID Connect Core 1.0 with **no tokens in the browser** — and a live test that fails if one ever leaks.
+A complete, **runnable** reference for the Backend-for-Frontend (BFF) session pattern: browser-app OAuth 2.1 and OpenID Connect Core 1.0 with **no tokens in the browser**, and a live test that fails if one ever leaks.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Java](https://img.shields.io/badge/Java-25-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4-green)
 ![Status](https://img.shields.io/badge/status-reference%20implementation-informational)
 
-> **No access, refresh, or ID token ever reaches the browser — and an end-to-end test asserts it.** The browser holds only an opaque `HttpOnly` session cookie; the tokens live server-side in a Redis-compatible store. The test inspects the browser's storage and cookies to confirm it.
+> **No access, refresh, or ID token ever reaches the browser, and an end-to-end test asserts it.** The browser holds only an opaque `HttpOnly` session cookie; the tokens live server-side in a Redis-compatible store. The test inspects the browser's storage and cookies to confirm it.
 
 ---
 
 ## 30-second tour
 
-1. **The browser holds no tokens and runs no OIDC library** — just an opaque `__Host-sid` cookie and a CSRF token.
+1. **The browser holds no tokens and runs no OIDC library**: just an opaque `__Host-sid` cookie and a CSRF token.
 2. **A confidential server-side BFF owns the OAuth client role**, split into a dedicated **Auth Service** (the OIDC client) and an **API Gateway** (routing + bearer injection).
 3. **Every `/api/**` call is the phantom-token pattern:** the gateway swaps the opaque cookie for a real access token (resolved by the Auth Service) and injects it as the `Bearer` proxied to the Resource Server.
 
@@ -26,7 +26,7 @@ flowchart LR
     A -.->|"OAuth round-trip"| K[IdP]
 ```
 
-If you read nothing else, run `just up` and then `just e2e-auth` — login → API call → token refresh → logout, end to end.
+If you read nothing else, run `just up` and then `just e2e-auth`: login → API call → token refresh → logout, end to end.
 
 ---
 
@@ -37,7 +37,7 @@ Most OIDC walkthroughs hand the SPA a public client running PKCE in the browser.
 | Decision | This reference | Common alternative |
 | --- | --- | --- |
 | Where tokens live | Server-side BFF; access, refresh, and ID tokens never reach the browser | A public-client SPA running PKCE in the browser (tokens are XSS-reachable), or a backend that still hands the access token to JavaScript |
-| Component shape | Split Auth Service (the OAuth/OIDC client) + API Gateway (routing, bearer injection) | One combined service — valid, but mixes the OAuth-client and API-gateway roles |
+| Component shape | Split Auth Service (the OAuth/OIDC client) + API Gateway (routing, bearer injection) | One combined service; valid, but mixes the OAuth-client and API-gateway roles |
 | Session state | Two server-side keyspaces, `tx:{state}` (pre-auth, keyed by the OAuth `state`) and `sess:{sid}` (post-auth); no pre-auth session cookie, so no session-fixation class | A framework HTTP-session blob |
 | Provider coupling | Branch on `iss` / `aud` / scopes / claim paths from `.well-known/openid-configuration`; differences live in config | Provider-specific APIs baked into Java or the gateway |
 
@@ -51,7 +51,7 @@ Full rationale and reconsideration triggers live in [`docs/architecture/architec
 
 - **A live test asserts no token reaches the browser.** The `id_token` never reaches browser JS, storage, SPA-readable JSON, SPA-visible cookies, or app logs; only the server's `/auth/logout/continue` → IdP redirect carries `id_token_hint`, and the test confirms it by inspecting the browser.
 - **Each control is linked to its spec, code, and test.** The [Security controls](#security-controls) table maps each control to its RFC/OIDC section, the code that implements it, and the gate that proves it.
-- **Identity Providers are swappable by configuration.** The code carries no provider-specific behavior — it branches on standard OIDC values from discovery. `just e2e-portability` runs the same code against a second realm whose tokens carry a different shape.
+- **Identity Providers are swappable by configuration.** The code carries no provider-specific behavior; it branches on standard OIDC values from discovery. `just e2e-portability` runs the same code against a second realm whose tokens carry a different shape.
 
 ---
 
@@ -65,10 +65,10 @@ Full rationale and reconsideration triggers live in [`docs/architecture/architec
 | `backend-resource-server/` | JWT validation only; never sees session cookies. |
 | `authorization-server/` | Keycloak realm + Compose service. |
 
-The vendor choices — Keycloak, APISIX, Valkey — are interchangeable. Appendix A of [SPEC-0001](docs/specs/SPEC-0001-core-oidc-flows.md) is the vendor-swap matrix.
+The vendor choices (Keycloak, APISIX, Valkey) are interchangeable. Appendix A of [SPEC-0001](docs/specs/SPEC-0001-core-oidc-flows.md) is the vendor-swap matrix.
 
 <details>
-<summary><strong>Flow 1 — Login (Authorization Code + PKCE)</strong></summary>
+<summary><strong>Flow 1: Login (Authorization Code + PKCE)</strong></summary>
 
 Login starts when the browser hits a protected `/api/**` URL with no session, or when the user clicks "Sign in". On the no-session `/api/**` case:
 
@@ -106,9 +106,9 @@ sequenceDiagram
 </details>
 
 <details>
-<summary><strong>Flow 2 — Identity check (<code>/auth/me</code>)</strong></summary>
+<summary><strong>Flow 2: Identity check (<code>/auth/me</code>)</strong></summary>
 
-The SPA holds no session state of its own. It calls `/auth/me` to learn whether a session exists and who the user is. `/auth/me` is a pure read — it never extends the session and never returns a token.
+The SPA holds no session state of its own. It calls `/auth/me` to learn whether a session exists and who the user is. `/auth/me` is a pure read; it never extends the session and never returns a token.
 
 ```mermaid
 sequenceDiagram
@@ -132,9 +132,9 @@ sequenceDiagram
 </details>
 
 <details>
-<summary><strong>Flow 3 — Authenticated request (phantom token + transparent refresh)</strong></summary>
+<summary><strong>Flow 3: Authenticated request (phantom token + transparent refresh)</strong></summary>
 
-Every `/api/**` call carries only the opaque session cookie — the phantom-token pattern, where only the Auth Service touches the session store (see [`docs/architecture/phantom-token-session-resolution.md`](docs/architecture/phantom-token-session-resolution.md)):
+Every `/api/**` call carries only the opaque session cookie, the phantom-token pattern, where only the Auth Service touches the session store (see [`docs/architecture/phantom-token-session-resolution.md`](docs/architecture/phantom-token-session-resolution.md)):
 
 - The gateway resolves the sid via `/internal/resolve` (Client Credentials over an internal RPC).
 - The Auth Service slides the idle window and refreshes the access token if near expiry.
@@ -173,7 +173,7 @@ sequenceDiagram
 </details>
 
 <details>
-<summary><strong>Flow 4 — Logout (RP-initiated, <code>id_token_hint</code> stays server-side)</strong></summary>
+<summary><strong>Flow 4: Logout (RP-initiated, <code>id_token_hint</code> stays server-side)</strong></summary>
 
 The IdP end-session URL carries `id_token_hint` (PII), so it never reaches SPA JavaScript. The Auth Service hands back a same-origin, single-use handle and emits the IdP redirect itself from `/auth/logout/continue`.
 
@@ -198,7 +198,7 @@ sequenceDiagram
 </details>
 
 <details>
-<summary><strong>Flow 5 — Service-to-service (Client Credentials)</strong></summary>
+<summary><strong>Flow 5: Service-to-service (Client Credentials)</strong></summary>
 
 Machine callers obtain a token directly from the Authorization Server and call the Resource Server with a bearer. Neither the Auth Service nor the API Gateway is in the path.
 
@@ -219,7 +219,7 @@ sequenceDiagram
 
 </details>
 
-Wire-level detail — exact cookie attributes, TTLs, validation rules, and the `/internal/resolve`, `sess:{sid}`, and signed-CSRF contracts — lives in [SPEC-0001](docs/specs/SPEC-0001-core-oidc-flows.md).
+Wire-level detail (exact cookie attributes, TTLs, validation rules, and the `/internal/resolve`, `sess:{sid}`, and signed-CSRF contracts) lives in [SPEC-0001](docs/specs/SPEC-0001-core-oidc-flows.md).
 
 ---
 
@@ -231,9 +231,9 @@ This reference uses four cookies, each with its own scope and `SameSite` value:
 | --- | --- | --- | --- |
 | `__Host-sid` | No (`HttpOnly`) | `Lax` | The only credential. `Lax` is **required** so the cross-site Keycloak → `/auth/callback` redirect still sends it; the signed CSRF token supplies the state-change protection `Lax` alone wouldn't. |
 | `XSRF-TOKEN` | Yes | `Strict` | Carries an HMAC-SHA256-signed value (`<value>.<hmac>`, bound to the `sid`). The SPA echoes it as `X-XSRF-TOKEN`. **Strict** because, unlike the session cookie, it's never needed on the cross-site callback. |
-| `oauth_tx` | No (`HttpOnly`) | `Lax` | Browser-binding cookie issued at `/auth/login`, scoped to `Path=/auth/callback/idp`. Its HMAC is stored in `tx:{state}`; the callback rejects a mismatch — defeating an attacker who exfiltrates `(code, state)` from a different user-agent. |
+| `oauth_tx` | No (`HttpOnly`) | `Lax` | Browser-binding cookie issued at `/auth/login`, scoped to `Path=/auth/callback/idp`. Its HMAC is stored in `tx:{state}`; the callback rejects a mismatch, defeating an attacker who exfiltrates `(code, state)` from a different user-agent. |
 
-Two finer points worth calling out:
+Two finer points:
 
 - **Why signed double-submit.** An attacker with a sibling-subdomain `document.cookie` write could forge a matching unsigned pair. The HMAC (bound to the `sid`) makes a forged pair fail validation, so unsigned double-submit is rejected outright.
 - **Sid rotation on refresh (control A6).** A token refresh rotates the `sid`: the Auth Service atomically moves `sess:{sid}` → `sess:{sid'}` and leaves a short-lived `rotated:{sid}` breadcrumb so a request in flight on the old sid follows it rather than losing the session. `/internal/resolve` returns `rotated_sid`, `rotated_sid_max_age`, and `rotated_csrf`, and the gateway re-issues both the `__Host-sid` and the HMAC-bound `XSRF-TOKEN`. This bounds a once-observed sid to a single refresh cycle, not the session lifetime ([SECURITY](SECURITY.md) S-5). Breadcrumb and logout-race mechanics are in [SPEC-0001](docs/specs/SPEC-0001-core-oidc-flows.md).
@@ -259,7 +259,7 @@ Each control maps to its reference and the code that implements it.
 | Step-up: `auth_time` recency **and** `acr` assurance gates on a sensitive route | OIDC Core §3.1.2.1, [RFC 9470](https://datatracker.ietf.org/doc/rfc9470/) | RS `ApiController#admin`, `AuthController#stepUp`, realm `auth_time` + `acr` mappers |
 | `redirect_uri` pinned via `app.base-url` (defeats Host-header injection) | — | `AuthController#baseUrl` |
 | Per-session refresh lock (in-process default, distributed opt-in) | — | `RefreshLock`, `InProcessRefreshLock`, `DistributedRefreshKeyLock`, `RefreshLockConfig`, `bff-session.lua` |
-| Sid rotation on refresh — atomic `sess:{sid}`→`sess:{sid'}` move + `rotated:{sid}` breadcrumb so in-flight requests follow it | — | `InternalResolveController` (A6); proven by `reference-flow.spec.ts` story 17 and `e2e-distributed-lock.sh` |
+| Sid rotation on refresh: atomic `sess:{sid}`→`sess:{sid'}` move + `rotated:{sid}` breadcrumb so in-flight requests follow it | — | `InternalResolveController` (A6); proven by `reference-flow.spec.ts` story 17 and `e2e-distributed-lock.sh` |
 | Rate-limit on `/auth/login` + `/auth/callback/idp` | — | `apisix.yaml.template` |
 | Sentinel guard refusing default dev secrets (fail-closed at boot/render) | — | `SecretSentinelValidator`, `render-apisix-config.sh`, `bff-session.lua` |
 
@@ -282,7 +282,7 @@ Full rationale in [`docs/architecture/architecture-decisions.md`](docs/architect
 
 ## Stack
 
-> **Heads-up:** the stack is recent by design — Java 25, Spring Boot 4, Spring Security 7. Exact versions are pinned in `frontend/package.json`, the service `pom.xml` files, and `compose.yaml`.
+> **Heads-up:** the stack is recent (Java 25, Spring Boot 4, Spring Security 7). Exact versions are pinned in `frontend/package.json`, the service `pom.xml` files, and `compose.yaml`.
 
 - React 19 + TypeScript, Vite
 - Java 25 + Spring Boot 4 (Auth Service, Resource Server)
@@ -304,8 +304,8 @@ Works on macOS, Linux, and Windows.
 - **Docker Desktop** (macOS/Windows) or any Docker-compatible engine such as Podman.
 - **Node 20+** for the SPA dev server.
 - **A POSIX shell** for `scripts/*.sh`: built in on macOS/Linux; on Windows use WSL2 (recommended) or Git Bash.
-- **Java 25** — only needed on the host if you run the Spring modules or their unit tests *outside* Docker (Docker builds the Java images for you).
-- **`just` is optional** — it's a command runner; each recipe wraps a script (`just up` runs `sh scripts/up.sh`). Install via `brew install just`, `winget install Casey.Just`, or `scoop install just`.
+- **Java 25**: only needed on the host if you run the Spring modules or their unit tests *outside* Docker (Docker builds the Java images for you).
+- **`just` is optional**: it's a command runner; each recipe wraps a script (`just up` runs `sh scripts/up.sh`). Install via `brew install just`, `winget install Casey.Just`, or `scoop install just`.
 
 ```bash
 # 1. Bring the reference stack up (Keycloak, Valkey, APISIX, Auth Service, Resource Server).
@@ -315,8 +315,8 @@ just up                 # or, without just:  sh scripts/up.sh
 cd frontend && npm install && npm run dev
 ```
 
-- **SPA:** <http://127.0.0.1:5173/> — sign in as `alice` / `alice`.
-- **Keycloak admin:** <http://localhost:8080/> — `admin` / `admin` to inspect the seeded realm.
+- **SPA:** <http://127.0.0.1:5173/>, sign in as `alice` / `alice`.
+- **Keycloak admin:** <http://localhost:8080/>, `admin` / `admin` to inspect the seeded realm.
 
 **Verify it**
 
@@ -335,34 +335,34 @@ OAuth/OIDC vocabulary, mapped to this repo's components.
 
 | Term | Meaning |
 | --- | --- |
-| OIDC | OpenID Connect — the identity layer on top of OAuth 2.0. |
+| OIDC | OpenID Connect, the identity layer on top of OAuth 2.0. |
 | Relying Party (RP) | The app that delegates login to an identity provider. Here, the Auth Service. |
 | Authorization Server (AS) | The service that authenticates the user and issues tokens. Here, Keycloak. |
 | Identity Provider (IdP) | The Authorization Server in its identity role; used interchangeably here. |
 | Resource Server (RS) | The API that validates access tokens and serves data. Here, `backend-resource-server`. |
-| BFF | Backend-for-Frontend — the server-side component that holds tokens so the browser never does. |
-| `sid` / session cookie | The `sid` is the opaque session identifier; the server keys the record on it (`sess:{sid}`). The browser carries the `sid` in `__Host-sid` — its only credential. The cookie is the envelope; the `sid` is the value inside. |
-| PKCE | Proof Key for Code Exchange — binds an authorization code to the client that began the flow. |
+| BFF | Backend-for-Frontend; the server-side component that holds tokens so the browser never does. |
+| `sid` / session cookie | The `sid` is the opaque session identifier; the server keys the record on it (`sess:{sid}`). The browser carries the `sid` in `__Host-sid`, its only credential. The cookie is the envelope; the `sid` is the value inside. |
+| PKCE | Proof Key for Code Exchange; binds an authorization code to the client that began the flow. |
 | JWT / JWKS | JSON Web Token / JSON Web Key Set (the public keys that verify a JWT signature). |
 | CSRF / XSS | Cross-Site Request Forgery / Cross-Site Scripting. |
-| SPA | Single-page application — the browser app (here, React). |
-| acr / LoA | Authentication Context Class Reference / Level of Assurance — how strongly the user authenticated. |
+| SPA | Single-page application; the browser app (here, React). |
+| acr / LoA | Authentication Context Class Reference / Level of Assurance; how strongly the user authenticated. |
 | SSO | Single sign-on. |
 
 ---
 
 ## Documentation
 
-- [`docs/specs/SPEC-0001-core-oidc-flows.md`](docs/specs/SPEC-0001-core-oidc-flows.md) — the build contract. Wire formats for `sess:{sid}`, `tx:{state}`, `/internal/resolve`, signed CSRF; threat model; trust boundaries. Appendix A is the vendor-swap matrix.
-- [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md) — rationale + rejected alternatives.
-- [`SECURITY.md`](SECURITY.md) — threat model, crypto primitives, key handling, audit-logging surface, production-hardening list, vulnerability reporting.
-- [`OIDC-compliance.md`](OIDC-compliance.md) — conformance matrix against OpenID Connect Core 1.0 + Discovery + RP-Initiated Logout.
-- [`RFC9700-compliance.md`](RFC9700-compliance.md) — control-by-control status against RFC 9700 (OAuth 2.0 Security BCP / OAuth 2.1 baseline).
-- [`RFC9470-compliance.md`](RFC9470-compliance.md) — control-by-control status against RFC 9470 (Step-Up Authentication Challenge).
-- [`docs/reference/refresh-rotation.md`](docs/reference/refresh-rotation.md) — refresh-token rotation policy and the `app.refresh-require-rotation` knob.
-- [`docs/operations/provider-adapters.md`](docs/operations/provider-adapters.md) — IdP swap walkthrough (Keycloak / Auth0 / Okta / Entra).
-- [`docs/operations/production-hardening.md`](docs/operations/production-hardening.md) — the gap list between this local reference and a real deployment.
-- [`AGENTS.md`](AGENTS.md) — contributor operating contract.
+- [`docs/specs/SPEC-0001-core-oidc-flows.md`](docs/specs/SPEC-0001-core-oidc-flows.md): the build contract. Wire formats for `sess:{sid}`, `tx:{state}`, `/internal/resolve`, signed CSRF; threat model; trust boundaries. Appendix A is the vendor-swap matrix.
+- [`docs/architecture/architecture-decisions.md`](docs/architecture/architecture-decisions.md): rationale + rejected alternatives.
+- [`SECURITY.md`](SECURITY.md): threat model, crypto primitives, key handling, audit-logging surface, production-hardening list, vulnerability reporting.
+- [`OIDC-compliance.md`](OIDC-compliance.md): conformance matrix against OpenID Connect Core 1.0 + Discovery + RP-Initiated Logout.
+- [`RFC9700-compliance.md`](RFC9700-compliance.md): control-by-control status against RFC 9700 (OAuth 2.0 Security BCP / OAuth 2.1 baseline).
+- [`RFC9470-compliance.md`](RFC9470-compliance.md): control-by-control status against RFC 9470 (Step-Up Authentication Challenge).
+- [`docs/reference/refresh-rotation.md`](docs/reference/refresh-rotation.md): refresh-token rotation policy and the `app.refresh-require-rotation` knob.
+- [`docs/operations/provider-adapters.md`](docs/operations/provider-adapters.md): IdP swap walkthrough (Keycloak / Auth0 / Okta / Entra).
+- [`docs/operations/production-hardening.md`](docs/operations/production-hardening.md): the gap list between this local reference and a real deployment.
+- [`AGENTS.md`](AGENTS.md): contributor operating contract.
 
 ---
 

@@ -18,7 +18,7 @@ token. The gateway injects that token upstream.
 
 ## This is the phantom-token pattern
 
-What we built has a name. The edge holds an opaque by-reference token (the sid)
+The edge holds an opaque by-reference token (the sid)
 and **introspects it** via a token service (the Auth Service) to obtain the
 by-value JSON Web Token (JWT) it forwards upstream.
 
@@ -34,22 +34,22 @@ by-value JSON Web Token (JWT) it forwards upstream.
 - The previous direct-read was a valid but non-canonical performance shortcut;
   this moves the reference *toward* the standard shape.
 
-## Why — two wins
+## Why: two wins
 
 1. **Decoupling: data coupling → API coupling.** Sharing a Redis *schema* across
-   two services is the worst kind of coupling — a storage change ripples across
+   two services is the worst kind of coupling: a storage change ripples across
    both, and the gateway needs Valkey host/port/credentials. A versioned internal
    API lets the Auth Service change its store (Redis → DynamoDB → encrypted-at-
    rest → add an entitlements service that shares Redis) with **zero gateway
    changes**.
 2. **Security: smaller edge blast radius.** A compromised gateway used to have
-   direct read access to the **entire** session keyspace — it could dump every
+   direct read access to the **entire** session keyspace. It could dump every
    user's tokens out of Valkey. It now has **no store access**; it can only
    resolve a sid presented to it, through an API the Auth Service can rate-limit,
    audit, and scope. Removing store credentials from the edge is a real
    attack-surface reduction.
 
-## The cost — the Auth Service is now on the hot path
+## The cost: the Auth Service is now on the hot path
 
 The Auth Service used to be off the hot path (the gateway read Valkey directly so
 the Auth Service stayed login-frequency only). With introspection, **every
@@ -58,12 +58,12 @@ also takes high-frequency, small-payload resolve traffic and must be HA and scal
 with API throughput. There is one extra internal RPC of latency per call (cheap
 on a local network, non-zero).
 
-## The cache decision — we deliberately do NOT cache
+## The cache decision: we do not cache
 
 The phantom-token guidance explicitly recommends **caching** the introspection
 result ("a by-value token can be cached until it expires"). We deliberately do
 **not** cache at the gateway, because a gateway cache keyed by the token lifetime
-would break **instant revocation** — the property where deleting `sess:{sid}`
+would break **instant revocation**, the property where deleting `sess:{sid}`
 server-side makes the very next request 401 (covered by e2e story 12). The
 tradeoff, stated plainly:
 
@@ -78,7 +78,7 @@ and document the revocation window as a deliberate dial. Not now.
 ## JWKS cost accounting (a common misconception)
 
 - The per-request **JWT signature validation (JSON Web Key Set (JWKS)) lives at the Resource Server
-  in both designs** — it never lived at the gateway, and the redesign does not
+  in both designs**. It never lived at the gateway, and the redesign does not
   move it. The RS verifies the signature against a *cached* JWKS (refresh-ahead,
   local RSA verify).
 - The Auth Service uses JWKS only at login and refresh (id-token validation),
@@ -95,7 +95,7 @@ The per-session refresh lock stays in the Auth Service, around the refresh
 portion of resolve.
 
 - The phantom-token move adds **no new concurrency hazard**: the lock is
-  engaged only near expiry (a fresh-token resolve is lock-free — read, slide,
+  engaged only near expiry (a fresh-token resolve is lock-free: read, slide,
   return), exactly as before.
 - The reference stays **single-instance**, so the in-process `ReentrantLock` is
   correct and sufficient. We do **not** add a distributed lock now: unexercised,
@@ -109,7 +109,7 @@ portion of resolve.
   one upstream refresh) is proven by
   `InternalResolveControllerTest.concurrentResolveCallsForSameSidSerializeOnLock`.
 
-## `/auth/me` vs `/internal/resolve` — shared core, two projections
+## `/auth/me` vs `/internal/resolve`: shared core, two projections
 
 Both look up `sess:{sid}` and enforce the absolute ceiling, so they reuse one
 lookup core rather than duplicating it. But they are two distinct projections and
@@ -117,13 +117,13 @@ stay separate endpoints:
 
 | | `/auth/me` | `/internal/resolve` |
 |---|---|---|
-| Output | claims only — **never a token** (the headline invariant) | the access token |
+| Output | claims only, **never a token** (the headline invariant) | the access token |
 | Refresh | never (pure read) | refreshes near expiry |
-| Idle slide | never (non-extending liveness probe — the C9.3 property) | slides (`/api` activity) |
+| Idle slide | never (non-extending liveness probe, the C9.3 property) | slides (`/api` activity) |
 | Trust | browser-facing, session-cookie-auth | internal, Client-Credentials-auth |
 
 Merging them would be one config slip from the access token riding the
-browser-facing `/auth/me` path — the exact leak the BFF exists to prevent.
+browser-facing `/auth/me` path, the exact leak the BFF exists to prevent.
 
 ## Sources
 

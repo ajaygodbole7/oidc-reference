@@ -83,7 +83,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 
 #### §3.1.3.7 — ID Token Validation (the 11 steps)
 
-The single most-cited OIDC-conformance checklist.
+Each of the eleven validation steps, mapped to the code that enforces it.
 
 | Step | Requirement | Status | Where / How |
 |---|---|---|---|
