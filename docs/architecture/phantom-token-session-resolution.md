@@ -91,23 +91,64 @@ and document the revocation window as a deliberate dial. Not now.
 
 ## Distributed-lock analysis
 
-The per-session refresh lock stays in the Auth Service, around the refresh
-portion of resolve.
+The per-session refresh lock lives in the Auth Service, around the refresh
+portion of resolve. The phantom-token move adds no new concurrency hazard at the
+gateway: the lock engages only near expiry, and a fresh-token resolve is
+lock-free (read, slide, return). What the hot-path move changes is the *scale* at
+which an existing hazard bites, because resolve now runs on every `/api/**`
+request and invites horizontal scaling of the Auth Service.
 
-- The phantom-token move adds **no new concurrency hazard**: the lock is
-  engaged only near expiry (a fresh-token resolve is lock-free: read, slide,
-  return), exactly as before.
-- The reference stays **single-instance**, so the in-process `ReentrantLock` is
-  correct and sufficient. We do **not** add a distributed lock now: unexercised,
-  with no multi-instance deployment to test it against, it is unvalidated
-  complexity.
-- The hot-path move makes horizontal scaling of the Auth Service more likely in
-  production, so the distributed lock (`SET NX PX refresh_lock:{sid}` +
-  compare-and-delete release) becomes a **more pressing** production requirement
-  than before. The recipe is in `docs/operations/production-hardening.md`.
-- Single-instance serialization (two concurrent resolves on one sid → exactly
-  one upstream refresh) is proven by
+### The race: two instances refreshing one session
+
+A single session usually has several requests in flight at once (a SPA firing
+parallel `/api` calls, multiple open tabs). With more than one Auth Service
+instance behind the gateway, a load balancer spreads those concurrent same-`sid`
+requests across instances, and the collision unfolds like this:
+
+1. The access token enters its refresh window (short token lifespan: 120s in the
+   reference realm).
+2. Instance A reads `sess:{sid}`, sees the near-expiry token, and calls the IdP
+   refresh-token grant. That round-trip takes time, and only after it returns
+   does A write the rotated token back.
+3. Instance B reads the same record *during* A's round-trip (after A's read,
+   before A's write-back), sees the same near-expiry token, and fires its own
+   refresh with the same refresh token.
+4. One refresh wins and rotates the token at the IdP. The other now presents a
+   superseded refresh token, so the realm's rotation + reuse detection returns
+   `invalid_grant` and the session is invalidated. The user is logged out.
+
+The vulnerable window is exactly the refresh round-trip (tens to low hundreds of
+milliseconds), which opens once per token cycle per session. For one low-traffic
+user it is rare; at scale, with bursty SPA traffic across thousands of sessions,
+some session lands in that window continuously, surfacing as intermittent,
+hard-to-reproduce logouts. Naive horizontal scaling does not get slow, it drops
+sessions.
+
+### The fix: serialize the refresh window per session
+
+- **In-process (default), single instance.** `InProcessRefreshLock` is a
+  process-local `ReentrantLock`. It serializes refreshes within one JVM: the
+  loser waits, re-reads `sess:{sid}`, finds the rotated token, and returns it
+  without a second upstream call. Correct and sufficient for a single instance.
+  Proven by
   `InternalResolveControllerTest.concurrentResolveCallsForSameSidSerializeOnLock`.
+- **Distributed (opt-in), multiple instances.** A `ReentrantLock` spans only one
+  JVM, so it cannot coordinate instance A and instance B. Setting
+  `app.refresh-lock=distributed` selects `DistributedRefreshKeyLock`, which moves
+  the lock into the shared store (`SET NX PX refresh_lock:{sid}` +
+  compare-and-delete release). B cannot acquire the key while A holds it, so B
+  waits, re-reads after A's write-back, and returns the rotated token without
+  calling the IdP. It is built on the vendor-neutral `StateStore`, so it follows
+  whatever backs the store.
+- **Proof across two real replicas.** `compose.distributed-lock.yml` +
+  `scripts/e2e-distributed-lock.sh` run two Auth Service replicas on one shared
+  Valkey and fire concurrent `/internal/resolve` for the same `sid` at each. With
+  the distributed lock the two collapse to one upstream refresh (both `200`, no
+  `invalid_grant`); flip both to in-process and the uncoordinated replicas
+  reproduce the cross-instance logout.
+
+Operational tuning (lock TTL, max-wait, and lengthening the access-token lifespan
+to cut refresh frequency) is in `docs/operations/production-hardening.md`.
 
 ## `/auth/me` vs `/internal/resolve`: shared core, two projections
 
