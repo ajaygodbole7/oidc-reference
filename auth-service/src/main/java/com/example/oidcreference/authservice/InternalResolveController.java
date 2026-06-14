@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -283,8 +284,14 @@ class InternalResolveController {
   }
 
   private ResponseEntity<ResolveResponse> ok(SessionRecord session) {
-    return ResponseEntity.ok(
-        new ResolveResponse(session.accessToken(), session.expiresAt(), null, null, null));
+    // Explicit no-store: this body carries the live access token. The Order-1
+    // /internal chain inherits Spring Security's default cache-control writer,
+    // but stating it here keeps the no-store with the token-bearing response
+    // itself (matching AuthController) — so it survives a chain reconfig or these
+    // responses being served off this chain.
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(new ResolveResponse(session.accessToken(), session.expiresAt(), null, null, null));
   }
 
   // The sid rotated on this resolve: hand the new sid back, plus the cookie's
@@ -296,8 +303,10 @@ class InternalResolveController {
     long maxAge = Math.max(0L,
         Duration.between(Instant.now(), session.absoluteExpiresAt()).getSeconds());
     String rotatedCsrf = SignedCsrfSupport.issueToken(props.cookieSigningKey(), rotatedSid);
-    return ResponseEntity.ok(new ResolveResponse(
-        session.accessToken(), session.expiresAt(), rotatedSid, maxAge, rotatedCsrf));
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(new ResolveResponse(
+            session.accessToken(), session.expiresAt(), rotatedSid, maxAge, rotatedCsrf));
   }
 
   // A concurrent request may have rotated this sid (sess:{sid} -> sess:{sid'})

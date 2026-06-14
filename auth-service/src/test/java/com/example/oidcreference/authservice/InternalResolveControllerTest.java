@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.nimbusds.oauth2.sdk.id.ClientID;
@@ -193,6 +194,30 @@ class InternalResolveControllerTest {
     SessionRecord untouched = decodeSession(sid);
     assertThat(untouched.accessToken()).isEqualTo("still-fresh-access");
     assertThat(untouched.refreshToken()).isEqualTo("refresh-token-1");
+  }
+
+  @Test
+  void resolveSuccessIsNoStore() throws Exception {
+    // The 200 body carries the live access token to the gateway; no cache (proxy,
+    // or a misconfigured shared HTTP cache in front of /internal) may store it.
+    // Assert Cache-Control: no-store explicitly so this holds even if the
+    // framework's default header writer is ever reconfigured off this chain.
+    String sid = "sid-no-store-fresh";
+    SessionRecord fresh = new SessionRecord(
+        "no-store-access",
+        "refresh-token-1",
+        "id-token-1",
+        Instant.now().plusSeconds(600),
+        Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    storeSession(sid, fresh);
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
   }
 
   @Test
