@@ -248,6 +248,10 @@ sequenceDiagram
 
 ### Session and CSRF cookies
 
+The two cookies use different `SameSite` values on purpose: the session cookie
+is `Lax` so it survives the cross-site IdP → callback redirect; the CSRF cookie
+is `Strict` because it is only ever sent by same-origin SPA requests.
+
 - **Session cookie.** `__Host-sid` with `HttpOnly`, `Secure`,
   `SameSite=Lax`, `Path=/`, no `Domain`. In local HTTP mode the name
   downgrades to `sid` and `Secure` is dropped (browsers reject `__Host-`
@@ -289,6 +293,7 @@ sequenceDiagram
 | Step-up authentication: `auth_time` recency **and** `acr` assurance gates on a sensitive route → step-up challenge | OIDC Core §3.1.2.1 (`prompt=login`, `acr_values`), RFC 9470 | RS `ApiController#admin` (`app.step-up.required-acr`), `AuthController#stepUp` (`/auth/step-up`), realm `auth_time` + `acr` mappers |
 | `redirect_uri` pinned via `app.base-url` (defeats Host-header injection) | — | `AuthController#baseUrl` |
 | Per-session refresh lock — in-process by default, distributed opt-in via `app.refresh-lock=distributed`; `lua-resty-lock` around CC-token fetch (Lua) | — | `RefreshLock`, `InProcessRefreshLock`, `DistributedRefreshKeyLock`, `RefreshLockConfig`, `bff-session.lua` |
+| Sid rotation on refresh — atomic `sess:{sid}`→`sess:{sid'}` move + `rotated:{sid}` breadcrumb so in-flight requests follow it | — | `InternalResolveController` (A6); proven by `reference-flow.spec.ts` story 17 and `e2e-distributed-lock.sh` |
 | Rate-limit on `/auth/login` + `/auth/callback/idp` (APISIX `limit-req`) | — | `apisix.yaml.template` |
 | Sentinel guard refusing default dev secrets | — | `SecretSentinelValidator` (Java, fail-closed at boot for the auth secret + cookie key); `render-apisix-config.sh` (`REQUIRE_NONDEV_SECRETS`, fail-closed at render for the gateway secret + CSRF key); `bff-session.lua` `warn_on_dev_sentinels` (WARN-only at gateway load) |
 
