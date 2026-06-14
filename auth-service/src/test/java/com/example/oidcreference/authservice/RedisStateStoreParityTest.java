@@ -256,6 +256,46 @@ class RedisStateStoreParityTest {
     assertThat(memoryStore.members("idp_sid:gone")).isEmpty();
   }
 
+  // --- addToSet extend-only TTL ----------------------------------------------
+
+  @Test
+  void addToSet_shorterTtl_doesNotShrinkTheSetTtl() {
+    // A later short-lived session must not pull the shared index set's TTL below
+    // a still-live longer session; addToSet extends the TTL, never lowers it.
+    Duration longTtl = Duration.ofSeconds(120);
+    Duration shortTtl = Duration.ofSeconds(5);
+    redisStore.addToSet("sub_sessions:alice", "long", longTtl);
+    memoryStore.addToSet("sub_sessions:alice", "long", longTtl);
+    redisStore.addToSet("sub_sessions:alice", "short", shortTtl);
+    memoryStore.addToSet("sub_sessions:alice", "short", shortTtl);
+
+    assertThat(redisStore.ttl("sub_sessions:alice"))
+        .as("redis: a shorter add must not shrink the set TTL")
+        .isGreaterThan(shortTtl);
+    assertThat(memoryStore.ttl("sub_sessions:alice"))
+        .as("memory: a shorter add must not shrink the set TTL")
+        .isGreaterThan(shortTtl);
+    assertThat(redisStore.members("sub_sessions:alice"))
+        .containsExactlyInAnyOrderElementsOf(memoryStore.members("sub_sessions:alice"))
+        .containsExactlyInAnyOrder("long", "short");
+  }
+
+  @Test
+  void addToSet_longerTtl_extendsTheSetTtl() {
+    // The complement: a longer add raises the TTL (and sets it on the first add).
+    redisStore.addToSet("sub_sessions:bob", "a", Duration.ofSeconds(5));
+    memoryStore.addToSet("sub_sessions:bob", "a", Duration.ofSeconds(5));
+    redisStore.addToSet("sub_sessions:bob", "b", Duration.ofSeconds(120));
+    memoryStore.addToSet("sub_sessions:bob", "b", Duration.ofSeconds(120));
+
+    assertThat(redisStore.ttl("sub_sessions:bob"))
+        .as("redis: a longer add extends the set TTL")
+        .isGreaterThan(Duration.ofSeconds(60));
+    assertThat(memoryStore.ttl("sub_sessions:bob"))
+        .as("memory: a longer add extends the set TTL")
+        .isGreaterThan(Duration.ofSeconds(60));
+  }
+
   // --- compareAndDelete (DistributedRefreshKeyLock release) -----------------
 
   @Test

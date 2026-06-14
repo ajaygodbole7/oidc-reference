@@ -12,14 +12,22 @@ import org.springframework.stereotype.Component;
 
 @Component
 class RedisStateStore implements StateStore {
-  // SADD + PEXPIRE in one server-side round-trip. The rest of the store is
-  // meticulous about atomicity (GETDEL, SET XX); doing SADD then EXPIRE as two
-  // calls could leave a sub_sessions:{sub} set with no TTL (a leaked index key)
-  // if the second hop fails or is reordered. ARGV[2] is the TTL in
-  // milliseconds. Returns 1 (unused; the StateStore contract is void).
+  // SADD + EXTEND-ONLY PEXPIRE in one server-side round-trip. The index sets
+  // (sub_sessions:{sub}, idp_sid:{idp_sid}) are shared across all of one
+  // subject's / OP session's local sids, each carrying its own remaining
+  // absolute lifetime. A plain PEXPIRE would let a later short-lived session
+  // SHRINK the shared key's TTL below a still-live longer session, so the index
+  // could expire first and a subject- or sid-wide logout would then miss that
+  // live session. So set the TTL only when the key has none yet (PTTL < 0, e.g.
+  // the first add) or the new TTL is greater than the current remaining one;
+  // never lower it. Doing SADD+PTTL+PEXPIRE in one script also keeps the prior
+  // atomicity guarantee (no window where the set exists with no TTL). ARGV[2] is
+  // the TTL in milliseconds. Returns 1 (unused; the StateStore contract is void).
   private static final RedisScript<Long> ADD_TO_SET_WITH_TTL = new DefaultRedisScript<>(
       "redis.call('SADD', KEYS[1], ARGV[1]); "
-          + "redis.call('PEXPIRE', KEYS[1], ARGV[2]); "
+          + "local cur = redis.call('PTTL', KEYS[1]); "
+          + "if cur < 0 or tonumber(ARGV[2]) > cur then "
+          + "redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2])); end; "
           + "return 1",
       Long.class);
 

@@ -143,7 +143,10 @@ class InMemoryStateStore implements StateStore {
       set.add(member);
       return set;
     });
-    ttls.put(key, ttl == null ? Duration.ZERO : ttl);
+    // Extend-only TTL (mirrors the Redis SADD+PTTL-compare): a later short-lived
+    // session must not shrink the shared index key below a still-live longer one.
+    Duration next = ttl == null ? Duration.ZERO : ttl;
+    ttls.merge(key, next, (cur, n) -> n.compareTo(cur) > 0 ? n : cur);
   }
 
   @Override

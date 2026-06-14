@@ -151,6 +151,28 @@ class SessionIndexesTest {
     assertThat(store.members("idp_sid:kc-1")).isEmpty();
   }
 
+  @Test
+  void aLateShortLivedSessionDoesNotShrinkTheSubjectIndexTtl() {
+    // sub_sessions:{sub} is shared across a subject's sessions and TTL'd by each
+    // session's remaining absolute lifetime. A later short-lived session must
+    // NOT pull the index TTL below a still-live longer session — otherwise the
+    // index expires first and a subject-wide logout misses the live session.
+    // The fix is an extend-only TTL on addToSet.
+    InMemoryStateStore store = new InMemoryStateStore();
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord longLived = sessionWithAbsoluteExpiry("alice", Instant.now().plusSeconds(3600));
+    store.put("sess:s1", JSON.encode(longLived), Duration.ofSeconds(3600));
+    indexes.index("s1", longLived);
+    SessionRecord shortLived = sessionWithAbsoluteExpiry("alice", Instant.now().plusSeconds(10));
+    store.put("sess:s2", JSON.encode(shortLived), Duration.ofSeconds(10));
+    indexes.index("s2", shortLived);
+
+    assertThat(store.ttl("sub_sessions:alice"))
+        .as("the subject index TTL must not shrink below the long-lived session")
+        .isGreaterThan(Duration.ofSeconds(60));
+    assertThat(store.members("sub_sessions:alice")).containsExactlyInAnyOrder("s1", "s2");
+  }
+
   // --- A6: sid rotation (rotate) + the breadcrumb-follow on logout -----------
 
   @Test
@@ -242,6 +264,14 @@ class SessionIndexesTest {
     var utf8 = java.nio.charset.StandardCharsets.UTF_8;
     return enc.encodeToString("{\"alg\":\"HS256\"}".getBytes(utf8)) + "."
         + enc.encodeToString(("{\"sid\":\"" + idpSid + "\"}").getBytes(utf8)) + ".sig";
+  }
+
+  private static SessionRecord sessionWithAbsoluteExpiry(String sub, Instant absoluteExpiresAt) {
+    Instant now = Instant.now();
+    return new SessionRecord(
+        "access-token", "refresh-token", null,
+        now.plusSeconds(300), now.plusSeconds(1800), now,
+        absoluteExpiresAt, now, Map.of("sub", sub));
   }
 
   private static SessionRecord sessionWithIdpSid(String sub, String idpSid) {
