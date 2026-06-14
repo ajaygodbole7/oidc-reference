@@ -178,6 +178,20 @@ validation, virtual threads on the
 Spring services, and dev cookie binding via forwarded headers. It is
 operational topology, not new OIDC content.
 
+Does putting the Auth Service in every request path scale? Yes, by
+construction, not by benchmark. `/internal/resolve` is stateless — it holds no
+per-instance state, reads and writes only the shared session store — so the
+resolve tier scales out horizontally behind the gateway. The one place
+concurrency could corrupt state is two instances refreshing the same session at
+once (C2); the distributed refresh lock makes that safe across instances, and
+`scripts/e2e-distributed-lock.sh` proves it (two replicas, shared Valkey,
+concurrent resolve of one sid collapse to a single upstream refresh, zero
+sessions dropped). A single-box throughput benchmark is deliberately *not* a
+gate: on one machine two replicas contend for the same cores, so the number
+measures the box, not the architecture, and would read as evidence it is not.
+The cost is honest — one extra in-cluster round-trip per `/api/**` request — and
+it buys tokens that never reach the browser.
+
 **Locked defaults captured with this decision:**
 
 - **Gateway runtime: APISIX.** Open-source API gateway
