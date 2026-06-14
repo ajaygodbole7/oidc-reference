@@ -7,7 +7,7 @@ A complete, **runnable** reference for the Backend-for-Frontend (BFF) session pa
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4-green)
 ![Status](https://img.shields.io/badge/status-reference%20implementation-informational)
 
-> **The claim that matters:** the browser holds only an opaque `HttpOnly` session cookie. Access, refresh, and ID tokens live server-side, in a Redis-compatible store. An end-to-end test inspects the browser's storage and cookies and **asserts that no token reaches browser JavaScript**.
+> **No access, refresh, or ID token ever reaches the browser — and an end-to-end test asserts it.** The browser holds only an opaque `HttpOnly` session cookie; the tokens live server-side in a Redis-compatible store. The test inspects the browser's storage and cookies to confirm it.
 
 ---
 
@@ -225,7 +225,7 @@ Wire-level detail — exact cookie attributes, TTLs, validation rules, and the `
 
 ## Cookies
 
-This reference uses four cookies, each with a deliberate scope and `SameSite` value:
+This reference uses four cookies, each with its own scope and `SameSite` value:
 
 | Cookie | Readable by JS? | `SameSite` | Why |
 | --- | --- | --- | --- |
@@ -263,7 +263,7 @@ Each control maps to its reference and the code that implements it.
 | Rate-limit on `/auth/login` + `/auth/callback/idp` | — | `apisix.yaml.template` |
 | Sentinel guard refusing default dev secrets (fail-closed at boot/render) | — | `SecretSentinelValidator`, `render-apisix-config.sh`, `bff-session.lua` |
 
-**`acr` scope (local realm).** A fresh interactive login maps to `acr=1`; remembered-SSO maps to `acr=0`. The gate rejects any `acr` below `app.step-up.required-acr` (default `1`). Note that **`acr=1` is a Level-of-Assurance value, not proof of MFA** — mapping `acr` to a real MFA level is per-IdP config, not done here. See [`RFC9470-compliance.md`](RFC9470-compliance.md).
+**`acr` scope (local realm).** A fresh interactive login maps to `acr=1`; remembered-SSO maps to `acr=0`. The gate rejects any `acr` below `app.step-up.required-acr` (default `1`). Note that **`acr=1` is a Level-of-Assurance value; it does not prove MFA.** Mapping `acr` to a real MFA level is per-IdP config, not done here. See [`RFC9470-compliance.md`](RFC9470-compliance.md).
 
 ---
 
