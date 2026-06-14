@@ -88,7 +88,7 @@ async function loginAs(
   creds: { username: string; password: string }
 ): Promise<void> {
   await page.goto("/");
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.getByRole("link", { name: /sign in/i }).click();
   await page.waitForURL(KEYCLOAK_AUTH_RE);
   await page.fill("#username", creds.username);
   await page.fill("#password", creds.password);
@@ -335,7 +335,7 @@ test("1. anonymous: unauthenticated home, /auth/me 401, no token material", asyn
   context
 }) => {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /sign in/i })).toBeVisible();
 
   const meStatus = await page.evaluate(async () => {
     const res = await fetch("/auth/me", { credentials: "include" });
@@ -682,7 +682,7 @@ test("9b. real React sign-out button clears the session, no token", async ({
   await logoutContinue;
 
   await page.waitForURL(`${APP_ORIGIN}/`);
-  await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /sign in/i })).toBeVisible();
 
   const sid = (await context.cookies()).find((c) => c.name === "sid");
   expect(sid, "sid must be cleared after UI sign-out").toBeUndefined();
@@ -818,7 +818,7 @@ test("12. server-side session invalidation returns the SPA to anonymous, no toke
 
   // The SPA returns to the anonymous state: reloading home shows Sign in.
   await page.goto("/");
-  await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /sign in/i })).toBeVisible();
 
   // No token-shaped material survives in any browser-readable surface.
   await assertNoBrowserTokens(page, context);

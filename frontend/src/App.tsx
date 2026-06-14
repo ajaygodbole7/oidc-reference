@@ -63,7 +63,7 @@ export function App() {
         {state === "anonymous" && (
           <>
             <p>The browser holds no tokens. Sign in to start a BFF session.</p>
-            <a href={signInHref} role="button" data-testid="sign-in-link">
+            <a href={signInHref} data-testid="sign-in-link">
               Sign in
             </a>
           </>

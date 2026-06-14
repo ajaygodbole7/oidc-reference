@@ -39,7 +39,7 @@ describe("App", () => {
     render(<App />);
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument()
+      expect(screen.getByRole("link", { name: /sign in/i })).toBeInTheDocument()
     );
     // Per return-to-login contract: a bare `/auth/login` link is forbidden.
     // The Sign in link must include `return_to=<current route>`. jsdom's

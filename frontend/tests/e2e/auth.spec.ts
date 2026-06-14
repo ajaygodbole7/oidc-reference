@@ -18,7 +18,7 @@ test("anonymous home shows sign-in entry without browser-side tokens", async ({
 }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /sign in/i })).toBeVisible();
   // Per return-to-login contract: a user-visible Sign in link must include
   // `return_to`; a bare `/auth/login` link is forbidden. On the anonymous
   // home page, the current route is "/" so the encoded value is "%2F".
