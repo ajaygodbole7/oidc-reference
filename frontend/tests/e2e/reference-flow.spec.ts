@@ -116,8 +116,11 @@ function looksLikeTokenName(v: string): boolean {
  * Enforces the precise invariant for the JS-readable / storage surfaces:
  * no access/refresh/ID token (or token-shaped string) is reachable from
  * localStorage, sessionStorage, IndexedDB, or document.cookie. HttpOnly
- * cookies (sid) are invisible to document.cookie by definition and are
- * checked via the context API instead.
+ * cookies (sid) are invisible to document.cookie by definition, so EVERY
+ * cookie the context holds — HttpOnly included — is additionally swept through
+ * the token-shape predicates via the context API. That closes the gap where an
+ * accidental HttpOnly token cookie (e.g. a misconfigured `access_token`) would
+ * slip past the document.cookie checks.
  */
 async function assertNoBrowserTokens(
   page: Page,
@@ -185,7 +188,34 @@ async function assertNoBrowserTokens(
     expect(looksLikeJwe(value), `cookie value looks like JWE: ${part}`).toBeFalsy();
   }
 
-  const sid = (await context.cookies()).find((c) => c.name === "sid");
+  // Sweep every cookie on the APP origin host, INCLUDING HttpOnly cookies that
+  // document.cookie cannot see — the surface where the invariant is strongest
+  // (an accidental HttpOnly token cookie would be invisible above). Scope to the
+  // app host: context.cookies() with no filter returns cookies for ALL visited
+  // origins, including the IdP's own domain — Keycloak legitimately sets
+  // KEYCLOAK_IDENTITY (a JWS) and KC_RESTART on its own origin, and those are the
+  // IdP's session, not tokens the SPA holds.
+  // Use the STABLE app origin, not page.url(): some stories assert while the
+  // browser is parked on the IdP origin (e.g. the logout-terminates-SSO flow),
+  // and we must still scope the sweep to the app host, never the IdP host.
+  const appHost = new URL(APP_ORIGIN).hostname;
+  const allCookies = (await context.cookies()).filter(
+    (c) => c.domain === appHost || c.domain === `.${appHost}`
+  );
+  for (const c of allCookies) {
+    expect(
+      looksLikeTokenName(c.name),
+      `cookie name looks like a token: ${c.name}`
+    ).toBeFalsy();
+    expect(looksLikeJws(c.value), `cookie ${c.name} value looks like JWS`).toBeFalsy();
+    expect(looksLikeJwe(c.value), `cookie ${c.name} value looks like JWE`).toBeFalsy();
+    expect(
+      looksLikeOpaqueToken(c.value),
+      `cookie ${c.name} value looks like opaque token`
+    ).toBeFalsy();
+  }
+
+  const sid = allCookies.find((c) => c.name === "sid" || c.name === "__Host-sid");
   if (sid) {
     expect(sid.httpOnly, "sid must be HttpOnly").toBe(true);
     expect(sid.sameSite).toBe("Lax");
