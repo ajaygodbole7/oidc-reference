@@ -44,18 +44,42 @@ export default tseslint.config(
         { checksVoidReturn: { attributes: false } }
       ],
       "react-refresh/only-export-components": "warn",
-      // SPEC-0001: the SPA holds zero tokens. Writing to localStorage,
-      // sessionStorage, or indexedDB anywhere in src/ is a contract
-      // violation. Reads aren't banned because debug tools might want them.
+      // SPEC-0001: the SPA holds zero tokens. Writing to localStorage or
+      // sessionStorage anywhere in src/ is a contract violation in ANY spelling:
+      // bare or window/globalThis/self-qualified, dot or bracket method call, or
+      // direct property assignment. Reads stay allowed (debug tooling). Alias
+      // writes (const s = localStorage; s.setItem(...)) are not statically
+      // catchable here and are caught by the e2e no-token-in-browser proof.
       "no-restricted-syntax": [
         "error",
         {
-          selector: "MemberExpression[object.name='localStorage'][property.name=/^(setItem|clear|removeItem)$/]",
-          message: "SPEC-0001: the SPA holds no tokens. Do not write to localStorage."
+          selector:
+            "MemberExpression[object.name=/^(localStorage|sessionStorage)$/][property.name=/^(setItem|removeItem|clear)$/]",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write to web storage."
         },
         {
-          selector: "MemberExpression[object.name='sessionStorage'][property.name=/^(setItem|clear|removeItem)$/]",
-          message: "SPEC-0001: the SPA holds no tokens. Do not write to sessionStorage."
+          selector:
+            "MemberExpression[object.name=/^(localStorage|sessionStorage)$/][property.value=/^(setItem|removeItem|clear)$/]",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write to web storage (bracket access)."
+        },
+        {
+          selector:
+            "MemberExpression[object.type='MemberExpression'][object.property.name=/^(localStorage|sessionStorage)$/][property.name=/^(setItem|removeItem|clear)$/]",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write to web storage (qualified access)."
+        },
+        {
+          selector:
+            "MemberExpression[object.type='MemberExpression'][object.property.name=/^(localStorage|sessionStorage)$/][property.value=/^(setItem|removeItem|clear)$/]",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write to web storage (qualified bracket access)."
+        },
+        {
+          selector: "AssignmentExpression[left.object.name=/^(localStorage|sessionStorage)$/]",
+          message: "SPEC-0001: the SPA holds no tokens. Do not assign into web storage."
+        },
+        {
+          selector:
+            "AssignmentExpression[left.object.type='MemberExpression'][left.object.property.name=/^(localStorage|sessionStorage)$/]",
+          message: "SPEC-0001: the SPA holds no tokens. Do not assign into web storage (qualified)."
         },
         {
           selector: "Identifier[name='indexedDB']",
