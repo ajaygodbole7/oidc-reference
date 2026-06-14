@@ -222,6 +222,59 @@ async function assertNoBrowserTokens(
   }
 }
 
+/**
+ * Active companion to assertNoBrowserTokens: a token must not reach the browser
+ * via a same-origin RESPONSE BODY either — a server accidentally serializing an
+ * access/refresh/id token into a JSON surface the SPA reads (/auth/me, /api/**)
+ * would slip past the cookie/storage sweep. Install at the start of a story; it
+ * captures every APP_ORIGIN JSON response and assertClean() fails if any body
+ * names a token field or carries a JWS-shaped string. Only JSON content types
+ * are scanned — static assets (JS/HTML/CSS) are the SPA's own code, not a server
+ * token surface, and would false-positive on identifiers in the bundle.
+ */
+function installResponseBodyTokenGuard(page: Page): { assertClean: () => Promise<void> } {
+  const pending: Promise<string | null>[] = [];
+  page.on("response", (res) => {
+    const url = res.url();
+    if (!url.startsWith(APP_ORIGIN)) return;
+    if (!/json/i.test(res.headers()["content-type"] ?? "")) return;
+    pending.push(
+      res.text().then(
+        (body): string | null => {
+          if (/access_token|refresh_token|id_token/i.test(body)) {
+            return `${url} names a token field`;
+          }
+          // Three base64url segments, each long enough to be real JWT material
+          // (the length floor avoids matching version strings like "1.2.3").
+          if (/[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/.test(body)) {
+            return `${url} carries a JWS-shaped string`;
+          }
+          return null;
+        },
+        () => null // body not readable (redirect/opaque) — nothing to scan
+      )
+    );
+  });
+  return {
+    assertClean: async () => {
+      const results = await Promise.all(pending);
+      // Non-vacuity: the story must have produced at least one same-origin JSON
+      // response (e.g. /auth/me or /api/user-data) for the scan to mean anything.
+      // Without this a broken capture (wrong origin filter, content-type drift)
+      // would pass silently with nothing scanned.
+      expect(
+        pending.length,
+        "body-token guard must observe at least one same-origin JSON response"
+      ).toBeGreaterThan(0);
+      const violations = results.filter((v): v is string => v !== null);
+      expect(
+        violations,
+        "same-origin JSON response bodies must carry no token material"
+      ).toEqual([]);
+    }
+  };
+}
+
 function sidFrom(cookies: readonly Cookie[]): string {
   const sid = cookies.find((c) => c.name === "sid");
   expect(sid, "session cookie sid must be set").toBeDefined();
@@ -381,6 +434,7 @@ test("3. alice login lands same-origin with role user, no browser tokens", async
   page,
   context
 }) => {
+  const bodyGuard = installResponseBodyTokenGuard(page);
   await loginAs(page, ALICE);
 
   expect(new URL(page.url()).origin).toBe(APP_ORIGIN);
@@ -413,6 +467,7 @@ test("3. alice login lands same-origin with role user, no browser tokens", async
   }
 
   await assertNoBrowserTokens(page, context);
+  await bodyGuard.assertClean();
 });
 
 // ---------------------------------------------------------------------------
@@ -423,6 +478,7 @@ test("4. saved-request replay returns to the protected path", async ({
   page,
   context
 }) => {
+  const bodyGuard = installResponseBodyTokenGuard(page);
   await page.goto(
     `/auth/login?return_to=${encodeURIComponent("/api/user-data")}`
   );
@@ -439,6 +495,7 @@ test("4. saved-request replay returns to the protected path", async ({
   // access token; for the alice login that includes preferred_username "alice".
   await expect(page.locator("body")).toContainText("alice");
   await assertNoBrowserTokens(page, context);
+  await bodyGuard.assertClean();
 });
 
 // ---------------------------------------------------------------------------
