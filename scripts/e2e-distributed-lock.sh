@@ -112,12 +112,14 @@ print(json.dumps({
 PY
   "$RUNTIME" exec -i "$VALKEY" valkey-cli -x SET "sess:$SID" < /tmp/dlock-sess.json >/dev/null
   "$RUNTIME" exec "$VALKEY" valkey-cli EXPIRE "sess:$SID" 1800 >/dev/null
-  # The real /auth/callback writes the idp_sid index; the rotation's CAS gates on
-  # it (idp_sid:{idpSid} == sid), so seed it too or rotate() fails closed (409
-  # session_invalidated_during_refresh) — which is NOT a lock outcome.
+  # The real /auth/callback writes the idp_sid index; the rotation's repoint
+  # swap-if-present gates on it, so seed it too or rotate() fails closed — which
+  # is NOT a lock outcome. idp_sid:{idpSid} is a SET of local sids (one OP
+  # session can back several local sessions); SADD it as a set so the rotation's
+  # SISMEMBER-gated swap does not hit WRONGTYPE on a string.
   IDP_SID=$(decode_claim "$IT" sid); [ -n "$IDP_SID" ] || IDP_SID=$(decode_claim "$AT" sid)
   if [ -n "$IDP_SID" ]; then
-    "$RUNTIME" exec "$VALKEY" valkey-cli SET "idp_sid:$IDP_SID" "$SID" >/dev/null
+    "$RUNTIME" exec "$VALKEY" valkey-cli SADD "idp_sid:$IDP_SID" "$SID" >/dev/null
     "$RUNTIME" exec "$VALKEY" valkey-cli EXPIRE "idp_sid:$IDP_SID" 1800 >/dev/null
   fi
 
