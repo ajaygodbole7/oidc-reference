@@ -128,6 +128,29 @@ class SessionIndexesTest {
     assertThat(store.members("sub_sessions:alice")).isEmpty();
   }
 
+  @Test
+  void deleteByIdpSidDeletesAllLocalSessionsForOneOpSid() {
+    // Two local sessions (e.g. two BFF logins while one Keycloak SSO session
+    // persists) resolve to the SAME OP sid. A back-channel logout by that sid
+    // must terminate BOTH; the prior scalar idp_sid index kept only the last
+    // writer, so the first session survived revocation.
+    InMemoryStateStore store = new InMemoryStateStore();
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord first = sessionWithIdpSid("alice", "kc-1");
+    SessionRecord second = sessionWithIdpSid("alice", "kc-1");
+    store.put("sess:local-1", JSON.encode(first), Duration.ofMinutes(30));
+    indexes.index("local-1", first);
+    store.put("sess:local-2", JSON.encode(second), Duration.ofMinutes(30));
+    indexes.index("local-2", second);
+
+    int deleted = indexes.deleteByIdpSid("kc-1");
+
+    assertThat(deleted).as("both local sessions for the OP sid are deleted").isEqualTo(2);
+    assertThat(store.get("sess:local-1")).isEmpty();
+    assertThat(store.get("sess:local-2")).isEmpty();
+    assertThat(store.members("idp_sid:kc-1")).isEmpty();
+  }
+
   // --- A6: sid rotation (rotate) + the breadcrumb-follow on logout -----------
 
   @Test
@@ -136,12 +159,12 @@ class SessionIndexesTest {
     SessionIndexes indexes = new SessionIndexes(store, JSON);
     SessionRecord session = sessionWithIdpSid("alice", "kc-1");
     indexes.index("old", session);
-    assertThat(store.get("idp_sid:kc-1")).contains("old");
+    assertThat(store.members("idp_sid:kc-1")).containsExactly("old");
 
     boolean rotated = indexes.rotate("old", "new", session);
 
     assertThat(rotated).isTrue();
-    assertThat(store.get("idp_sid:kc-1")).as("idp_sid repointed").contains("new");
+    assertThat(store.members("idp_sid:kc-1")).as("idp_sid repointed").containsExactly("new");
     assertThat(store.members("sub_sessions:alice")).containsExactly("new");
     assertThat(store.get("logout_hint:new")).isPresent();
     assertThat(store.get("logout_hint:old")).isEmpty();
@@ -169,12 +192,31 @@ class SessionIndexesTest {
     SessionIndexes indexes = new SessionIndexes(store, JSON);
     SessionRecord session = sessionWithIdpSid("alice", "kc-1");
     indexes.index("old", session);
-    store.delete("idp_sid:kc-1"); // logout already cleared it
+    store.delete("idp_sid:kc-1"); // logout already cleared the whole set
 
     boolean rotated = indexes.rotate("old", "new", session);
 
-    assertThat(rotated).as("CAS fails -> rotation aborts").isFalse();
-    assertThat(store.get("idp_sid:kc-1")).as("not resurrected by the rotation").isEmpty();
+    assertThat(rotated).as("swap-if-present fails -> rotation aborts").isFalse();
+    assertThat(store.members("idp_sid:kc-1")).as("not resurrected by the rotation").isEmpty();
+  }
+
+  @Test
+  void rotateFailsClosedWhenRotatingMemberRemovedByConcurrentLogout() {
+    // A concurrent logout removed THIS session's member from the idp_sid set
+    // (other sessions for the same OP sid may remain). The rotation must not
+    // re-add the rotated sid for the now-revoked session.
+    InMemoryStateStore store = new InMemoryStateStore();
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord session = sessionWithIdpSid("alice", "kc-1");
+    indexes.index("old", session);
+    store.removeFromSet("idp_sid:kc-1", "old"); // logout removed just this member
+
+    boolean rotated = indexes.rotate("old", "new", session);
+
+    assertThat(rotated).as("swap-if-present fails -> rotation aborts").isFalse();
+    assertThat(store.members("idp_sid:kc-1"))
+        .as("the revoked session's rotated sid is not re-added")
+        .doesNotContain("new");
   }
 
   @Test

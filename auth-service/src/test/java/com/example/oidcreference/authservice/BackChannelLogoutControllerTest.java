@@ -130,7 +130,7 @@ class BackChannelLogoutControllerTest {
     assertThat(stateStore.get("sess:local-sid-1")).isEmpty();
     assertThat(stateStore.get("sess:local-sid-2")).isPresent();
     assertThat(stateStore.get("idp_sid:idp-sid-1")).isEmpty();
-    assertThat(stateStore.get("idp_sid:idp-sid-2")).contains("local-sid-2");
+    assertThat(stateStore.members("idp_sid:idp-sid-2")).containsExactly("local-sid-2");
     assertThat(stateStore.members("sub_sessions:alice"))
         .containsExactly("local-sid-2");
   }
@@ -148,7 +148,7 @@ class BackChannelLogoutControllerTest {
         .andExpect(status().isBadRequest());
 
     assertThat(stateStore.get("sess:local-sid-1")).isPresent();
-    assertThat(stateStore.get("idp_sid:idp-sid-1")).contains("local-sid-1");
+    assertThat(stateStore.members("idp_sid:idp-sid-1")).containsExactly("local-sid-1");
   }
 
   @Test

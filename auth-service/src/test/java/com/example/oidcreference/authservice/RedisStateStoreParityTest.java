@@ -205,6 +205,57 @@ class RedisStateStoreParityTest {
         .isEmpty();
   }
 
+  // --- swapMemberIfPresent (set analogue of compareAndSwap) ------------------
+
+  @Test
+  void swapMemberIfPresent_memberPresent_swapsAndReturnsTrue() {
+    redisStore.addToSet("idp_sid:k", "old", TTL);
+    memoryStore.addToSet("idp_sid:k", "old", TTL);
+
+    boolean r = redisStore.swapMemberIfPresent("idp_sid:k", "old", "new", TTL);
+    boolean m = memoryStore.swapMemberIfPresent("idp_sid:k", "old", "new", TTL);
+
+    assertThat(r).as("return-value parity").isEqualTo(m);
+    assertThat(r).isTrue();
+    assertThat(redisStore.members("idp_sid:k"))
+        .as("member parity")
+        .containsExactlyInAnyOrderElementsOf(memoryStore.members("idp_sid:k"))
+        .containsExactly("new");
+  }
+
+  @Test
+  void swapMemberIfPresent_memberAbsentOtherMembersRemain_failsClosed() {
+    // Another local session for the same OP sid remains; this session's member was
+    // removed by a concurrent logout. The swap must fail and leave the survivor —
+    // the rotation aborts rather than re-adding a member for the revoked session.
+    redisStore.addToSet("idp_sid:k", "other", TTL);
+    memoryStore.addToSet("idp_sid:k", "other", TTL);
+
+    boolean r = redisStore.swapMemberIfPresent("idp_sid:k", "old", "new", TTL);
+    boolean m = memoryStore.swapMemberIfPresent("idp_sid:k", "old", "new", TTL);
+
+    assertThat(r).as("return-value parity").isEqualTo(m);
+    assertThat(r).isFalse();
+    assertThat(redisStore.members("idp_sid:k"))
+        .as("member parity; new not added, surviving member kept")
+        .containsExactlyInAnyOrderElementsOf(memoryStore.members("idp_sid:k"))
+        .containsExactly("other");
+  }
+
+  @Test
+  void swapMemberIfPresent_setAbsent_failsClosed_doesNotCreate() {
+    // A concurrent logout deleted the whole set. Neither store recreates it.
+    boolean r = redisStore.swapMemberIfPresent("idp_sid:gone", "old", "new", TTL);
+    boolean m = memoryStore.swapMemberIfPresent("idp_sid:gone", "old", "new", TTL);
+
+    assertThat(r).as("return-value parity").isEqualTo(m);
+    assertThat(r).isFalse();
+    assertThat(redisStore.members("idp_sid:gone"))
+        .as("a swap on an absent set must not create it")
+        .isEmpty();
+    assertThat(memoryStore.members("idp_sid:gone")).isEmpty();
+  }
+
   // --- compareAndDelete (DistributedRefreshKeyLock release) -----------------
 
   @Test

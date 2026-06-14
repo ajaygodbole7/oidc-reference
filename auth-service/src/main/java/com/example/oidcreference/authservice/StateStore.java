@@ -76,5 +76,14 @@ interface StateStore {
 
   void removeFromSet(String key, String member);
 
+  // Atomic set-member swap-if-present: iff oldMember is in the set at key, replace
+  // it with newMember and (re)set the key TTL, returning true; else a no-op
+  // returning false. The set analogue of compareAndSwap. The sid-rotation
+  // idp_sid:{idpSid} index — now a SET of local sids per OP session — uses this
+  // to repoint a rotating member only if a concurrent back-channel logout has not
+  // already removed it (or deleted the set); if the swap fails, the rotation
+  // aborts (fail closed) rather than re-adding a member for a revoked session.
+  boolean swapMemberIfPresent(String key, String oldMember, String newMember, Duration ttl);
+
   Set<String> members(String key);
 }

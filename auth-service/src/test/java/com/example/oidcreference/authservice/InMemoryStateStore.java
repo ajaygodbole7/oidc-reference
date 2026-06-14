@@ -158,6 +158,23 @@ class InMemoryStateStore implements StateStore {
   }
 
   @Override
+  public boolean swapMemberIfPresent(String key, String oldMember, String newMember, Duration ttl) {
+    // Atomic per key via compute (mirrors the Redis SISMEMBER-gated SREM+SADD):
+    // swap only if oldMember is currently in the set; else no-op false.
+    boolean[] swapped = {false};
+    sets.computeIfPresent(key, (k, set) -> {
+      if (set.contains(oldMember)) {
+        set.remove(oldMember);
+        set.add(newMember);
+        swapped[0] = true;
+        ttls.put(k, ttl == null ? Duration.ZERO : ttl);
+      }
+      return set.isEmpty() ? null : set;
+    });
+    return swapped[0];
+  }
+
+  @Override
   public Set<String> members(String key) {
     Set<String> set = sets.get(key);
     return set == null ? Collections.emptySet() : Set.copyOf(set);

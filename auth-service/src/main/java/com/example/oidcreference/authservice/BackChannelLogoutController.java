@@ -55,9 +55,7 @@ class BackChannelLogoutController {
 
     int deleted = 0;
     if (token.sid() != null) {
-      if (sessionIndexes.deleteByIdpSid(token.sid())) {
-        deleted++;
-      }
+      deleted += sessionIndexes.deleteByIdpSid(token.sid());
     } else if (token.sub() != null) {
       deleted += sessionIndexes.deleteBySubject(token.sub());
     }

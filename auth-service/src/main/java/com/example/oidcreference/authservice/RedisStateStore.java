@@ -54,6 +54,19 @@ class RedisStateStore implements StateStore {
           + "return 1 else return 0 end",
       Long.class);
 
+  // Set-member compare-and-swap: iff ARGV[1] is a member of the set KEYS[1],
+  // SREM it, SADD ARGV[2], and PEXPIRE KEYS[1] ARGV[3] ms; else a no-op
+  // returning 0. Repoints idp_sid:{idpSid} (a SET of local sids) on sid rotation
+  // only if a concurrent logout hasn't already removed the rotating member or
+  // deleted the set — else the logout's revocation would be undone.
+  private static final RedisScript<Long> SWAP_MEMBER_IF_PRESENT = new DefaultRedisScript<>(
+      "if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then "
+          + "redis.call('SREM', KEYS[1], ARGV[1]); "
+          + "redis.call('SADD', KEYS[1], ARGV[2]); "
+          + "redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[3])); "
+          + "return 1 else return 0 end",
+      Long.class);
+
   // Release a lease only if we still own it (value matches), so an instance
   // never deletes a lock another acquired after ours expired by TTL.
   private static final RedisScript<Long> COMPARE_AND_DELETE = new DefaultRedisScript<>(
@@ -162,6 +175,17 @@ class RedisStateStore implements StateStore {
   @Override
   public void removeFromSet(String key, String member) {
     redis.opsForSet().remove(key, member);
+  }
+
+  @Override
+  public boolean swapMemberIfPresent(String key, String oldMember, String newMember, Duration ttl) {
+    Long swapped = redis.execute(
+        SWAP_MEMBER_IF_PRESENT,
+        List.of(key),
+        oldMember,
+        newMember,
+        Long.toString(ttl.toMillis()));
+    return swapped != null && swapped == 1L;
   }
 
   @Override

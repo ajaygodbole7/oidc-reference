@@ -324,7 +324,7 @@ protocol-relative, no leading slash, overlong, encoded backslash).
 | `/auth/logout/continue` | GET | none | Resolves the single-use `logout:{handle}` (GET-then-DEL) and `302`s to the IdP `end_session_endpoint` URL with `id_token_hint` and `Referrer-Policy: no-referrer`. Unknown/expired/missing handle → `302` to `/`. No session required (it is already deleted); the opaque handle is the capability. |
 | `/auth/step-up` | GET | session (cookie not strictly required) | Step-up authentication entry (OIDC Core §3.1.2.1 `prompt=login`). Same `return_to` contract and same browser-binding/`tx:{state}` machinery as `/auth/login`, but the transaction is flagged `step_up:true` and the authorize request adds `prompt=login` so the IdP re-authenticates the user even when an SSO session exists. On callback, the step-up gate (below) requires the returned `auth_time` to be at or after the transaction's `created_at`; a stale/missing `auth_time` (an IdP that ignored `prompt=login`) fails closed with `401`. `prompt=login` is used rather than `max_age=0` because several IdPs (Keycloak included) treat `max_age=0` as unset and silently reuse the SSO session. |
 | `/auth/me` | GET | session | Return non-sensitive user claims (`sub`, `preferred_username`, `name`, `email`, `roles`, and — when the IdP emits them — `auth_time` and `acr`). Never returns a token. Response `Cache-Control: no-store`. |
-| `/backchannel-logout` | POST | signed `logout_token` (no cookie) | OIDC Back-Channel Logout 1.0 — IdP-to-Auth-Service, `application/x-www-form-urlencoded` with a `logout_token` JWT. Validates the token (IdP JWKS signature, `iss`, `aud` = this client, fresh `iat`, an `events` claim carrying the back-channel-logout event, `sub` and/or `sid` present, **no `nonce`**, `jti` replay-guarded). Resolves the IdP `sid` to the local session via the `idp_sid:{idp_sid}` index and deletes `sess:{sid}`; with only `sub`, deletes every session of that subject. `200` on success, `400` on an invalid/unverifiable token. Never reveals whether a session existed. Reachable only on the internal network. |
+| `/backchannel-logout` | POST | signed `logout_token` (no cookie) | OIDC Back-Channel Logout 1.0 — IdP-to-Auth-Service, `application/x-www-form-urlencoded` with a `logout_token` JWT. Validates the token (IdP JWKS signature, `iss`, `aud` = this client, fresh `iat`, an `events` claim carrying the back-channel-logout event, `sub` and/or `sid` present, **no `nonce`**, `jti` replay-guarded). Resolves the IdP `sid` to the local session(s) via the `idp_sid:{idp_sid}` index — a set, since one OP session can back several local sessions — and deletes every matching `sess:{sid}`; with only `sub`, deletes every session of that subject. `200` on success, `400` on an invalid/unverifiable token. Never reveals whether a session existed. Reachable only on the internal network. |
 
 ### Step-up authentication (auth_time freshness)
 
@@ -426,8 +426,10 @@ through `/internal/resolve`.
 - Stored in plaintext in local mode. Production guidance: encryption at
   rest, state-store AUTH, TLS, network isolation.
 - Secondary indexes, written by the Auth Service alongside `sess:{sid}` and used
-  only by the logout paths: `idp_sid:{idp_sid}` → local `sid` (maps an IdP
-  Back-Channel Logout token's `sid` to the local session), `sub_sessions:{sub}`
+  only by the logout paths: `idp_sid:{idp_sid}` → the set of local `sid`s for
+  that IdP session (one OP session can back several local sessions — e.g.
+  repeated BFF logins while the IdP SSO session persists — so a Back-Channel
+  Logout by `sid` terminates all of them), `sub_sessions:{sub}`
   → the set of a subject's local `sid`s (subject-wide logout), and
   `logout_hint:{sid}` → the session's `id_token`, retained so a logout can supply
   `id_token_hint` to the IdP `end_session` endpoint. Each is TTL-bounded by the

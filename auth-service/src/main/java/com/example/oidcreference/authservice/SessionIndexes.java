@@ -40,7 +40,7 @@ class SessionIndexes {
       return;
     }
     idpSid(session).ifPresent(idpSid ->
-        stateStore.put(IDP_SID_PREFIX + idpSid, localSid, ttl));
+        stateStore.addToSet(IDP_SID_PREFIX + idpSid, localSid, ttl));
     subject(session).ifPresent(sub ->
         addSubjectSession(sub, localSid, ttl));
     if (session.idToken() != null && !session.idToken().isBlank()) {
@@ -55,11 +55,11 @@ class SessionIndexes {
   // the caller must then fail closed (undo the rotation) rather than let this
   // method resurrect a revoked session by rebuilding its indexes.
   //
-  // The idp_sid repoint is a COMPARE-AND-SWAP (only if it still points at oldSid):
-  // without it, the rotation's unconditional write would clobber a logout's
-  // delete, undoing the revocation. sub_sessions add-before-removes (the subject
-  // is always represented by a live sid), and the logout hint moves. Index TTL is
-  // the remaining absolute lifetime, exactly as index().
+  // The idp_sid repoint is a set swap-if-present (only if oldSid is still a
+  // member): without it, the rotation's unconditional re-add would clobber a
+  // logout's removal, undoing the revocation. sub_sessions add-before-removes (the
+  // subject is always represented by a live sid), and the logout hint moves. Index
+  // TTL is the remaining absolute lifetime, exactly as index().
   boolean rotate(String oldSid, String newSid, SessionRecord session) {
     Duration ttl = Duration.between(Instant.now(), session.absoluteExpiresAt());
     if (ttl.isNegative() || ttl.isZero()) {
@@ -67,8 +67,9 @@ class SessionIndexes {
     }
     Optional<String> idpSid = idpSid(session);
     if (idpSid.isPresent()
-        && !stateStore.compareAndSwap(IDP_SID_PREFIX + idpSid.get(), oldSid, newSid, ttl)) {
-      // A concurrent logout cleared/changed idp_sid since the refresh started.
+        && !stateStore.swapMemberIfPresent(IDP_SID_PREFIX + idpSid.get(), oldSid, newSid, ttl)) {
+      // A concurrent logout removed oldSid from idp_sid (or deleted the set)
+      // since the refresh started.
       return false;
     }
     subject(session).ifPresent(sub -> {
@@ -86,10 +87,24 @@ class SessionIndexes {
     return stateStore.getAndDelete(LOGOUT_HINT_PREFIX + localSid);
   }
 
-  boolean deleteByIdpSid(String idpSid) {
-    Optional<String> localSid = stateStore.getAndDelete(IDP_SID_PREFIX + idpSid);
-    localSid.ifPresent(this::deleteLocalSession);
-    return localSid.isPresent();
+  // idp_sid:{idpSid} is a SET of local sids: one OP session can back several
+  // local sessions (e.g. repeated BFF logins while the IdP SSO session persists),
+  // and a back-channel logout by OP sid must terminate ALL of them. Mirrors
+  // deleteBySubject: snapshot the members, drop the index, delete each session.
+  int deleteByIdpSid(String idpSid) {
+    var key = IDP_SID_PREFIX + idpSid;
+    Set<String> localSids = stateStore.members(key);
+    if (localSids.isEmpty()) {
+      return 0;
+    }
+    stateStore.delete(key);
+    int deleted = 0;
+    for (String localSid : localSids) {
+      if (deleteLocalSession(localSid)) {
+        deleted++;
+      }
+    }
+    return deleted;
   }
 
   int deleteBySubject(String sub) {
@@ -139,7 +154,7 @@ class SessionIndexes {
       return false;
     }
     idpSid(session.get()).ifPresent(idpSid ->
-        stateStore.delete(IDP_SID_PREFIX + idpSid));
+        stateStore.removeFromSet(IDP_SID_PREFIX + idpSid, localSid));
     subject(session.get()).ifPresent(sub ->
         removeSubjectSession(sub, localSid));
     return true;
