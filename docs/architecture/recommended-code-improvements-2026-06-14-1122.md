@@ -1,168 +1,184 @@
 # Recommended Code Improvements - 2026-06-14 11:22
 
-This review backlog consolidates the latest architecture, security, code, and test
-review findings for `oidc-reference`.
+This is the improvement backlog for making `oidc-reference` stronger as a
+copyable OAuth/OIDC reference implementation.
 
-Goal: keep the reference implementation close to OAuth/OIDC standards, keep the
-BFF/session-cookie pattern intact, and make the code strong enough that a staff
-engineer or security architect can adapt it to their own infrastructure without
-rewriting the security model.
+The target is practical: code a staff engineer or security architect can take
+seriously, then adapt to their own gateway, cache, IdP, deployment, TLS, secrets,
+and observability stack. This file focuses on code and tests that should survive
+that adaptation. It deliberately avoids local-infra hardening debates.
 
-This list deliberately avoids local-infra debates. Production teams will replace
-or harden the gateway, cache, IdP, deployment, TLS, secret management, and
-observability stack. The items below focus on code and tests that should survive
-that adaptation.
+## Rules For This Backlog
 
-## Priority 1
+- Fix concrete correctness, security, proof, or latency issues.
+- Do not add abstraction for its own sake.
+- Do not start a broad controller-splitting or service-layer cleanup task.
+- Keep the main flows visible in code.
+- Prefer package-private helpers and records over public interfaces.
+- Add an interface only when there are multiple implementations or the test seam
+  is otherwise painful.
+- If a proposed change cannot name the bug, test gap, or measured latency cost it
+  fixes, do not do it.
 
-### 1. Make the OP `sid` index a set, not a scalar
+The hot path must stay easy to trace:
 
-Current risk:
+```text
+APISIX -> Auth Service /internal/resolve -> state store -> Resource Server
+```
+
+JVM class count is not the latency concern. Network calls, state-store round
+trips, IdP calls, JSON work, connection setup, and lock contention are the
+latency concerns.
+
+## Phase 1 - Correctness And Security Fixes
+
+These are real behavior fixes. Do these before organization cleanup.
+
+### 1. Make the OP `sid` index a set
+
+Problem:
 
 - `idp_sid:{opSid}` stores one local sid.
-- If one OP session maps to more than one local session, a back-channel logout by
-  `sid` can delete only the last indexed local session.
-- `sub_sessions:{sub}` already uses set semantics, so the scalar OP sid index is
-  inconsistent with the rest of the session model.
+- A back-channel logout by OP `sid` can delete only that one local session.
+- `sub_sessions:{sub}` already uses set semantics, so the scalar OP-sid index is
+  inconsistent.
 
-Recommended change:
+Change:
 
 - Store `idp_sid:{opSid}` as a set of local sids.
-- Add atomic add, remove, and rotate semantics.
-- Make `deleteByIdpSid` delete every local session in that set.
-- Ensure sid rotation updates the set without resurrecting a session already
-  removed by logout.
+- `deleteByIdpSid` deletes every local session in that set.
+- Sid rotation updates the set without resurrecting a session removed by logout.
 
 Tests:
 
-- Two local sessions share one OP `sid`; back-channel logout by `sid` deletes
-  both.
-- Logout token containing both `sid` and `sub` deletes the OP-session members,
-  not just one scalar pointer.
-- Refresh sid rotation repoints the OP sid set.
-- Logout racing with refresh fails closed and does not rebuild a deleted index.
+- Two local sessions share one OP `sid`; logout by `sid` deletes both.
+- Logout token containing both `sid` and `sub` deletes the OP-sid set members.
+- Refresh sid rotation repoints the OP-sid set.
+- Logout racing with refresh fails closed.
 
 ### 2. Ignore bare `sid` on secure Auth Service requests
 
-Current risk:
+Problem:
 
 - Auth Service falls back from `__Host-sid` to bare `sid`.
-- The gateway gates bare `sid` for `/api/**`, but Auth Service owns `/auth/me`
-  and `/auth/logout`.
-- In production, the security model should be `__Host-sid` only. Bare `sid` is
-  an HTTP local-dev compatibility cookie.
+- Bare `sid` is local HTTP compatibility.
+- Production secure requests should use only `__Host-sid`.
 
-Recommended change:
+Change:
 
-- On secure requests, accept only `__Host-sid`.
-- On non-secure local HTTP requests, accept bare `sid`.
-- Prefer `__Host-sid` if both are present.
-- Clear both cookie names where doing so is safe and useful.
+- Secure request: accept only `__Host-sid`.
+- Non-secure local HTTP request: accept bare `sid`.
+- If both are present, prefer `__Host-sid`.
+- Clear both names where cleanup needs to be robust.
 
 Tests:
 
-- HTTPS or `X-Forwarded-Proto: https` plus only `sid` is rejected.
-- HTTPS plus `__Host-sid` is accepted.
-- HTTP local request plus `sid` is accepted.
+- HTTPS or `X-Forwarded-Proto: https` with only `sid` is rejected.
+- HTTPS with `__Host-sid` is accepted.
+- HTTP local with `sid` is accepted.
 - Both cookies present uses `__Host-sid`.
-- Logout clears the correct cookie name and does not leave stale auth state.
 
 ### 3. Prevent session index TTL shrink
 
-Current risk:
+Problem:
 
 - `sub_sessions:{sub}` uses `SADD` plus unconditional `PEXPIRE`.
-- A later short-lived session can shorten the whole subject index.
-- A future sub-based back-channel logout can miss longer-lived sessions.
+- A later short-lived session can shorten the subject index.
+- Later sub-based logout can miss longer-lived sessions.
 
-Recommended change:
+Change:
 
-- Change set TTL behavior to extend only, never shorten.
-- Use `PEXPIRE ... GT` where supported, or compare `PTTL` and update only when
-  the new TTL is longer.
-- Keep Redis-compatible semantics in the state-store abstraction.
+- Set-index TTL updates must extend only, never shorten.
+- Use Redis-compatible behavior: `PEXPIRE ... GT` where available, or `PTTL`
+  comparison before updating.
 
 Tests:
 
-- Add a long-lived subject session, then a short-lived subject session. The set
-  TTL remains long.
-- Add a short-lived session, then a long-lived session. The set TTL extends.
-- Redis implementation and in-memory test implementation behave the same.
+- Long-lived then short-lived subject session keeps the longer TTL.
+- Short-lived then long-lived subject session extends the TTL.
+- Redis and in-memory stores behave the same.
 
-### 4. Map distributed refresh lock failures explicitly
+### 4. Map distributed refresh-lock failure explicitly
 
-Current risk:
+Problem:
 
-- The distributed refresh lock can throw on lock acquisition timeout.
-- That path can escape as a generic 500 instead of the documented transient
-  session-resolution response.
-- Lock property relationships are not fully validated.
+- Distributed lock acquisition can time out.
+- That can escape as a generic 500.
+- The lock configuration does not fully validate timing relationships.
 
-Recommended change:
+Change:
 
-- Catch lock acquisition failures around `refreshLock.withLock`.
-- Return a documented no-store transient problem response, likely 503.
+- Catch lock acquisition failure around refresh.
+- Return a documented transient no-store response, likely 503.
 - Emit a structured audit event.
-- Validate lock configuration:
-  - mode is `in-process` or `distributed`;
-  - TTL is positive;
-  - max wait is positive;
-  - poll interval is positive and less than max wait;
-  - TTL covers the expected IdP refresh call budget.
+- Validate lock mode, TTL, max wait, and poll interval.
 
 Tests:
 
-- A lock that never acquires returns the documented status and no-store headers.
-- The refresh action is not run when the lock is unavailable.
-- Invalid lock properties fail binding or boot.
-- Concurrent refresh tests still prove exactly one upstream refresh under the
-  normal lock.
+- Lock that never acquires returns the documented status and headers.
+- Refresh action is not run when the lock is unavailable.
+- Invalid lock configuration fails at binding or boot.
+- Normal concurrent refresh still collapses to one upstream refresh.
 
-### 5. Strengthen the no-token-in-browser proof
+### 5. Bind OAuth error callbacks to the browser transaction
 
-Current risk:
+Problem:
 
-- The E2E helper checks storage and `document.cookie`, but not every browser
-  cookie visible through Playwright or every same-origin JSON response body.
-- A regression could set an HttpOnly token cookie or return token fields in
-  `/auth/me` while the current browser proof stays green.
+- Success callbacks validate `oauth_tx`.
+- IdP error callbacks consume `tx:{state}` without validating `oauth_tx`.
+- Impact is mostly pending-login cancellation if state leaks.
 
-Recommended change:
+Change:
 
-- Extend the E2E proof to inspect all browser cookies through
-  `context.cookies()`.
-- Reject cookie names and values that look like `access_token`, `refresh_token`,
-  `id_token`, JWT, JWE, or long opaque bearer values.
-- Capture relevant same-origin responses:
-  - `/auth/me`;
-  - `/api/me`;
-  - `/api/user-data`;
-  - `/auth/logout`;
-  - gateway error responses.
-- Assert no token fields or token-shaped values appear in those bodies.
-- Keep the precise allowed exception: `id_token_hint` may appear only in the
-  server-generated top-level redirect Location from `/auth/logout/continue` to
-  the IdP.
+- For `?error=...&state=...`, load the transaction, validate `oauth_tx`, then
+  consume it.
+- If this remains intentionally unbound, document the exact tradeoff.
 
 Tests:
 
-- Add a negative fixture or route-mocked response proving the token scanner would
-  fail if `/auth/me` returned `access_token`.
-- Add an assertion that no HttpOnly cookie name contains token-like names.
+- Error callback with missing `oauth_tx` is rejected and audited.
+- Error callback with mismatched `oauth_tx` is rejected and audited.
+- Error callback with matching `oauth_tx` consumes the transaction and returns
+  the graceful error response.
 
-## Priority 2
+## Phase 2 - Proof And Contract Tightening
 
-### 6. Project `/auth/me` server-side
+These make the reference harder to accidentally weaken.
 
-Current risk:
+### 6. Strengthen the no-token-in-browser proof
 
-- The Auth Service returns the stored session claim map directly.
+Problem:
+
+- The E2E helper checks storage and `document.cookie`.
+- It does not inspect every browser cookie through Playwright.
+- It does not scan same-origin JSON response bodies broadly.
+
+Change:
+
+- Inspect `context.cookies()` for token-like names and values.
+- Capture and scan `/auth/me`, `/api/me`, `/api/user-data`, `/auth/logout`, and
+  gateway error responses.
+- Reject `access_token`, `refresh_token`, `id_token`, JWT-looking strings,
+  JWE-looking strings, and long opaque bearer-looking values.
+- Keep the only allowed ID-token appearance: `id_token_hint` in the
+  server-generated top-level redirect from `/auth/logout/continue` to the IdP.
+
+Tests:
+
+- A negative fixture proves the scanner fails if `/auth/me` returns
+  `access_token`.
+- HttpOnly cookies are also checked for token-like names.
+
+### 7. Project `/auth/me` server-side
+
+Problem:
+
+- Auth Service returns the stored session claim map.
 - The frontend sanitizes it, but the server should own the public contract.
 
-Recommended change:
+Change:
 
-- Introduce a typed `UserProfileResponse`.
-- Return only:
+- Return a typed response with only:
   - `sub`;
   - `preferred_username`;
   - `name`;
@@ -170,143 +186,87 @@ Recommended change:
   - `roles`;
   - `auth_time`;
   - `acr`.
-- Do not return arbitrary IdP claims, token material, raw nested claim objects,
-  or provider-specific implementation details.
+- Do not return arbitrary IdP claims, token material, nested provider objects, or
+  implementation details.
 
 Tests:
 
-- `/auth/me` includes expected allowed fields.
-- `/auth/me` drops unexpected fields from the stored session record.
-- `/auth/me` never returns token-shaped fields.
-
-### 7. Bind OAuth error callbacks to the browser transaction
-
-Current risk:
-
-- The success callback validates the `oauth_tx` browser-binding cookie.
-- The IdP error callback consumes `tx:{state}` without validating that binding.
-- Impact is mostly login denial of service if a high-entropy state leaks.
-
-Recommended change:
-
-- For `?error=...&state=...`, load the transaction, validate `oauth_tx`, then
-  consume it.
-- If choosing not to bind the error path, document the exact tradeoff.
-
-Tests:
-
-- Error callback with missing `oauth_tx` is rejected and audited.
-- Error callback with mismatched `oauth_tx` is rejected and audited.
-- Error callback with matching `oauth_tx` consumes the transaction and returns
-  the intended graceful response.
+- Allowed fields are returned.
+- Unexpected fields in the session record are dropped.
+- Token-shaped fields are never returned.
 
 ### 8. Make token-bearing internal responses explicitly no-store
 
-Current risk:
+Problem:
 
 - `/internal/resolve` returns access-token JSON to the gateway.
-- Spring Security may add cache headers, but the controller contract should be
+- Spring Security may add cache headers, but the endpoint contract should be
   explicit.
 
-Recommended change:
+Change:
 
-- Add `Cache-Control: no-store` to every `/internal/resolve` success and error
-  response.
+- Add `Cache-Control: no-store` to `/internal/resolve` success and error
+  responses.
 - Keep problem responses as `application/problem+json`.
 
 Tests:
 
-- Fresh-token resolve response has `Cache-Control: no-store`.
-- Rotated-token resolve response has `Cache-Control: no-store`.
+- Fresh-token response has `Cache-Control: no-store`.
+- Rotated-token response has `Cache-Control: no-store`.
 - Error responses have `Cache-Control: no-store`.
 
 ### 9. Fail fast on malformed CSRF signing keys
 
-Current risk:
+Problem:
 
-- Auth Service validates sentinel and short valid base64 keys, but invalid
-  base64 can still be discovered at runtime.
-- Gateway validation is weaker and can discover key issues only during requests.
+- Auth Service detects sentinel and short valid base64 keys, but invalid base64
+  can still reach runtime.
+- Gateway-side validation is weaker.
 
-Recommended change:
+Change:
 
 - Auth Service validates base64 decoding and decoded length at boot.
-- Gateway render or schema validation checks base64 and 32-byte decoded length.
-- Keep the local-dev sentinel allowed only in explicit local/test profiles.
+- Gateway render/schema validation checks base64 and 32-byte decoded length.
+- Local-dev sentinel remains allowed only in explicit local/test profiles.
 
 Tests:
 
 - Invalid base64 key fails Auth Service boot.
 - Short decoded key fails outside local/test profiles.
-- Gateway render rejects invalid or short key.
+- Gateway render rejects invalid or short keys.
 - Valid 32-byte base64 key passes.
 
-### 10. Add safe configurable authorization request extras
+### 10. Clean test-only gateway echo exposure
 
-Current risk:
+Problem:
 
-- The authorization request builder emits only the fixed standard request
-  parameters used by the local reference.
-- Some IdPs or deployments need `audience` or RFC 8707 `resource`.
-- Docs already mention the Auth0 `audience` gap.
+- `/api/_test/echo` is useful for gateway proof.
+- The route exists in the normal APISIX template and relies on the Resource
+  Server test profile for safety.
 
-Recommended change:
+Change:
 
-- Add a narrow config surface for extra authorization request parameters.
-- Prefer explicit knobs for `resource` and `audience` over a fully arbitrary map.
-- If a generic map is added, reject overrides of load-bearing parameters:
-  - `client_id`;
-  - `redirect_uri`;
-  - `response_type`;
-  - `scope`;
-  - `state`;
-  - `nonce`;
-  - `code_challenge`;
-  - `code_challenge_method`;
-  - `prompt` and `acr_values` unless explicitly owned by the step-up path.
-
-Tests:
-
-- Configured `resource` appears on the authorize redirect.
-- Configured `audience` appears on the authorize redirect.
-- Dangerous override keys are rejected at boot or login start.
-- Default local Keycloak flow remains byte-for-byte compatible where expected.
-
-### 11. Clean test-only gateway echo exposure
-
-Current risk:
-
-- `/api/_test/echo` is useful for proving header and cookie shaping.
-- The APISIX route exists in the normal template and relies on the Resource
-  Server profile gate to return 404 in non-test runtime.
-
-Recommended change:
-
-- Render the echo route only for the test gateway config.
-- Keep the Resource Server controller profile-gated as a second guard.
-- Add a production-profile test proving `/api/_test/echo` is not routable.
+- Render the echo route only in test gateway config.
+- Keep the Resource Server profile gate as a second guard.
 
 Tests:
 
 - Test config exposes `/api/_test/echo`.
-- Default/prod config does not expose the route.
-- Gateway header-shaping tests still use the test route.
+- Default/prod config does not expose it.
+- Gateway header-shaping tests continue to use the test route.
 
-### 12. Fix stale gateway cookie test
+### 11. Fix stale gateway cookie test
 
-Current risk:
+Problem:
 
-- The live gateway test expects plaintext `__Host-sid` to be rejected.
+- The live gateway test expects plaintext `__Host-sid` rejection.
 - The plugin accepts `__Host-sid` unconditionally.
-- A contradictory security test reduces trust in the gate.
 
-Recommended change:
+Change:
 
-- Decide the intended policy and align unit plus live tests.
-- If `__Host-sid` is always accepted, rename the test to prove bare `sid` is
+- Align the test with the intended policy.
+- If `__Host-sid` is always accepted, make the live test prove bare `sid` is
   rejected when `allow_insecure_sid=false`.
-- If secure-only acceptance is desired, change plugin behavior and tests
-  together.
 
 Tests:
 
@@ -314,188 +274,171 @@ Tests:
 - Bare `sid` rejected when `allow_insecure_sid=false`.
 - Bare `sid` accepted only when `allow_insecure_sid=true`.
 
-## Priority 3
+### 12. Fix frontend proof and docs nits
 
-### 13. Split `AuthController` by security responsibility
+Problem:
 
-Current risk:
+- Storage lint misses variants such as `window.localStorage.setItem`,
+  assignment, bracket access, and aliases.
+- Sign-in is an anchor but exposed as `role="button"`.
+- Frontend README implies authenticated coverage runs through `npm run test:e2e`,
+  but the full proof is driven by the repo E2E script.
 
-- The controller is cohesive, but it carries many security responsibilities in
-  one file.
-- Auditing is harder than it needs to be.
+Change:
 
-Recommended change:
-
-- Extract pure or narrowly scoped collaborators:
-  - `ReturnToValidator`;
-  - `SessionCookieService`;
-  - `LoginTransactionService`;
-  - `LogoutContinuationService`;
-  - `UserProfileMapper`.
-- Keep route behavior unchanged.
-- Keep comments focused on non-obvious security invariants.
+- Tighten lint rules for storage access in production source.
+- Use normal link semantics for sign-in.
+- Point authenticated verification docs to the actual full-stack script.
 
 Tests:
 
-- Move existing unit tests to the extracted collaborators where possible.
-- Keep controller tests for HTTP contract and cookie/header behavior.
+- Lint fails on common storage-write variants.
+- Sign-in is queried as a link.
+- README command matches the harness.
 
-### 14. Use typed response records for contracts
+## Phase 3 - Hot-Path Performance
 
-Current risk:
+Do this after the correctness fixes. This phase is about reducing I/O, not
+adding layers.
 
-- Some endpoints use raw `Map<String, Object>`.
-- Raw maps make accidental fields and contract drift easier.
+### 13. Keep `/internal/resolve` cheap
 
-Recommended change:
+Problem:
 
-- Use records for:
-  - `/auth/me`;
-  - `/auth/logout`;
-  - `/internal/resolve`;
-  - Resource Server API responses where practical.
-- Keep RFC 7807 `ProblemDetail` for error shapes.
+- Every `/api/**` request calls Auth Service.
+- That boundary is correct, but the common path must be cheap.
+
+Target common path:
+
+```text
+Auth Service receives sid
+state store reads sess:{sid}
+state store touches idle TTL only when needed
+Auth Service returns current access token
+```
+
+Non-goals:
+
+- No IdP call on the fresh-token path.
+- No broad lock on the fresh-token path.
+- No gateway token cache for this milestone.
+- No refresh jitter unless load testing shows synchronized refresh herds.
+
+Change:
+
+- Combine session read and idle touch into one state-store operation where
+  practical.
+- Avoid rewriting TTL on every request when the TTL is already comfortably above
+  the touch threshold.
+- Keep refresh only inside the configured refresh window.
+
+Tests:
+
+- Fresh session resolve performs no refresh.
+- Fresh session resolve uses the combined read/touch operation where available.
+- TTL is not rewritten on every call above the touch threshold.
+- Near-expiry access token still enters refresh.
+- Logout or session delete is visible on the next request.
+
+## Phase 4 - Minimal Organization Cleanup
+
+This is not a separate refactor project. Apply these only while fixing the phases
+above.
+
+### 14. Keep controller changes surgical
+
+Guidance:
+
+- Do not split controllers just to reduce line count.
+- Extract only pure logic that is easier to test outside Spring.
+- Good candidates:
+  - return-to validation;
+  - user-profile projection;
+  - cookie name/attribute selection.
+- Keep `AuthController` readable as the HTTP flow owner.
+- Keep `/internal/resolve` visible as one flow: read session, absolute-expiry
+  check, fresh-token return, refresh-under-lock, sid rotation.
+- Do not introduce public interfaces for one implementation.
+
+Tests:
+
+- Move only directly relevant tests to extracted pure helpers.
+- Keep controller tests for HTTP contract, cookies, headers, and wire shape.
+
+### 15. Use typed records for response contracts
+
+Problem:
+
+- Raw `Map<String, Object>` responses make accidental fields and contract drift
+  easier.
+
+Change:
+
+- Use records for `/auth/me`, `/auth/logout`, `/internal/resolve`, and Resource
+  Server responses where practical.
+- Keep RFC 7807 `ProblemDetail` for errors.
 
 Tests:
 
 - JSON contract tests assert snake_case where required.
 - Unexpected fields are not serialized.
 
-### 15. Centralize claim extraction
+### 16. Centralize repeated claim handling only if drift appears
 
-Current risk:
+Problem:
 
-- Claim handling is good but spread across layers.
-- Audience string-or-array, `azp` vs `client_id`, role claim paths, `auth_time`,
-  and `acr` should not drift independently.
+- Audience normalization, `azp` / `client_id`, role paths, `auth_time`, and `acr`
+  appear in multiple places.
 
-Recommended change:
+Change:
 
-- Add a small claim utility or package-local helper set for:
-  - audience normalization;
-  - caller client id extraction;
-  - role claim path extraction;
-  - `auth_time` parsing;
-  - `acr` extraction.
+- If a fix touches repeated claim logic, move the repeated pure parsing into a
+  package-private helper.
+- Do not create a claim framework.
 
 Tests:
 
-- String and array audience forms.
+- Audience as string and array.
 - Missing and wrong audience.
-- `azp` present, `client_id` present, neither present.
-- Top-level and nested role claim paths.
-- URI-shaped role claim names.
+- `azp`, `client_id`, and neither.
+- Top-level, nested, and URI-shaped role claims.
 
-### 16. Improve provider portability tests
+## Phase 5 - Provider Portability Proof
 
-Current risk:
+This is not a new architecture. It is evidence that the current config surface is
+real.
 
-- The local Keycloak path is strong.
-- Provider portability is partly proven by alternate realm and docs, but more
-  negative tests would make the config-driven claim stronger.
+### 17. Add targeted portability tests
 
-Recommended change:
+Change:
 
-- Add or keep tests for:
-  - ID-token audience is BFF client id;
-  - access-token audience is Resource Server audience;
-  - audience claim as string and array;
+- Keep the hermetic alternate-realm proof for:
+  - different access-token audience;
+  - roles under top-level `groups`.
+- Keep live Okta or other external-provider runs as documented, non-gating
+  evidence.
+- Add unit tests for provider-shaped tokens:
   - missing `refresh_expires_in`;
   - missing `acr`;
   - stale `auth_time`;
   - wrong `acr`;
-  - roles under top-level `groups`;
-  - roles under URI-shaped claim name.
-
-Tests:
-
-- Unit tests for claim mapping and validation.
-- Hermetic alt-realm E2E for different audience and top-level groups.
-- Keep live Okta or external-provider runbook non-gating.
-
-### 17. Tighten frontend storage lint guard
-
-Current risk:
-
-- The lint rule catches direct storage writes, but misses variants such as
-  `window.localStorage.setItem`, property assignment, bracket access, or aliases.
-
-Recommended change:
-
-- Ban all frontend storage access in production source unless an explicit
-  allowlisted test/helper file needs read-only inspection.
-- If read-only access is kept for debug code, make it narrow and tested.
-
-Tests:
-
-- Lint fails on:
-  - `window.localStorage.setItem`;
-  - `localStorage["token"] = value`;
-  - `localStorage.token = value`;
-  - `const s = localStorage; s.setItem(...)`;
-  - `indexedDB.open(...)`.
-
-### 18. Fix frontend link semantics
-
-Current risk:
-
-- Sign-in is an anchor navigation but exposed as `role="button"`.
-- That weakens accessibility semantics and causes tests to assert the wrong
-  role.
-
-Recommended change:
-
-- Use a normal link with accessible name `Sign in`.
-- Update tests to query by role `link`.
-
-Tests:
-
-- Anonymous state shows a sign-in link.
-- Link `href` is `/auth/login?return_to=...`.
-
-### 19. Surface `/auth/me` transport errors distinctly
-
-Current risk:
-
-- Frontend collapses `/auth/me` server/transport failures into anonymous state.
-- Manual verification can mistake an outage for a normal signed-out page.
-
-Recommended change:
-
-- Keep `401` as anonymous.
-- Show an error state for non-401 failures or malformed `/auth/me` shape.
-
-Tests:
-
-- `401` shows anonymous sign-in state.
-- `500` shows an auth-service unavailable message.
-- Malformed JSON shape shows an auth-state error.
-
-### 20. Fix frontend README E2E command
-
-Current risk:
-
-- `npm run test:e2e` runs the anonymous Playwright spec.
-- The README says `E2E_FULL_STACK=1 npm run test:e2e` includes authenticated
-  coverage.
-
-Recommended change:
-
-- Point authenticated verification to `scripts/e2e-auth.sh`.
-- Keep frontend-only E2E description scoped to anonymous behavior.
+  - audience as string and array;
+  - URI-shaped role claim name.
 
 ## Preserve
 
-These parts look strong and should be preserved while making the improvements:
+Keep these design choices intact while making the improvements:
 
-- BFF/session-cookie pattern; no SPA-held access or refresh tokens.
-- Mandatory `return_to` login contract.
+- BFF/session-cookie pattern.
+- No SPA-held access or refresh tokens.
+- Mandatory `return_to`.
 - Authorization Code with PKCE S256.
 - OIDC nonce validation.
-- Browser-binding `oauth_tx` cookie on the success callback.
+- Browser-binding `oauth_tx` cookie on callback.
 - Server-side token storage.
-- API Gateway as browser security boundary.
-- Phantom-token style `/internal/resolve` rather than gateway direct store reads.
+- API Gateway as browser boundary.
+- Gateway-to-Auth Service `/internal/resolve` on `/api/**`.
+- No Resource Server calls to Auth Service.
 - Resource Server stateless JWT validation.
 - Explicit issuer, audience, expiry, and RS256 checks.
 - Configurable role claim path.
@@ -504,19 +447,19 @@ These parts look strong and should be preserved while making the improvements:
 - Back-channel logout support.
 - Signed double-submit CSRF bound to sid.
 - Step-up challenge behavior for sensitive operations.
-- Alt-realm portability proof.
 
 ## Done Criteria
 
-The code should be considered ready for the next "world-class reference" review
-when:
+The code is ready for the next reference-quality review when:
 
-1. The Priority 1 items are implemented with unit and live-gate coverage.
-2. No browser-visible surface exposes access tokens, refresh tokens, or ID tokens
-   except the explicit front-channel `id_token_hint` logout redirect exception.
-3. Back-channel logout revokes every matching local session for `sid` and `sub`.
-4. Secure requests accept only the production session cookie shape.
-5. Session indexes cannot expire before the sessions they are needed to revoke.
-6. Distributed refresh-lock failure is a documented, tested transient path.
-7. `/auth/me` and `/internal/resolve` are typed, minimal, and cache-safe.
-8. Test-only routes cannot be accidentally shipped in the default runtime.
+1. OP-sid logout revokes every matching local session.
+2. Secure requests accept only the production session cookie shape.
+3. Session indexes cannot expire before the sessions they are needed to revoke.
+4. Distributed refresh-lock failure is documented, tested, audited, and transient.
+5. Browser-visible surfaces prove no access token, refresh token, or ID token
+   exposure, except the explicit `id_token_hint` logout redirect exception.
+6. `/auth/me` is a minimal typed projection.
+7. `/internal/resolve` is no-refresh on the fresh-token path, low round-trip,
+   no-store, and covered by operation-count or equivalent tests.
+8. Test-only routes cannot ship in default runtime.
+9. Refactors remain small, local, and tied to the fixes above.
