@@ -150,6 +150,19 @@ HA (previously it mattered only at login frequency) — run it replicated, and f
 fresh connection per request) and a circuit breaker so a slow Auth Service fails
 fast instead of stalling the whole `/api` surface.
 
+The obvious lever to cut that per-request call — a short-TTL access-token cache at
+the gateway, keyed by sid — is **not free**, and is intentionally omitted from the
+reference. It trades away instant revocation: today a `DEL sess:{sid}` (logout,
+back-channel logout, refresh-reuse invalidation) is observed on the very next
+`/api/**` request because the gateway always re-resolves; with a cache, a
+logged-out or revoked session keeps serving `/api` until its cache entry expires. A
+small TTL (1–5 s) bounds the staleness and is acceptable in some production systems
+as a throughput-vs-revocation-latency trade, but the reference keeps the no-cache
+phantom-token path because instant revocation is the property it exists to
+demonstrate and is easier to reason about. Don't reach for this without a measured
+`/internal/resolve` latency cost — and if you add it, document the revocation
+window.
+
 Before a real deployment:
 
 - Run a replicated single-primary topology (Sentinel, or a managed

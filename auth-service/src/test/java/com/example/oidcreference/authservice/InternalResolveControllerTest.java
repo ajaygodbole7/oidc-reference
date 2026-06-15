@@ -255,6 +255,45 @@ class InternalResolveControllerTest {
   }
 
   @Test
+  void resolveFreshPathIsCheap_oneSlideNoRefresh() throws Exception {
+    // SPEC-0001 Done Criterion #7 (test clause). This guards EXACTLY two things on
+    // the fresh-token hot path, no more:
+    //   - no IdP/refresh call (and therefore the refresh-lock path is not entered),
+    //   - the idle TTL is slid exactly once, not in a rewrite storm.
+    // It is NOT a general round-trip guard: InMemoryStateStore counts expire() (and
+    // zero-TTL put), not get()/ttl()/put(), so an added read would slip past it.
+    // The two-op shape (read + bounded slide) is deliberate and stays: the slide
+    // must respect the absolute-TTL ceiling (a security control) that is only known
+    // after decoding the session, so a GETEX read+touch — which sets the TTL before
+    // the decode — would risk overshooting the ceiling (fail-open). Optimization
+    // declined on that basis; see the conversation/architecture rationale.
+    String sid = "sid-cheap-hot-path";
+    SessionRecord fresh = new SessionRecord(
+        "fresh-access",
+        "refresh-token-1",
+        "id-token-1",
+        Instant.now().plusSeconds(600), // well outside the refresh window
+        Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    stateStore.put("sess:" + sid, TestBeans.JSON.encode(fresh), Duration.ofSeconds(120));
+    int slidesBefore = stateStore.expireCalls();
+    int refreshesBefore = tokenRefreshClient.refreshCalls();
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isOk());
+
+    assertThat(tokenRefreshClient.refreshCalls() - refreshesBefore)
+        .as("fresh path must not call the IdP")
+        .isZero();
+    assertThat(stateStore.expireCalls() - slidesBefore)
+        .as("fresh path slides the idle TTL exactly once, not repeatedly")
+        .isEqualTo(1);
+  }
+
+  @Test
   void resolveRefreshesAndRotatesSidWhenExpiring(CapturedOutput output) throws Exception {
     // Access token expires in 10 s — inside the 60 s window — so resolve
     // refreshes AND rotates the sid (A6): sess:{old} is gone, the refreshed
