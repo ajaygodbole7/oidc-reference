@@ -42,7 +42,7 @@ class BackChannelLogoutController {
     BackChannelLogoutTokenValidator.LogoutToken token;
     try {
       token = validator.validate(logoutToken);
-      if (isReplay(token.jti())) {
+      if (alreadyProcessed(token.jti())) {
         throw new BadCredentialsException("logout_token replay");
       }
     } catch (BadCredentialsException e) {
@@ -59,6 +59,14 @@ class BackChannelLogoutController {
     } else if (token.sub() != null) {
       deleted += sessionIndexes.deleteBySubject(token.sub());
     }
+
+    // Mark the jti processed ONLY after the revocation side effect succeeded. If a
+    // deletion above throws it propagates as a 5xx and NO replay marker is left, so
+    // the IdP's retry can still revoke the session — marking before deletion would
+    // turn a failed delete into a permanent fail-open (retry rejected as replay,
+    // session stays alive). Deletion is idempotent, so a concurrent retry that
+    // races into the gap re-runs it harmlessly.
+    markProcessed(token.jti());
 
     SecurityAudit.event(
         request,
@@ -79,8 +87,16 @@ class BackChannelLogoutController {
         .build();
   }
 
-  private boolean isReplay(String jti) {
-    String key = "logout_jti:" + jti;
-    return !stateStore.putIfAbsent(key, "1", JTI_TTL);
+  // Replay = a logout_token whose jti we have ALREADY fully processed (deleted
+  // its sessions). A read-only check, so a token whose prior deletion FAILED (no
+  // marker written) is not treated as a replay and can be retried.
+  private boolean alreadyProcessed(String jti) {
+    return stateStore.get("logout_jti:" + jti).isPresent();
+  }
+
+  // Record the jti as processed (idempotent putIfAbsent). Called only after a
+  // successful deletion. The TTL bounds how long replays are remembered.
+  private void markProcessed(String jti) {
+    stateStore.putIfAbsent("logout_jti:" + jti, "1", JTI_TTL);
   }
 }

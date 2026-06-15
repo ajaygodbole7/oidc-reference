@@ -48,6 +48,7 @@ class BackChannelLogoutControllerTest {
   @BeforeEach
   void clearState() {
     stateStore.clear();
+    TestBeans.deleteFailuresLeft.set(0);
   }
 
   @Test
@@ -164,6 +165,41 @@ class BackChannelLogoutControllerTest {
         .andExpect(status().isBadRequest());
   }
 
+  @Test
+  void deletionFailureLeavesNoReplayMarkerSoRetryCanStillRevoke() throws Exception {
+    // F2: the jti replay marker must be written only AFTER a successful deletion.
+    // If the deletion fails, no marker is left, so the IdP's retry is NOT rejected
+    // as a replay and can still revoke the session. (The old order — mark before
+    // deletion — turned a failed delete into a permanent fail-open.)
+    SessionRecord session = session("alice", idTokenWithSid("idp-sid-1"));
+    stateStore.put("sess:local-sid-1", TestBeans.JSON.encode(session), Duration.ofMinutes(30));
+    new SessionIndexes(stateStore, TestBeans.JSON).index("local-sid-1", session);
+
+    // First delivery: deletion fails once. The exception surfaces; either way the
+    // session must SURVIVE and no replay marker may be written.
+    TestBeans.deleteFailuresLeft.set(1);
+    try {
+      mockMvc.perform(post("/backchannel-logout")
+          .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+          .content("logout_token=valid-sid"));
+    } catch (Exception expected) {
+      // the injected deletion failure propagates; the post-conditions below are the point
+    }
+    assertThat(stateStore.get("sess:local-sid-1"))
+        .as("a failed deletion must leave the session intact (fail-closed)")
+        .isPresent();
+
+    // Retry with the SAME token (same jti): not treated as a replay, deletion now
+    // succeeds, session revoked.
+    mockMvc.perform(post("/backchannel-logout")
+            .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+            .content("logout_token=valid-sid"))
+        .andExpect(status().isOk());
+    assertThat(stateStore.get("sess:local-sid-1"))
+        .as("retry after a failed deletion still revokes the session")
+        .isEmpty();
+  }
+
   private static SessionRecord session(String sub, String idToken) {
     Instant createdAt = Instant.now();
     return new SessionRecord(
@@ -198,6 +234,26 @@ class BackChannelLogoutControllerTest {
     @Primary
     BackChannelLogoutTokenValidator backChannelLogoutTokenValidator() {
       return new FakeBackChannelLogoutTokenValidator();
+    }
+
+    // F2: inject a one-time deleteByIdpSid failure. Default 0 -> every other test
+    // sees normal deletion; a test sets this to 1 to prove the jti replay marker
+    // is written only AFTER a successful deletion (so a failed delete can retry).
+    static final java.util.concurrent.atomic.AtomicInteger deleteFailuresLeft =
+        new java.util.concurrent.atomic.AtomicInteger(0);
+
+    @Bean
+    @Primary
+    SessionIndexes sessionIndexes(InMemoryStateStore store) {
+      return new SessionIndexes(store, JSON) {
+        @Override
+        int deleteByIdpSid(String idpSid) {
+          if (deleteFailuresLeft.getAndDecrement() > 0) {
+            throw new IllegalStateException("injected one-time deletion failure");
+          }
+          return super.deleteByIdpSid(idpSid);
+        }
+      };
     }
 
     @Bean
