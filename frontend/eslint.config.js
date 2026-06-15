@@ -73,6 +73,16 @@ export default tseslint.config(
           message: "SPEC-0001: the SPA holds no tokens. Do not write to web storage (qualified bracket access)."
         },
         {
+          selector:
+            "MemberExpression[object.type='MemberExpression'][object.property.value=/^(localStorage|sessionStorage)$/][property.name=/^(setItem|removeItem|clear)$/]",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write to web storage (bracket-qualified global)."
+        },
+        {
+          selector:
+            "MemberExpression[object.type='MemberExpression'][object.property.value=/^(localStorage|sessionStorage)$/][property.value=/^(setItem|removeItem|clear)$/]",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write to web storage (fully bracket-qualified)."
+        },
+        {
           selector: "AssignmentExpression[left.object.name=/^(localStorage|sessionStorage)$/]",
           message: "SPEC-0001: the SPA holds no tokens. Do not assign into web storage."
         },
@@ -80,6 +90,11 @@ export default tseslint.config(
           selector:
             "AssignmentExpression[left.object.type='MemberExpression'][left.object.property.name=/^(localStorage|sessionStorage)$/]",
           message: "SPEC-0001: the SPA holds no tokens. Do not assign into web storage (qualified)."
+        },
+        {
+          selector:
+            "AssignmentExpression[left.object.type='MemberExpression'][left.object.property.value=/^(localStorage|sessionStorage)$/]",
+          message: "SPEC-0001: the SPA holds no tokens. Do not assign into web storage (bracket-qualified global)."
         },
         {
           selector: "Identifier[name='indexedDB']",

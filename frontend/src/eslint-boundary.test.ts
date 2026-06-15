@@ -85,6 +85,24 @@ describe("ESLint storage-ban boundary", () => {
     expect(restricted, "must flag localStorage assignment").toBeDefined();
   });
 
+  it("blocks bracket-qualified global storage writes in src/", { timeout: 30000 }, () => {
+    writeFileSync(TEMP_FILE, "export function leak() { window['localStorage'].setItem('t', 'x'); }\n");
+    const restricted = lint(TEMP_FILE).find((m) => m.ruleId === "no-restricted-syntax");
+    expect(restricted, "must flag window['localStorage'].setItem").toBeDefined();
+  });
+
+  it("blocks fully bracket-qualified global storage writes in src/", { timeout: 30000 }, () => {
+    writeFileSync(TEMP_FILE, "export function leak() { globalThis['sessionStorage']['setItem']('t', 'x'); }\n");
+    const restricted = lint(TEMP_FILE).find((m) => m.ruleId === "no-restricted-syntax");
+    expect(restricted, "must flag globalThis['sessionStorage']['setItem']").toBeDefined();
+  });
+
+  it("blocks bracket-qualified global storage assignment in src/", { timeout: 30000 }, () => {
+    writeFileSync(TEMP_FILE, "export function leak() { window['localStorage']['token'] = 'x'; }\n");
+    const restricted = lint(TEMP_FILE).find((m) => m.ruleId === "no-restricted-syntax");
+    expect(restricted, "must flag window['localStorage']['token'] = ...").toBeDefined();
+  });
+
   it("allows storage reads (no setItem) — debug tools need them", { timeout: 30000 }, () => {
     writeFileSync(TEMP_FILE, "export const n = localStorage.length;\n");
     const messages = lint(TEMP_FILE);
