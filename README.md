@@ -24,6 +24,7 @@ flowchart LR
     A --> V[(Session Store)]
     G -->|"Bearer access_token"| R[Resource Server]
     A -.->|"OAuth round-trip"| K[IdP]
+    G -.->|"Client Credentials service token"| K
 ```
 
 If you read nothing else, run `just up` and then `just e2e-auth`: login → API call → token refresh → logout, end to end.
@@ -84,23 +85,31 @@ sequenceDiagram
     participant B as Browser (SPA)
     participant G as API Gateway
     participant A as Auth Service (BFF)
+    participant V as Session Store
     participant K as IdP
 
     Note over B: Browser holds only an opaque __Host-sid cookie + a CSRF token —<br/>never an access, refresh, or ID token.
     U->>B: Open a protected URL
     B->>G: GET /api/… (no session cookie)
     G-->>B: 302 → /auth/login (navigation) · 401 (XHR)
-    B->>A: GET /auth/login?return_to=…
-    A->>A: Start OAuth transaction — state, nonce, PKCE, browser-binding
-    A-->>B: 302 → IdP /authorize (code, PKCE S256)
+    B->>G: GET /auth/login?return_to=…
+    G->>A: Forward /auth/login
+    A->>A: Generate state, nonce, PKCE, browser-binding
+    A->>V: Store tx:{state} (verifier, nonce, saved request, binding hash)
+    A-->>G: 302 → IdP authorization endpoint (response_type=code, PKCE S256)
+    G-->>B: Forward redirect + transaction cookie
     B->>K: Authenticate
-    K-->>B: 302 → /auth/callback?code
-    B->>A: GET /auth/callback (+ transaction cookie)
+    K-->>B: 302 → /auth/callback/idp?code&state (+ optional iss)
+    B->>G: GET /auth/callback/idp (+ transaction cookie)
+    G->>A: Forward callback
+    A->>V: Atomically consume tx:{state}
     A->>K: Exchange code (+ PKCE verifier, client secret)
     K-->>A: access + refresh + ID tokens
     Note over A,K: Tokens exist only server-side, from here on.
-    A->>A: Validate id_token · create server-side session
-    A-->>B: 302 → original URL + __Host-sid + CSRF cookie
+    A->>A: Validate id_token
+    A->>V: Create sess:{sid} + logout indexes
+    A-->>G: 302 → original URL + __Host-sid + CSRF cookie
+    G-->>B: Forward redirect + cookies
 ```
 
 </details>
@@ -114,17 +123,21 @@ The SPA holds no session state of its own. It calls `/auth/me` to learn whether 
 sequenceDiagram
     autonumber
     participant B as Browser (SPA)
+    participant G as API Gateway
     participant A as Auth Service (BFF)
     participant V as Session Store
 
     Note over B: On mount, the SPA checks who is signed in — its only window into session state.
-    B->>A: GET /auth/me (sends the __Host-sid cookie)
+    B->>G: GET /auth/me (sends the __Host-sid cookie)
+    G->>A: Forward /auth/me
     A->>V: Read the session record (pure read, no idle-window slide)
     alt session valid
-        A-->>B: 200 claims (sub, preferred_username, name, email, roles)
+        A-->>G: 200 allowlisted identity claims
+        G-->>B: 200 identity claims (+ optional auth_time, acr)
         Note over B: Authenticated — render identity and roles (display only, never a token)
     else no, expired, or server-deleted session
-        A-->>B: 401 (Cache-Control no-store)
+        A-->>G: 401 (Cache-Control: no-store)
+        G-->>B: 401
         Note over B: Anonymous — render the Sign-in prompt
     end
 ```
@@ -150,14 +163,24 @@ sequenceDiagram
     participant K as IdP
     participant R as Resource Server
 
-    B->>G: GET /api/… (Cookie __Host-sid, CSRF)
+    B->>G: GET /api/… (Cookie __Host-sid)
+    Note over B,G: State-changing methods also send the signed CSRF header.
     Note over G: The gateway holds no store handle — it resolves the sid via the Auth Service.
     G->>A: POST /internal/resolve (gateway service token + sid)
-    A->>V: Look up session, slide the idle window
-    opt access token near expiry
-        A->>K: Refresh-token grant
-        K-->>A: rotated access + refresh tokens
-        A->>V: Refresh + rotate sid — atomic move sess:{sid}→sess:{sid'} + breadcrumb, repoint indexes
+    A->>V: Look up session
+    alt access token fresh
+        A->>V: Slide idle window
+    else access token near expiry
+        A->>A: Acquire per-session lock
+        A->>V: Re-read session under lock
+        alt another caller already refreshed
+            A->>V: Slide idle window
+        else still near expiry
+            A->>K: Refresh-token grant
+            K-->>A: rotated access + refresh tokens
+            A->>V: Atomic move sess:{sid}→sess:{sid'} + rotated:{sid} breadcrumb
+            A->>V: CAS/repoint logout and subject indexes to sid'
+        end
     end
     A-->>G: 200 access_token (+ rotated_sid, rotated_csrf when the sid rotated)
     opt resolve rotated the sid
@@ -173,7 +196,7 @@ sequenceDiagram
 </details>
 
 <details>
-<summary><strong>Flow 4: Logout (RP-initiated, <code>id_token_hint</code> stays server-side)</strong></summary>
+<summary><strong>Flow 4: Logout (RP-initiated, <code>id_token_hint</code> never reaches SPA code or storage)</strong></summary>
 
 The IdP end-session URL carries `id_token_hint` (PII), so it never reaches SPA JavaScript. The Auth Service hands back a same-origin, single-use handle and emits the IdP redirect itself from `/auth/logout/continue`.
 
@@ -181,17 +204,24 @@ The IdP end-session URL carries `id_token_hint` (PII), so it never reaches SPA J
 sequenceDiagram
     autonumber
     participant B as Browser (SPA)
+    participant G as API Gateway
     participant A as Auth Service (BFF)
+    participant V as Session Store
     participant K as IdP
 
-    B->>A: POST /auth/logout (Cookie: __Host-sid, header: CSRF)
-    A->>A: Validate CSRF · delete server-side session · stash single-use logout handle
-    A-->>B: 200 logoutUrl=/auth/logout/continue?lc=… + evict cookies
+    B->>G: POST /auth/logout (Cookie: __Host-sid, header: CSRF)
+    G->>A: Forward /auth/logout
+    A->>A: Validate signed CSRF
+    A->>V: Delete session + indexes · store single-use logout handle
+    A-->>G: 200 logoutUrl=/auth/logout/continue?lc=… + evict cookies
+    G-->>B: Forward same-origin handle + cookie eviction
     Note over B,A: The SPA receives only a same-origin handle —<br/>never the IdP URL or id_token_hint.
-    B->>A: GET /auth/logout/continue?lc=… (top-level navigation)
-    A->>A: Resolve single-use handle → IdP end-session URL (with id_token_hint)
-    A-->>B: 302 → IdP /logout?id_token_hint (server-emitted, Referrer-Policy: no-referrer)
-    B->>K: GET /logout
+    B->>G: GET /auth/logout/continue?lc=… (top-level navigation)
+    G->>A: Forward continuation
+    A->>V: Atomically consume handle → IdP end-session URL
+    A-->>G: 302 → end_session_endpoint?id_token_hint (Referrer-Policy: no-referrer)
+    G-->>B: Forward server-emitted redirect
+    B->>K: GET end_session_endpoint
     K-->>B: 302 → /
 ```
 
@@ -210,7 +240,7 @@ sequenceDiagram
     participant R as Resource Server
 
     Note over SC,R: Machine-to-machine — neither the Browser, Gateway, nor BFF is in the path.
-    SC->>K: Client-credentials grant (client_id, client_secret)
+    SC->>K: Client Credentials grant (confidential-client authentication)
     K-->>SC: access_token (aud, scope)
     SC->>R: POST /api/jobs + Authorization: Bearer access_token
     R->>R: Validate JWT (iss, sig, aud, exp, scope)
@@ -225,11 +255,11 @@ Wire-level detail (exact cookie attributes, TTLs, validation rules, and the `/in
 
 ## Cookies
 
-This reference uses four cookies, each with its own scope and `SameSite` value:
+This reference uses three cookie types, each with its own scope and `SameSite` value:
 
 | Cookie | Readable by JS? | `SameSite` | Why |
 | --- | --- | --- | --- |
-| `__Host-sid` | No (`HttpOnly`) | `Lax` | The only credential. `Lax` is **required** so the cross-site Keycloak → `/auth/callback` redirect still sends it; the signed CSRF token supplies the state-change protection `Lax` alone wouldn't. |
+| `__Host-sid` | No (`HttpOnly`) | `Lax` | The only credential. No session cookie exists before the initial callback. `Lax` supports the direct callback-to-saved-request navigation and later top-level cross-site returns while signed CSRF protects state-changing requests. |
 | `XSRF-TOKEN` | Yes | `Strict` | Carries an HMAC-SHA256-signed value (`<value>.<hmac>`, bound to the `sid`). The SPA echoes it as `X-XSRF-TOKEN`. **Strict** because, unlike the session cookie, it's never needed on the cross-site callback. |
 | `oauth_tx` | No (`HttpOnly`) | `Lax` | Browser-binding cookie issued at `/auth/login`, scoped to `Path=/auth/callback/idp`. Its HMAC is stored in `tx:{state}`; the callback rejects a mismatch, defeating an attacker who exfiltrates `(code, state)` from a different user-agent. |
 
