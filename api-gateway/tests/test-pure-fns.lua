@@ -106,6 +106,24 @@ checkc("dev xsrf SameSite=Strict", has(dev[2], "; SameSite=Strict"))
 local nocsrf = brc("nsid", nil, 100, false)
 checkc("no-csrf -> single cookie", nocsrf[2] == nil)
 
+-- expire_session_cookie (P2): the eviction cookie name/Secure key on the route's
+-- allow_insecure_sid flag, NOT a spoofable forwarded scheme. Otherwise a spoofed
+-- X-Forwarded-Proto could make prod clear "sid" and leave the live __Host-sid in
+-- the browser (repeated 401/redirect). Mirrors the accept + rotation paths.
+local esc = plugin._expire_session_cookie_header
+assert(type(esc) == "function",
+    "bff-session.lua must export _expire_session_cookie_header for tests")
+-- Prod (flag off): clear __Host-sid, WITH Secure, Max-Age=0.
+checkc("evict prod clears __Host-sid", has(esc(false), "__Host-sid="))
+checkc("evict prod Max-Age=0", has(esc(false), "; Max-Age=0"))
+checkc("evict prod HttpOnly", has(esc(false), "; HttpOnly"))
+checkc("evict prod SameSite=Lax", has(esc(false), "; SameSite=Lax"))
+checkc("evict prod Secure", has(esc(false), "; Secure"))
+-- Local HTTP (flag on): clear the bare sid, NO Secure (or the browser rejects it).
+checkc("evict dev clears bare sid", has(esc(true), "sid=") and not has(esc(true), "__Host-"))
+checkc("evict dev Max-Age=0", has(esc(true), "; Max-Age=0"))
+checkc("evict dev no Secure", not has(esc(true), "Secure"))
+
 if failures > 0 then
   io.stderr:write(string.format("test-pure-fns: %d FAIL\n", failures))
   os.exit(1)

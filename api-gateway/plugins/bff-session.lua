@@ -239,16 +239,25 @@ local function problem_json(status, title, detail)
   })
 end
 
-local function expire_session_cookie(scheme)
-  -- Clear whichever cookie name we accept on this scheme. Setting
-  -- Max-Age=0 + the original attributes is the correct way to evict;
-  -- omitting Secure on local HTTP keeps the browser from rejecting it.
-  local name = (scheme == "https") and "__Host-sid" or "sid"
+-- Pure: the Set-Cookie string that evicts the session cookie. Name/Secure key on
+-- the route's allow_insecure_sid flag (mirroring get_session_cookie and
+-- build_rotation_cookies), NOT the spoofable forwarded scheme — otherwise a
+-- spoofed X-Forwarded-Proto could make us clear the wrong cookie name and leave a
+-- dead __Host-sid in the browser (repeated 401/redirect until it's replaced).
+-- Max-Age=0 + matching attributes is the correct eviction; Secure is omitted only
+-- on local HTTP so the browser doesn't reject the eviction cookie.
+local function expire_session_cookie_header(allow_insecure_sid)
+  local secure = not allow_insecure_sid
+  local name = secure and "__Host-sid" or "sid"
   local attrs = "; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
-  if scheme == "https" then
+  if secure then
     attrs = attrs .. "; Secure"
   end
-  core.response.set_header("Set-Cookie", name .. "=" .. attrs)
+  return name .. "=" .. attrs
+end
+
+local function expire_session_cookie(allow_insecure_sid)
+  core.response.set_header("Set-Cookie", expire_session_cookie_header(allow_insecure_sid))
 end
 
 -- Build the Set-Cookie strings re-issued on a sid rotation (A6). Pure (string
@@ -696,6 +705,7 @@ _M._get_session_cookie = get_session_cookie
 -- test-pure-fns.lua exercises the prod __Host-sid/Secure branch that the live
 -- HTTP e2e never reaches, and the SameSite parity with the login cookies.
 _M._build_rotation_cookies = build_rotation_cookies
+_M._expire_session_cookie_header = expire_session_cookie_header
 
 -- ---------------------------------------------------------------------
 -- Plugin lifecycle
@@ -768,8 +778,9 @@ function _M.access(conf, ctx)
   if action == "401_clear" then
     -- 404 (session gone) or 409 (invalidated). Evict the now-useless cookie;
     -- the browser sees a no-session response (top-level nav -> 302 login,
-    -- XHR -> 401).
-    expire_session_cookie(scheme)
+    -- XHR -> 401). Name keys on the route flag, NOT the spoofable scheme, so a
+    -- dead __Host-sid is always the cookie we clear (mirrors accept/rotation).
+    expire_session_cookie(conf.allow_insecure_sid)
     return no_session_response(ctx, conf, scheme, host, uri)
   elseif action == "503" then
     core.response.set_header("Retry-After", "1")
