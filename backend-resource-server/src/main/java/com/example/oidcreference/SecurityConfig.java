@@ -1,5 +1,8 @@
 package com.example.oidcreference;
 
+import com.nimbusds.jose.JOSEObjectType;
+import com.nimbusds.jose.proc.BadJOSEException;
+import com.nimbusds.jose.proc.SecurityContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
@@ -28,6 +31,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtClaimNames;
 import org.springframework.security.oauth2.jwt.JwtClaimValidator;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtIssuerValidator;
+import org.springframework.security.oauth2.jwt.JwtTypeValidator;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
@@ -44,6 +49,7 @@ import tools.jackson.databind.ObjectMapper;
 @Configuration
 class SecurityConfig {
   private static final Logger SECURITY_AUDIT = LoggerFactory.getLogger("security.audit");
+  private static final JOSEObjectType ACCESS_TOKEN_JWT_TYPE = new JOSEObjectType("at+JWT");
 
   // Browser never reaches the Resource Server directly. CORS is denied for
   // browser origins as defense in depth; the BFF proxies on /api/**.
@@ -104,34 +110,46 @@ class SecurityConfig {
         ? NimbusJwtDecoder
             .withIssuerLocation(issuerUri)
             .jwsAlgorithm(SignatureAlgorithm.RS256)
+            .jwtProcessorCustomizer(SecurityConfig::customizeJwtProcessor)
             .build()
         : NimbusJwtDecoder
             .withJwkSetUri(jwkSetUri)
             .jwsAlgorithm(SignatureAlgorithm.RS256)
+            .jwtProcessorCustomizer(SecurityConfig::customizeJwtProcessor)
             .build();
     decoder.setJwtValidator(jwtValidator(issuerUri, requiredAudience));
     return decoder;
   }
 
   // Package-private so negative-path unit tests can exercise the exact same
-  // validator chain the production decoder uses (issuer + default exp/iat/nbf
-  // + required-audience). Keeps the prod path and the test path in lockstep:
+  // validator chain the production decoder uses (type + issuer + default
+  // exp/iat/nbf + required-audience). Keeps the prod path and test path in lockstep:
   // if a validator is added here, the negative suite picks it up for free.
   static OAuth2TokenValidator<Jwt> jwtValidator(String issuerUri, String audience) {
-    OAuth2TokenValidator<Jwt> defaults = JwtValidators.createDefaultWithIssuer(issuerUri);
+    OAuth2TokenValidator<Jwt> defaults = JwtValidators.createDefaultWithValidators(
+        new JwtTypeValidator("JWT", "at+JWT"),
+        new JwtIssuerValidator(issuerUri));
     OAuth2TokenValidator<Jwt> audienceValidator = new JwtClaimValidator<Object>(
         JwtClaimNames.AUD,
         aud -> hasAudience(aud, audience));
-    // RFC 9068 §2.1 RECOMMENDS access tokens carry typ=at+JWT, and a typ-header
-    // validator would be defense-in-depth. It is deliberately NOT added:
-    // the threat it guards — an ID token presented as an access token — is
-    // already blocked here by the audience pin, because this realm's ID tokens
-    // carry aud=oidc-reference-auth while access tokens carry the configured API
-    // audience. Adding a strict typ=at+JWT check would also require reconfiguring
-    // Keycloak to emit at+JWT (it sends typ=JWT by default), or the RS would 401
-    // every token. The audience pin is the load-bearing control; typ validation
-    // is a deliberate non-goal (see OIDC-compliance.md / production-hardening.md).
     return new DelegatingOAuth2TokenValidator<>(defaults, audienceValidator);
+  }
+
+  // RFC 9068 access-token JWTs use typ=at+JWT. Keycloak emits the older,
+  // widely-deployed typ=JWT shape. Accept those two explicit token classes and
+  // reject absent or unrelated types so a different JWT profile cannot drift
+  // through this Resource Server merely because its claims happen to overlap.
+  static void customizeJwtProcessor(
+      com.nimbusds.jwt.proc.ConfigurableJWTProcessor<SecurityContext> processor) {
+    processor.setJWSTypeVerifier(SecurityConfig::verifyAccessTokenType);
+  }
+
+  static void verifyAccessTokenType(JOSEObjectType type, SecurityContext context)
+      throws BadJOSEException {
+    if (JOSEObjectType.JWT.equals(type) || ACCESS_TOKEN_JWT_TYPE.equals(type)) {
+      return;
+    }
+    throw new BadJOSEException("JOSE typ must be JWT or at+JWT");
   }
 
   private static boolean hasAudience(Object aud, String audience) {

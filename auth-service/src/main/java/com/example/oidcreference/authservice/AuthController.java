@@ -556,16 +556,22 @@ class AuthController {
   }
 
   Optional<SessionRecord> session(String sid) {
-    Optional<SessionRecord> session = stateStore.get("sess:" + sid)
-        .map(value -> json.decode(value, SessionRecord.class));
-    if (session.isEmpty()) {
+    Optional<String> raw = stateStore.get("sess:" + sid);
+    if (raw.isEmpty()) {
       return Optional.empty();
     }
-    if (session.get().absoluteExpired()) {
+    SessionRecord session;
+    try {
+      session = json.decode(raw.get(), SessionRecord.class);
+    } catch (RuntimeException e) {
       deleteSession(sid);
       return Optional.empty();
     }
-    return session;
+    if (session.absoluteExpired()) {
+      deleteSession(sid);
+      return Optional.empty();
+    }
+    return Optional.of(session);
   }
 
   void deleteSession(String sid) {

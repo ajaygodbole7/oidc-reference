@@ -62,8 +62,8 @@ class ApiController {
   // username-prefix convention. Keycloak emits a synthetic
   // preferred_username of "service-account-<client>", but a different
   // IdP could legitimately have a human user named "service-account-foo".
-  // Match on azp / client_id against the configured service-account clients
-  // instead — the same shape /api/jobs uses below.
+  // Match on azp / client_id / Entra v1 appid against the configured
+  // service-account clients instead — the same shape /api/jobs uses below.
   @GetMapping("/me")
   SubjectResponse me(Principal principal, @AuthenticationPrincipal Jwt jwt) {
     if (isServiceClient(jwt)) {
@@ -75,8 +75,10 @@ class ApiController {
   private boolean isServiceClient(Jwt jwt) {
     String azp = jwt.getClaimAsString("azp");
     String clientId = jwt.getClaimAsString("client_id");
+    String appId = jwt.getClaimAsString("appid");
     return (azp != null && serviceClients.contains(azp))
-        || (clientId != null && serviceClients.contains(clientId));
+        || (clientId != null && serviceClients.contains(clientId))
+        || (appId != null && serviceClients.contains(appId));
   }
 
   // Returns the caller's profile + entitlements derived straight from the
@@ -172,12 +174,24 @@ class ApiController {
 
   @PostMapping("/jobs")
   StatusResponse jobs(@AuthenticationPrincipal Jwt jwt) {
-    String authorizedParty = jwt.getClaimAsString("azp");
-    String clientId = jwt.getClaimAsString("client_id");
-    if (!jobsClientId.equals(authorizedParty) && !jobsClientId.equals(clientId)) {
+    if (!matchesClientIdentity(jwt, jobsClientId)) {
       throw new AccessDeniedException("Service client token is required");
     }
     return new StatusResponse("job accepted");
+  }
+
+  private static boolean matchesClientIdentity(Jwt jwt, String expectedClientId) {
+    boolean found = false;
+    for (String claimName : List.of("azp", "client_id", "appid")) {
+      String value = jwt.getClaimAsString(claimName);
+      if (value != null) {
+        found = true;
+        if (!expectedClientId.equals(value)) {
+          return false;
+        }
+      }
+    }
+    return found;
   }
 
   // Typed response contracts (SPEC-0001 #15): fixed-shape JSON the gateway/SPA

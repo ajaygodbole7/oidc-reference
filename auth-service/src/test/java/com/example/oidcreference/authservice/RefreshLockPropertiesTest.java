@@ -29,8 +29,8 @@ class RefreshLockPropertiesTest {
     RefreshLockProperties props = bind(Map.of());
     assertThat(props.refreshLock()).isEqualTo("in-process");
     assertThat(props.distributed()).isFalse();
-    assertThat(props.refreshLockTtl()).isEqualTo(Duration.ofSeconds(10));
-    assertThat(props.refreshLockMaxWait()).isEqualTo(Duration.ofSeconds(12));
+    assertThat(props.refreshLockTtl()).isEqualTo(Duration.ofSeconds(20));
+    assertThat(props.refreshLockMaxWait()).isEqualTo(Duration.ofSeconds(24));
     assertThat(props.refreshLockPoll()).isEqualTo(Duration.ofMillis(50));
   }
 
@@ -92,5 +92,27 @@ class RefreshLockPropertiesTest {
         .hasRootCauseInstanceOf(IllegalArgumentException.class)
         .rootCause()
         .hasMessageContaining("ttl");
+  }
+
+  @Test
+  void distributedLeaseMustCoverIdpRoundTripPlusMargin() {
+    // DistributedRefreshKeyLock has no watchdog/lease renewal. The lease must
+    // cover the whole protected action: IdP connect + IdP read + local
+    // validation/rotation/GC margin. Otherwise another instance can acquire the
+    // lock while the first refresh is still running and double-spend the refresh token.
+    assertThatThrownBy(() -> RefreshLockConfig.validateDistributedLeaseBudget(
+            Duration.ofSeconds(13),
+            Duration.ofSeconds(3),
+            Duration.ofSeconds(5)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("app.refresh-lock-ttl");
+  }
+
+  @Test
+  void defaultDistributedLeaseCoversDefaultIdpTimeoutsPlusMargin() {
+    RefreshLockConfig.validateDistributedLeaseBudget(
+        Duration.ofSeconds(20),
+        Duration.ofSeconds(3),
+        Duration.ofSeconds(5));
   }
 }

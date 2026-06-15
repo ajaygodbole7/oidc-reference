@@ -110,13 +110,15 @@ exists so a reader does not assume omission is oversight.
   §"Distributed refresh lock". It stays out of the default path because the local
   reference is single-instance; enabling it is one config flip, not a rewrite.
 
-- **Multi-Identity Provider (IdP) mix-up defense via `iss` parameter validation.** RFC 9700
-  §4.4 requires either distinct `redirect_uri` per AS or `iss` parameter
-  validation per RFC 9207. The reference targets a single AS (Keycloak)
-  and treats this as covered by the single-AS topology. A future
-  multi-IdP derivation must add `iss` validation in the callback
-  handler. Documented separately as a P1 follow-up rather than fully
-  out-of-scope.
+- **Multi-Identity Provider (IdP) routing.** RFC 9700 §4.4 requires either
+  distinct `redirect_uri` per AS or `iss` parameter validation per RFC 9207.
+  The reference targets one configured issuer at a time. It already fails
+  closed when OIDC discovery returns an issuer different from the configured
+  issuer, and the callback rejects a present `iss` parameter that does not
+  match that issuer. A callback with no `iss` is tolerated for provider
+  compatibility in the single-issuer setup. A future true multi-IdP derivation
+  must add explicit issuer-to-registration routing (or distinct redirect URIs)
+  rather than treating all issuers as one callback.
 
 ## Target Stack
 
@@ -379,7 +381,7 @@ high-value action" pattern. The reference applies this to `POST /api/admin`.
 
 | Path | Method | Auth | Purpose |
 |---|---|---|---|
-| `/internal/resolve` | POST | Client Credentials (Bearer JWT, `aud` contains configured internal-refresh audience; `azp`/`client_id` equals configured gateway client id) | Auth Service endpoint, called by the API Gateway on every `/api/**` request. Local defaults are `oidc-reference-auth-internal` and `oidc-reference-api-gateway`. Reachable only on the internal Compose network — never via the browser-facing ingress. Looks up `sess:{sid}`, slides the idle TTL, and returns the current access token; on a near-expiry token it performs the refresh-token grant against Keycloak under a per-session lock, validates rotation, and emits the `refresh_token_rejected` audit event on `invalid_grant`. Full contract per §7.1. |
+| `/internal/resolve` | POST | Client Credentials (Bearer JWT, `aud` contains configured internal-refresh audience; every present caller-identity claim among `azp`, `client_id`, and Entra v1 `appid` equals the configured gateway client id) | Auth Service endpoint, called by the API Gateway on every `/api/**` request. Local defaults are `oidc-reference-auth-internal` and `oidc-reference-api-gateway`. Reachable only on the internal Compose network — never via the browser-facing ingress. Looks up `sess:{sid}`, slides the idle TTL, and returns the current access token; an undecodable session is deleted and treated as absent. On a near-expiry token it performs the refresh-token grant against the configured IdP under a per-session lock, validates rotation, and emits the `refresh_token_rejected` audit event on `invalid_grant`. Full contract per §7.1. |
 
 ### Session Cookie
 
@@ -537,6 +539,9 @@ format, validation algorithm, and signing-key handling.
 - Signature via Keycloak JSON Web Key Set (JWKS).
 - Expiration; not-before when present.
 - Algorithm allowlist: `RS256` only.
+- JOSE `typ` allowlist: `JWT` for compatibility with commonly deployed
+  providers, including the local Keycloak realm, and RFC 9068 `at+JWT`.
+  Missing or unrelated token types are rejected.
 - Access-token audience contains `oidc-reference-api` (custom
   `JwtClaimValidator`). This is separate from `id_token.aud`, which is the
   Auth Service client id (`oidc-reference-auth`) and is validated only by
@@ -609,7 +614,7 @@ format, validation algorithm, and signing-key handling.
 | API Gateway as SSRF | `/api/**` allowlist only in APISIX route config; no arbitrary upstream URLs |
 | Open redirect | Saved-request target is same-origin validated; Auth-Service-issued redirects use fixed or allowlisted targets |
 | Access token replay | Short access-token lifetime; audience binding |
-| Audience confusion | Auth Service validates `id_token.aud` = the configured Auth Service client id; Auth Service `/internal/*` validates Bearer `aud` contains the configured internal-refresh audience and `azp/client_id` equals the configured gateway client id; RS validates `access_token.aud` contains the configured API audience |
+| Audience confusion | Auth Service validates `id_token.aud` = the configured Auth Service client id and enforces `azp` for multi-audience ID tokens; Auth Service `/internal/*` validates Bearer `aud` contains the configured internal-refresh audience and every present caller-identity claim (`azp`, `client_id`, Entra v1 `appid`) equals the configured gateway client id; RS validates `access_token.aud` contains the configured API audience and accepts only JOSE `typ=JWT` or `typ=at+JWT` |
 | Internal-RPC compromise | `/internal/resolve` reachable only on the internal Compose network; Bearer-validated Client Credentials with audience binding; per-session lock prevents concurrent refresh races |
 | CSRF signing-key compromise | 256-bit env-supplied secret, gitignored; current implementation is single-key hard cutover. Dual-key grace-window rotation is production hardening. |
 | Overbroad scopes | Per-client default scopes are least-privilege |
@@ -637,7 +642,8 @@ add a fourth service that violates them.
   Every call to `/internal/*` carries a Client Credentials bearer token
   issued to the configured gateway client, validated by Auth Service per
   the §7.1 contract (`iss`, `sig`, `exp`, configured internal-refresh
-  `aud`, configured gateway `azp`/`client_id`, `alg=RS256`). Local
+  `aud`, configured gateway identity in `azp`/`client_id`/Entra v1 `appid`,
+  `alg=RS256`). Conflicting present identity claims are rejected. Local
   defaults are `oidc-reference-api-gateway` and
   `oidc-reference-auth-internal`. No shared secrets between services, no
   trusted-network assumption.
@@ -744,13 +750,14 @@ Request body:
 }
 
 Bearer-token validation requirements (Auth Service):
-  - iss     = configured Keycloak issuer
+  - iss     = configured issuer
   - sig     = valid signature per JWKS
   - exp     = not expired
   - aud     contains configured internal-refresh audience
               (default "oidc-reference-auth-internal")
-  - azp or client_id = configured gateway client id
-              (default "oidc-reference-api-gateway")
+  - caller identity = at least one of azp, client_id, or appid is present;
+              every present value equals the configured gateway client id
+              (default "oidc-reference-api-gateway"). appid supports Entra v1.
   - alg     = RS256
 
 Success response:
@@ -788,8 +795,9 @@ Error responses:
   HTTP/1.1 404 Not Found
     - No sess:{sid} for the sid (expired, logged out, or never existed); OR the
       absolute ceiling was passed; OR the refresh token was itself already
-      expired — in the latter two the session is deleted. A predictable session
-      end, not a failed grant.
+      expired; OR the stored session cannot be decoded. An expired or corrupt
+      session is deleted, including its local logout/rotation indexes where
+      available. This is a predictable session end, not an internal 500.
 
   HTTP/1.1 409 Conflict
     - Refresh rejected by Keycloak (invalid_grant) — session invalidated.
@@ -1049,12 +1057,16 @@ cannot forge a valid signature.
 - Session cookie is `HttpOnly`, `SameSite=Lax` (and `Secure` + `__Host-` in
   production guidance; downgraded to `sid` without `Secure` in local HTTP).
 - Resource Server rejects invalid issuer, audience, expiration, algorithm,
-  scope, role. Every check has a negative test.
+  JOSE token type, scope, role. Every check has a negative test. The accepted
+  access-token types are `JWT` and RFC 9068 `at+JWT`; missing or unrelated
+  `typ` values are rejected.
 - Audience checks are token-type-specific: Auth Service validates
   `id_token.aud` against the configured Auth Service client id (local default
-  `oidc-reference-auth`); Auth Service `/internal/*`
+  `oidc-reference-auth`) and requires the matching `azp` when an ID token has
+  multiple audiences; Auth Service `/internal/*`
   validates Bearer `aud` contains the configured internal-refresh audience
-  and `azp/client_id` equals the configured gateway client id; RS validates
+  and every present `azp`/`client_id`/`appid` value equals the configured
+  gateway client id; RS validates
   `access_token.aud` against the configured API audience.
 - Client Credentials demonstrated end-to-end without Auth Service or API
   Gateway involvement (service client → Keycloak → RS).
@@ -1079,7 +1091,8 @@ cannot forge a valid signature.
 - API Gateway `/internal/resolve` precondition: the Auth Service rejects
   any `/internal/resolve` call lacking a valid Bearer token whose `aud`
   contains the configured internal-refresh audience and whose
-  `azp/client_id` equals the configured gateway client id.
+  caller identity is absent, conflicts across `azp`/`client_id`/`appid`, or
+  differs from the configured gateway client id.
 - Signed CSRF token rejection on tamper: a token whose `token-value-base64`
   is modified but whose HMAC is unchanged is rejected; a token with a
   forged HMAC is rejected; only a token whose HMAC matches the recomputed
@@ -1146,8 +1159,11 @@ cannot forge a valid signature.
   issues Keycloak end-session redirect with `id_token_hint`.
 - **`/internal/resolve` contract tests (§7.1).** Rejects requests with
   missing Bearer token (401). Rejects token with wrong `aud` (401),
-  wrong `azp/client_id` (401), bad signature (401), expired (401). With
+  wrong or conflicting `azp`/`client_id`/`appid` (401), bad signature (401),
+  expired (401). With
   valid Bearer and unknown `sid`, returns 404. With valid Bearer and
+  corrupt `sess:{sid}`, deletes the unusable session and returns 404 rather
+  than 500. With valid Bearer and
   valid `sid` whose access token is not yet near expiry, returns 200 with
   current expiry (idempotent under contention). With valid Bearer and
   valid `sid` whose token is near expiry, calls Keycloak refresh, updates
@@ -1200,8 +1216,11 @@ cannot forge a valid signature.
 - Public endpoint succeeds without token.
 - Reject missing, malformed, expired, wrong-issuer, wrong-audience,
   wrong-algorithm tokens.
+- Accepts access-token JOSE `typ=JWT` and RFC 9068 `typ=at+JWT`; rejects a
+  missing or unrelated `typ`, including `logout+jwt`.
 - Reject user token on `/api/jobs`; reject service token on `/api/me` when
-  user identity absent.
+  user identity absent. Service-client identity accepts `azp`, `client_id`, or
+  Entra v1 `appid`; conflicting identity claims fail closed on `/api/jobs`.
 - Reject token missing required scope.
 - `realm_access.roles=["admin"]` token produces `ROLE_admin` and reaches
   `/api/admin`.
@@ -1280,7 +1299,10 @@ The Auth Service is built on `com.nimbusds.oauth2-oidc-sdk` and Spring
 Security 7.x, both of which speak generic OAuth 2.1 + OIDC. Discovery
 (`.well-known/openid-configuration`) and JWKS are how the code learns
 about endpoints and signing keys. Nothing in the Java code knows the
-issuer is Keycloak.
+issuer is Keycloak. The config-only swap promise applies to the supported
+token profile: RS256-signed JWTs, access-token `typ=JWT` or `typ=at+JWT`,
+and inline claims. A provider outside that profile needs a deliberate code
+and test change.
 
 Changes required:
 
@@ -1295,13 +1317,15 @@ Changes required:
 | `idp_token_url` in `apisix.yaml.template` | per-route plugin config | The Lua plugin field is IdP-vendor neutral; just point it at the new IdP's token endpoint. |
 | RS audience name | `oidc-reference-realm.json` audience-mapper config OR the equivalent on the new IdP | The RS expects `oidc-reference-api` in `aud`; the IdP must be configured to add that value. |
 | `INTERNAL_REFRESH_AUDIENCE` | Auth Service env | Audience the gateway's CC token must carry for `/internal/resolve`. Default `oidc-reference-auth-internal`; set to whatever the new IdP issues for the gateway client. |
-| `GATEWAY_CLIENT_ID` | Auth Service env + APISIX render | The gateway's confidential client id — the Auth Service requires it in the caller's `azp`/`client_id`, and APISIX authenticates as it. Real IdPs assign client ids you don't choose, so this is a config knob (default `oidc-reference-api-gateway`), set in both places. |
+| `GATEWAY_CLIENT_ID` | Auth Service env + APISIX render | The gateway's confidential client id — the Auth Service requires at least one caller-identity claim (`azp`, `client_id`, or Entra v1 `appid`) and rejects conflicting present values; APISIX authenticates as this client. Real IdPs assign client ids you don't choose, so this is a config knob (default `oidc-reference-api-gateway`), set in both places. |
 | `RS_SERVICE_CLIENT_IDS` / `RS_JOBS_CLIENT_ID` | Resource Server env | Service-account allowlist (denied on `/api/me`) and the single client allowed to `POST /api/jobs`. Defaults are the local Keycloak client names. |
 | Back-Channel Logout enablement | IdP client config | Register the Auth Service `/backchannel-logout` URL as the client's `backchannel_logout_uri` and enable "Backchannel logout session required" so the IdP stamps `sid` into the id_token and the logout_token. The logout_token `aud` must equal the Auth Service client id (`app.client-id`), which the AS validates. Without this, IdP-driven session revocation silently no-ops. |
 
 What does NOT change:
 
-- All Java code in `auth-service/src/main/java/` and `backend-resource-server/src/main/java/`.
+- Java code in `auth-service/src/main/java/` and
+  `backend-resource-server/src/main/java/`, when the provider fits the supported
+  token profile above.
 - All Lua code in `api-gateway/plugins/bff-session.lua`.
 - All frontend code in `frontend/src/`.
 - The cross-component contracts: `schema/csrf-fixture.json`, SPEC-0001 §7.1
@@ -1326,7 +1350,8 @@ Wire contracts the alternate gateway MUST satisfy:
 
 1. **Session resolve.** `POST /internal/resolve` with a Client-Credentials
    bearer (carrying the configured internal-refresh audience and
-   `azp=<configured gateway client id>`) and the sid from the cookie. Read
+   a consistent caller identity in `azp`, `client_id`, or Entra v1 `appid`)
+   and the sid from the cookie. Read
    `access_token` from the 200 body; handle the §7.1 status table (404/409 →
    401 + cookie clear, 401 → CC retry, 502 → 503). **On a 200 that carries
    `rotated_sid`** (the resolve rotated the sid on a refresh, §A6), re-issue the
@@ -1364,9 +1389,9 @@ What does NOT change:
 - The state store (`Valkey` / any Redis-compatible).
 - The IdP and realm config.
 
-### A.3 Swapping the state store (Valkey → Redis Cluster / DynamoDB / ...)
+### A.3 Swapping the state store (Valkey → another state store)
 
-Both sides talk Valkey via RESP today. To swap:
+The Auth Service talks to Valkey through `StateStore` today. To swap:
 
 - Auth Service: replace `RedisStateStore` with an implementation of the
   `StateStore` interface (`put`, `get`, `getAndDelete`, `delete`, `expire`,
@@ -1379,3 +1404,11 @@ Both sides talk Valkey via RESP today. To swap:
 The `schema/sess-payload.example.json` schema is unaffected: it is the Auth
 Service's private session shape (§7.2), serialized to whatever store backs
 `StateStore`, not a wire format the gateway depends on.
+
+Redis-compatible single-primary deployments are the closest production swap for
+the current implementation. A sharded Redis Cluster is **not** a drop-in
+replacement: `rotateIfPresent` atomically moves `sess:{old}` to `sess:{new}` and
+writes `rotated:{old}` in one multi-key operation, and those independently
+random keys do not share a hash slot. Supporting a sharded store requires a
+deliberate redesign of the `StateStore` atomic-rotation primitive, not only a
+connection-string change.

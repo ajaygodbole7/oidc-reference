@@ -51,7 +51,7 @@ Full rationale and reconsideration triggers live in [`docs/architecture/architec
 
 - **A live test asserts no token reaches browser-visible surfaces.** The `id_token` never reaches browser JS, storage, SPA-readable JSON, or SPA-visible cookies; only the server's `/auth/logout/continue` → IdP redirect carries `id_token_hint`, and the test confirms that browser-observable path.
 - **Each control is linked to its spec, code, and test.** The [Security controls](#security-controls) table maps each control to its RFC/OIDC section, the code that implements it, and the gate that proves it.
-- **Identity Providers are swappable through standard OIDC configuration.** The code avoids provider-specific branches; issuer, audiences, scopes, claim paths, and client identities are config. Provider-specific setup notes live in the provider-adapter docs. `just e2e-portability` runs the same code against a second realm whose tokens carry a different shape.
+- **Identity Providers are swappable through standard OIDC configuration.** The code avoids provider-specific branches; issuer, audiences, scopes, claim paths, and client identities are config. The one pinned crypto choice is the JWS signature algorithm — RS256, hardcoded in both services — so an IdP that signs with a different algorithm (e.g. ES256/PS256) needs a one-line code change, not just config. Provider-specific setup notes live in the provider-adapter docs. `just e2e-portability` runs the same code against a second realm whose tokens carry a different shape.
 
 ---
 
@@ -251,6 +251,7 @@ Each control maps to its reference and the code that implements it.
 | Authorization Code + PKCE S256 | OIDC Core §3.1.2 | `auth-service` |
 | `state`, `nonce`, ID-token signature/iss/aud/exp | OIDC Core §3.1.3 | `JwtOidcIdTokenValidator` |
 | `at_hash` when present | OIDC Core §3.1.3.7 step 7 | `JwtOidcIdTokenValidator` |
+| Access-token signature/iss/aud/exp plus JOSE `typ=JWT|at+JWT` | RFC 7519, RFC 9068 | RS `SecurityConfig`, `JwtDecoderNegativeTest` |
 | `iss` query-param mix-up defense | [RFC 9207](https://datatracker.ietf.org/doc/rfc9207/) | `AuthController#callback` |
 | Refresh rejected by AS (`invalid_grant`) → 409 + session invalidation; realm enables rotation + reuse detection | [RFC 9700 §4.14](https://datatracker.ietf.org/doc/rfc9700/) | `AuthorizationCodeTokenRefreshClient` + realm |
 | Signed double-submit CSRF (HMAC-SHA256, base64url) | — | `SignedCsrfSupport`, `bff-session.lua` |

@@ -3,7 +3,7 @@
 # OIDC Reference — Auth Service
 #
 # Confidential OIDC token issuer for local development. Public HTTP on 8081,
-# Spring Boot Actuator on 9081. Java 25 + Spring Boot 4.1.0-RC1, virtual
+# Spring Boot Actuator on 9081. Java 25 + Spring Boot 4.1.0, virtual
 # threads enabled by the application. Multi-stage build; runtime image is a
 # JRE-only layer with a non-root user and curl present so Compose can run
 # its healthcheck against /actuator/health.

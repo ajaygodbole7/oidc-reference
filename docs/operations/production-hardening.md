@@ -48,13 +48,14 @@ active users out. Making the lock cross-instance is a scale-out step, not a bug.
 the in-process default; the default stays in-process for the single-instance
 reference. It is built on the vendor-neutral `StateStore` (no Redis/Valkey client
 in the lock itself), so it follows whatever store backs `StateStore`. Knobs:
-`app.refresh-lock-ttl` (lease time-to-live (TTL), default `10s` — above the IdP connect+read
-budget so the lease covers a full refresh), `app.refresh-lock-max-wait`
-(default `12s`, above the TTL so a crashed holder's lease always lapses within a
-contender's wait), `app.refresh-lock-poll` (default `50ms`). These relationships
-(max-wait > ttl, poll < max-wait, every duration positive) are validated by
-`RefreshLockProperties` at boot, so a violating override fails closed loudly
-rather than booting a misconfigured lock.
+`app.refresh-lock-ttl` (lease time-to-live (TTL), default `20s`),
+`app.refresh-lock-max-wait` (default `24s`, above the TTL so a crashed holder's
+lease always lapses within a contender's wait), `app.refresh-lock-poll` (default
+`50ms`). The lease must cover the whole protected refresh action: IdP connect
+timeout + IdP read timeout + local validation / rotation / scheduling margin.
+Those relationships (ttl above the action budget, max-wait > ttl, poll <
+max-wait, every duration positive) are validated at boot, so a violating
+override fails closed loudly rather than booting a misconfigured lock.
 
 The algorithm (`DistributedRefreshKeyLock`, proven by `DistributedRefreshKeyLockTest`
 and the `compareAndDelete` parity cases in `RedisStateStoreParityTest`):

@@ -52,6 +52,20 @@ e2e-portability:
 e2e-c8-altids:
     sh scripts/e2e-c8-altids.sh
 
+# Distributed refresh-lock proof: two Auth Service replicas, one shared
+# Redis-compatible store, concurrent near-expiry resolves for one sid.
+# Not part of routine E2E; run before changing refresh/rotation/lock code.
+e2e-distributed-lock trials="1":
+    docker compose -f compose.yaml -f compose.distributed-lock.yml up -d --build keycloak valkey auth-service auth-service-2
+    bash scripts/e2e-distributed-lock.sh {{trials}}
+
+# Distributed cross-replica BROWSER gate: full real path (browser -> APISIX ->
+# two replicas) with N parallel users, under a deterministic split (/auth/* ->
+# replica-1, gateway resolve -> replica-2). Brings up + tears down its own stack.
+# On-demand / before-merge; not part of routine E2E (APISIX cold-start flakiness).
+e2e-distributed-browser:
+    sh scripts/e2e-distributed-browser.sh
+
 # Render api-gateway/apisix.yaml.local from the template (dev secrets).
 render:
     GATEWAY_CLIENT_SECRET=LOCAL_DEV_GATEWAY_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY CSRF_SIGNING_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= APISIX_IDP_TOKEN_URL=http://keycloak:8080/realms/oidc-reference/protocol/openid-connect/token sh scripts/render-apisix-config.sh

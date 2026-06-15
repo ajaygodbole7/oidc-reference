@@ -42,6 +42,19 @@ class JwtAuthenticationConverterTest {
   }
 
   @Test
+  void mapsSpaceDelimitedScpClaimToScopeAuthorities() {
+    Jwt jwt = jwtBuilder()
+        .claim("scp", "openid profile api.read")
+        .build();
+
+    var authorities = converter.convert(jwt).getAuthorities().stream()
+        .map(a -> a.getAuthority()).collect(Collectors.toSet());
+
+    assertThat(authorities)
+        .contains("SCOPE_openid", "SCOPE_profile", "SCOPE_api.read");
+  }
+
+  @Test
   void mapsRealmAccessRolesToRoleAuthorities() {
     Jwt jwt = jwtBuilder()
         .claim("realm_access", Map.of("roles", List.of("user", "admin")))

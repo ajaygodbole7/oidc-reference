@@ -975,6 +975,24 @@ class AuthControllerTest {
         .andExpect(status().isOk());
   }
 
+  @Test
+  void meTreatsCorruptSessionRecordAsNoSessionAndDeletesIt() throws Exception {
+    // Server-side session state is a credential container. If the value cannot
+    // be decoded (truncated write, schema drift, manual store corruption), the
+    // browser-facing path must fail closed as unauthenticated, not leak a 500.
+    stateStore.put("sess:corrupt-sid", "{not-json", Duration.ofMinutes(30));
+
+    mockMvc.perform(get("/auth/me")
+            .cookie(new Cookie("sid", "corrupt-sid")))
+        .andExpect(status().isUnauthorized())
+        .andExpect(header().string(HttpHeaders.CACHE_CONTROL,
+            org.hamcrest.Matchers.containsString("no-store")));
+
+    assertThat(stateStore.get("sess:corrupt-sid"))
+        .as("corrupt session records are evicted on sight")
+        .isEmpty();
+  }
+
   // -- logout (signed CSRF) ------------------------------------------------
 
   @Test
@@ -1037,6 +1055,35 @@ class AuthControllerTest {
         .doesNotContain("id_token_hint")
         .doesNotContain("idp.example");
     assertThat(stateStore.get("sess:" + sid.getValue())).isEmpty();
+  }
+
+  @Test
+  void logoutWithCorruptSessionRecordCompletesAsNoLocalSession() throws Exception {
+    // Same fail-closed behavior as /auth/me: an undecodable sess:{sid} is not
+    // an authenticated session, so logout should evict it and return the normal
+    // no-local-session JSON response instead of throwing or requiring CSRF.
+    stateStore.put("sess:corrupt-logout-sid", "{not-json", Duration.ofMinutes(30));
+
+    MvcResult result = mockMvc.perform(post("/auth/logout")
+            .accept(MediaType.APPLICATION_JSON)
+            .cookie(new Cookie("sid", "corrupt-logout-sid"))
+            .header("Host", "127.0.0.1:5173")
+            .header("X-Forwarded-Proto", "http")
+            .header("X-Forwarded-Host", "127.0.0.1:5173"))
+        .andExpect(status().isOk())
+        .andExpect(header().string(HttpHeaders.CACHE_CONTROL,
+            org.hamcrest.Matchers.containsString("no-store")))
+        .andExpect(header().stringValues(HttpHeaders.SET_COOKIE,
+            org.hamcrest.Matchers.hasItems(
+                org.hamcrest.Matchers.containsString("sid=;"),
+                org.hamcrest.Matchers.containsString("XSRF-TOKEN=;"))))
+        .andReturn();
+
+    assertThat(result.getResponse().getContentAsString())
+        .contains("\"logoutUrl\":\"/auth/logout/continue?lc=")
+        .doesNotContain("id_token_hint")
+        .doesNotContain("idp.example");
+    assertThat(stateStore.get("sess:corrupt-logout-sid")).isEmpty();
   }
 
   @Test

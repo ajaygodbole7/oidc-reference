@@ -38,6 +38,23 @@ class InternalResolveIdentityCheckTest {
     assertThat(InternalResolveController.hasExpectedCaller(jwt, "custom-gateway")).isTrue();
   }
 
+  @Test
+  void callerCheckAlsoMatchesEntraAppIdClaim() {
+    Jwt jwt = jwt(j -> j.claim("appid", "custom-gateway"));
+
+    assertThat(InternalResolveController.hasExpectedCaller(jwt, "custom-gateway")).isTrue();
+    assertThat(InternalResolveController.hasExpectedCaller(jwt, "other-gateway")).isFalse();
+  }
+
+  @Test
+  void callerCheckRejectsConflictingClientIdentityClaims() {
+    Jwt jwt = jwt(j -> j
+        .claim("azp", "different-client")
+        .claim("appid", "custom-gateway"));
+
+    assertThat(InternalResolveController.hasExpectedCaller(jwt, "custom-gateway")).isFalse();
+  }
+
   private static Jwt jwt(Consumer<Jwt.Builder> claims) {
     Jwt.Builder b = Jwt.withTokenValue("t")
         .header("alg", "RS256")

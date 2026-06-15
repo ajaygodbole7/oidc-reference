@@ -92,6 +92,7 @@ class InternalResolveControllerTest {
     stateStore.clear();
     tokenRefreshClient.reset();
     refreshLock.failAcquire = false;
+    refreshLock.runBeforeAction(null);
   }
 
   @Test
@@ -160,6 +161,28 @@ class InternalResolveControllerTest {
         .contains("event=refresh_rejected")
         .contains("status=404")
         .contains("reason=no_such_session");
+  }
+
+  @Test
+  void resolveDeletesCorruptSessionAndReturns404(CapturedOutput output) throws Exception {
+    String sid = "sid-corrupt";
+    stateStore.put("sess:" + sid, "{not-json", Duration.ofMinutes(30));
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(header().string("Cache-Control",
+            org.hamcrest.Matchers.containsString("no-store")));
+
+    assertThat(stateStore.get("sess:" + sid)).isEmpty();
+    assertThat(tokenRefreshClient.refreshCalls()).isZero();
+    assertThat(output.getOut())
+        .contains("event=refresh_rejected")
+        .contains("status=404")
+        .contains("reason=corrupt_session");
   }
 
   @Test
@@ -404,6 +427,29 @@ class InternalResolveControllerTest {
         .contains("event=refresh_rejected")
         .contains("status=404")
         .contains("reason=no_such_session");
+  }
+
+  @Test
+  void resolveDeletesCorruptBreadcrumbTargetAndReturns404(CapturedOutput output)
+      throws Exception {
+    String oldSid = "sid-old-corrupt";
+    String newSid = "sid-new-corrupt";
+    stateStore.put("rotated:" + oldSid, newSid, Duration.ofSeconds(30));
+    stateStore.put("sess:" + newSid, "{not-json", Duration.ofMinutes(30));
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + oldSid + "\"}"))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(header().string("Cache-Control",
+            org.hamcrest.Matchers.containsString("no-store")));
+
+    assertThat(stateStore.get("sess:" + newSid)).isEmpty();
+    assertThat(stateStore.get("rotated:" + oldSid)).isEmpty();
+    assertThat(tokenRefreshClient.refreshCalls()).isZero();
+    assertThat(output.getOut()).contains("reason=corrupt_session");
   }
 
   @Test
@@ -681,6 +727,35 @@ class InternalResolveControllerTest {
   }
 
   @Test
+  void corruptSessionFoundUnderRefreshLockIsDeletedWithoutCallingIdp(
+      CapturedOutput output) throws Exception {
+    String sid = "sid-corrupt-under-lock";
+    SessionRecord expiring = new SessionRecord(
+        "expiring-access",
+        "refresh-token-1",
+        "id-token-1",
+        Instant.now().plusSeconds(10),
+        Instant.now().plusSeconds(1800),
+        Map.of("sub", "alice"));
+    storeSession(sid, expiring);
+    refreshLock.runBeforeAction(
+        () -> stateStore.put("sess:" + sid, "{not-json", Duration.ofMinutes(30)));
+
+    mockMvc.perform(post("/internal/resolve")
+            .with(validApiGatewayBearer())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"sid\":\"" + sid + "\"}"))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(header().string("Cache-Control",
+            org.hamcrest.Matchers.containsString("no-store")));
+
+    assertThat(stateStore.get("sess:" + sid)).isEmpty();
+    assertThat(tokenRefreshClient.refreshCalls()).isZero();
+    assertThat(output.getOut()).contains("reason=corrupt_session");
+  }
+
+  @Test
   void resolveDeletesSessionWhenRefreshedRecordCrossesAbsoluteTtl(CapturedOutput output)
       throws Exception {
     // Race: the absolute ceiling crosses during the upstream refresh network
@@ -893,6 +968,7 @@ class InternalResolveControllerTest {
   static class ToggleableRefreshLock implements RefreshLock {
     volatile boolean failAcquire = false;
     private final AtomicInteger lockCalls = new AtomicInteger();
+    private final AtomicReference<Runnable> beforeAction = new AtomicReference<>();
     private final RefreshLock delegate = new InProcessRefreshLock();
 
     @Override
@@ -901,11 +977,21 @@ class InternalResolveControllerTest {
       if (failAcquire) {
         throw new RefreshLockUnavailableException("could not acquire refresh lock within PT12S");
       }
-      return delegate.withLock(key, action);
+      return delegate.withLock(key, () -> {
+        Runnable hook = beforeAction.getAndSet(null);
+        if (hook != null) {
+          hook.run();
+        }
+        return action.get();
+      });
     }
 
     int lockCalls() {
       return lockCalls.get();
+    }
+
+    void runBeforeAction(Runnable action) {
+      beforeAction.set(action);
     }
   }
 

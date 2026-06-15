@@ -84,7 +84,7 @@ GWTOK=$(curl -s -d grant_type=client_credentials -d client_id=oidc-reference-api
 [ -n "$GWTOK" ] || { echo "FATAL: no gateway CC token"; exit 1; }
 echo "  gateway CC aud: $(decode_claim "$GWTOK" aud)"
 
-pass=0; fail=0; conflict=0
+pass=0; fail=0; conflict=0; wvok=0; wvfail=0
 for trial in $(seq 1 "$TRIALS"); do
   # --- seed a fresh real session ---------------------------------------------
   ROPC=$(curl -s "$TOKEN_URL" -d grant_type=password -d client_id=oidc-reference-auth \
@@ -137,6 +137,34 @@ PY
   elif [ "$c1" = "409" ] || [ "$c2" = "409" ]; then status="409 invalid_grant (cross-instance reuse — NO shared lock)"; conflict=$((conflict+1));
   else status="unexpected"; fail=$((fail+1)); fi
   printf 'trial %s: replica1=%s replica2=%s -> %s\n' "$trial" "$c1" "$c2" "$status"
+
+  # --- cross-replica WRITE-visibility -----------------------------------------
+  # The collapsed refresh rotated sess:{sid} -> sess:{sid'} on whichever replica
+  # WON the lock. The both-200 above proves the rotated session is READABLE; this
+  # proves the rotation WRITE landed in shared state and is resolvable at the
+  # OTHER replica too. Capture the new sid from either response body (both carry
+  # rotated_sid — winner via okRotated, loser via the breadcrumb), then resolve it
+  # at BOTH replicas and require 200. A separate Valkey-per-replica (no shared
+  # state) would 404 here even though the concurrent step passed.
+  if [ "$c1" = "200" ] && [ "$c2" = "200" ]; then
+    NEWSID=$(jget rotated_sid < /tmp/dlock-r1.body); [ -n "$NEWSID" ] || NEWSID=$(jget rotated_sid < /tmp/dlock-r2.body)
+    if [ -z "$NEWSID" ]; then
+      printf '  write-visibility trial %s: WARN both-200 but no rotated_sid observed (no rotation)\n' "$trial"
+    else
+      vbody="{\"sid\":\"$NEWSID\"}"
+      v1=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$R1/internal/resolve" \
+        -H "Authorization: Bearer $GWTOK" -H 'Content-Type: application/json' -d "$vbody")
+      v2=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$R2/internal/resolve" \
+        -H "Authorization: Bearer $GWTOK" -H 'Content-Type: application/json' -d "$vbody")
+      if [ "$v1" = "200" ] && [ "$v2" = "200" ]; then
+        wvok=$((wvok+1))
+        printf '  write-visibility trial %s: rotated sid resolves on BOTH replicas (r1=%s r2=%s) OK\n' "$trial" "$v1" "$v2"
+      else
+        wvfail=$((wvfail+1))
+        printf '  write-visibility trial %s: FAIL rotated sid not visible on both (r1=%s r2=%s)\n' "$trial" "$v1" "$v2"
+      fi
+    fi
+  fi
 done
 
-echo "== summary: both-200=$pass  409-conflict=$conflict  other=$fail (trials=$TRIALS) =="
+echo "== summary: both-200=$pass  409-conflict=$conflict  other=$fail  write-visibility-ok=$wvok  write-visibility-fail=$wvfail (trials=$TRIALS) =="

@@ -69,8 +69,66 @@ reference realm in the places that must be configuration-driven:
 
 This gate is the enforced Identity Provider (IdP)-portability proof because it is re-runnable
 without third-party credentials. It does not try to force Keycloak to emit
-`scp`. That branch is covered by Resource Server unit tests and by the
-provider runbooks for IdPs that emit `scp`.
+`scp`. Both the array and space-delimited string forms are covered by Resource
+Server unit tests. The real decoder suite also accepts compatibility
+`typ=JWT` and RFC 9068 `typ=at+JWT`, while rejecting missing and unrelated
+types.
+
+## Gateway Boundary Proof
+
+The live gateway suite proves that APISIX replaces the opaque browser session
+with exactly one upstream bearer while stripping browser credentials and
+hop-by-hop headers. Its test-only Resource Server endpoint never reflects the
+bearer: it returns only the Authorization value count, recognized scheme, and a
+SHA-256 fingerprint. The harness compares that fingerprint with the resolved
+token and separately asserts that the token bytes do not appear in the response.
+
+Forwarding is considered proven only by a deliberate 2xx or 4xx response.
+Redirects, transport status `000`, empty status, and 5xx responses fail the
+assertion because they can occur before the intended upstream handler receives
+the request.
+
+## Distributed Refresh-Lock Proof
+
+```sh
+just e2e-distributed-lock
+```
+
+Runs two Auth Service replicas against one shared Redis-compatible state store,
+with `app.refresh-lock=distributed`, then fires concurrent near-expiry
+`/internal/resolve` requests for the same `sid`. Both resolves must return 200:
+one replica refreshes, the other re-reads the rotated session. A 409 indicates
+cross-instance refresh-token reuse and means the distributed lock path is broken.
+
+It also asserts cross-replica **write**-visibility: the collapsed refresh rotates
+`sess:{sid}` → `sess:{sid'}` on whichever replica won the lock, and the harness
+then resolves the rotated sid at **both** replicas and requires 200 — proving the
+rotation write (not just the read) landed in shared state. The summary line
+reports `write-visibility-ok` / `write-visibility-fail`.
+
+Run this targeted gate before changing refresh-token rotation, sid rotation,
+`SessionIndexes`, or `DistributedRefreshKeyLock`. It is intentionally separate
+from routine E2E because the default reference path remains single-instance.
+
+## Distributed Cross-Replica Browser Proof
+
+```sh
+just e2e-distributed-browser
+```
+
+Belt-and-suspenders proof of the full real path across two Auth Service replicas:
+browser cookie → Vite (`:5173`) → APISIX (`:9080`) → two replicas, under a
+deterministic split the driver configures in the rendered gateway config —
+`/auth/*` → replica-1 (writes `tx:{state}` + `sess:{sid}`), the gateway's
+`/internal/resolve` → replica-2 (reads `sess:{sid}`). So every `/api/user-data`
+200 proves replica-2 resolved a session that replica-1 created, off shared
+Valkey. The Playwright spec logs in N users (default 4) as isolated browser
+contexts, then fires all their `/api` resolves concurrently and asserts each sees
+only its own identity — N concurrent cross-replica resolves with no cross-talk.
+(Logins are sequential setup; the concurrency under test is the resolve fan-out.) Brings up and tears down its own stack; on-demand /
+before-merge, not part of routine E2E (two replicas plus an extra image build
+trips APISIX cold-start flakiness). The same-session refresh-collapse contention
+case stays in the scripted gate above.
 
 ## Full Local Verification
 

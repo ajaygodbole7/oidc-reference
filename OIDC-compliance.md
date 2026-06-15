@@ -44,7 +44,7 @@ Canonical sources for the implementation: `README.md` (flow diagrams) and
 | §2 | `nonce` claim (`REQUIRED` if present in auth request) | ✅ | `AuthController#beginLogin` always sends `nonce`. `JwtOidcIdTokenValidator` passes the expected nonce to Nimbus, which fails closed on mismatch. Asserted by `JwtOidcIdTokenValidatorTest#nonceMismatchIsRejected`. |
 | §2 | `acr` claim (`OPTIONAL`) | ✅ | The realm's `oidc-acr-mapper` emits `acr` (`"1"` for a fresh interactive auth, `"0"` for remembered single sign-on (SSO)), surfaced on `/auth/me` (`JwtOidcIdTokenValidator`) and **enforced** by the Resource Server on `POST /api/admin` (`app.step-up.required-acr`, default `1`) — the assurance companion to the `auth_time` recency gate. `/auth/step-up` requests it via `acr_values`. `acr=1` is a Level of Assurance (LoA) value, not proof of multi-factor authentication (MFA); the LoA→`acr` mapping is provider-specific config (as the `auth_time` mapper is). See the [SPEC step-up §](docs/specs/SPEC-0001-core-oidc-flows.md) and [`RFC9470-compliance.md`](RFC9470-compliance.md). |
 | §2 | `amr` claim (`OPTIONAL`) | 🚫 | Not validated; not required for this reference. |
-| §2 | `azp` claim semantics (`OPTIONAL`, required when ID Token has single `aud` not equal to client_id; required when multiple `aud`) | ✅ | Validated inside Nimbus's `IDTokenValidator`. |
+| §2 | `azp` claim semantics (`OPTIONAL`; SHOULD be present for multiple `aud`, and SHOULD equal the client id when present) | ✅ | `JwtOidcIdTokenValidator` explicitly rejects a missing `azp` for multiple audiences and rejects every present `azp` that differs from the configured client id. Login and refresh paths are asserted by `JwtOidcIdTokenValidatorTest`; the rule does not depend on Nimbus-version behavior. |
 
 ### §3.1 — Authorization Code Flow
 
@@ -89,9 +89,9 @@ Each of the eleven validation steps, mapped to the code that enforces it.
 |---|---|---|---|
 | 1 | If the ID Token is encrypted, decrypt it (`MUST` if encryption was negotiated) | 🚫 | Negotiation does not request JWE; ID tokens are signed only. |
 | 2 | `iss` Claim must match the Issuer used during discovery (`MUST`) | ✅ | Nimbus `IDTokenValidator` constructed with `new Issuer(md.issuer())`; mismatch throws. |
-| 3 | `aud` Claim must contain the client_id (`MUST`); other audiences allowed only if known and trusted (`MUST` reject if untrusted) | ✅ | Nimbus `IDTokenValidator` constructed with `new ClientID(md.clientId())`. |
-| 4 | If multiple `aud` values, `azp` Claim must be present (`MUST`) | ✅ | Enforced inside Nimbus's validator. |
-| 5 | If `azp` is present, it must equal the client_id (`MUST`) | ✅ | Enforced inside Nimbus's validator. |
+| 3 | `aud` Claim must contain the client_id (`MUST`); additional audiences must be trusted (`MUST` reject if untrusted) | 🟡 | Nimbus requires the configured client id in `aud`. The reference has no configurable allowlist for additional trusted audiences; with a matching multi-audience `azp`, Nimbus accepts the extra audience. |
+| 4 | If multiple `aud` values, the Client SHOULD verify that `azp` is present | ✅ | Explicitly enforced by `JwtOidcIdTokenValidator`. Asserted by `JwtOidcIdTokenValidatorTest#multipleAudiencesWithoutAuthorizedPartyAreRejected`. |
+| 5 | If `azp` is present, the Client SHOULD verify that it equals the client_id | ✅ | Explicitly enforced for both single- and multi-audience tokens by `JwtOidcIdTokenValidator`, including refreshed ID tokens. Wrong, missing, and matching cases are asserted by `JwtOidcIdTokenValidatorTest`. |
 | 6 | If ID Token came directly from token endpoint over TLS (this flow), TLS itself MAY substitute for explicit `alg` check on the client side, but `alg` must still be one of the registered values | ✅ | `JWSVerificationKeySelector` is constructed with `JWSAlgorithm.RS256` only — alg-confusion classes (e.g. HS256-as-RS256, alg=none) are rejected before signature verification. Asserted by `JwtOidcIdTokenValidatorTest#algNoneIsRejected` and `#algConfusionHs256IsRejected`. |
 | 7 | `alg` must be the default `RS256` or the value negotiated in `id_token_signed_response_alg` (`MUST`) | ✅ | Pinned to RS256 as above. Discovery exposes `id_token_signing_alg_values_supported`. |
 | 8 | If `alg` is MAC (HS256 etc.), client_secret is the key — UTF-8-encoded (`MUST`) | 🚫 | Not used; MAC algorithms rejected by the RS256 allowlist. |
@@ -190,9 +190,19 @@ the RFC 9700 Best Current Practice (BCP); no new requirements beyond what that d
 | §2 | Logout Request to `end_session_endpoint` | ✅ | `AuthController#logout` builds the request via Nimbus `UriComponentsBuilder` against `md.endSessionEndpoint()` (from discovery). |
 | §2 | `id_token_hint` (`RECOMMENDED`) | ✅ | Included. |
 | §2 | `post_logout_redirect_uri` (`OPTIONAL`) | ✅ | Included; pre-registered in the realm. |
-| §2 | `state` (`OPTIONAL` but recommended) | ✅ | `CryptoSupport.randomUrlToken(32)`. |
+| §2 | `state` (`OPTIONAL` but recommended) | 🚫 | Deliberately omitted. `AuthController#logout` builds the end-session request with only `id_token_hint`, `post_logout_redirect_uri`, and `client_id` — no `state`. The `post_logout_redirect_uri` is a fixed same-origin path with no callback that validates a returned `state`, so emitting one would ship an unvalidated token without value. (The login `state` at §3.1.2.1 is a separate, implemented control.) |
 | §2 | `client_id` (`OPTIONAL`) | ✅ | Included. |
 | §3 | Logout endpoint discovery via `end_session_endpoint` metadata | ✅ | Read from discovery. |
+
+---
+
+## Implemented beyond the core flows
+
+Supported in addition to Authorization Code + PKCE and Client Credentials.
+
+| Spec | Status | Where / How |
+|---|---|---|
+| [OIDC Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html) | ✅ | Implemented at the Auth Service: signed logout-token validation (`iss`/`aud`/`iat`-freshness/`jti`-replay), `sid`/`sub` session invalidation, and a single-use replay marker written only after a successful deletion (so a failed delete can still be retried). Production deployments still need a trusted OP→Auth-Service route. |
 
 ---
 
@@ -206,7 +216,6 @@ in `docs/architecture/architecture-decisions.md` §F.
 | [OIDC Dynamic Registration 1.0](https://openid.net/specs/openid-connect-registration-1_0.html) | 🚫 | Static realm configuration. Reconsider when integrating with SaaS IdPs that mint per-tenant clients dynamically. |
 | [OIDC Session Management 1.0](https://openid.net/specs/openid-connect-session-1_0.html) | 🚫 | Requires the single-page application (SPA) to embed an iframe pointed at the OP; the Backend-for-Frontend (BFF) session model is the canonical state. |
 | [OIDC Front-Channel Logout 1.0](https://openid.net/specs/openid-connect-frontchannel-1_0.html) | 🚫 | Same; RP-initiated logout covers user-driven logout. |
-| [OIDC Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html) | ✅ | Implemented at the Auth Service with signed logout-token validation, replay detection, and `sid`/`sub` session invalidation semantics. Production deployments still need a trusted route from the OP to the Auth Service. |
 | OIDC Form Post Response Mode | 🚫 | `query` response mode used; PKCE + short-lived code cover the threats `form_post` mitigates. |
 | OIDC CIBA, Self-Issued OP, JARM | 🚫 | Out of scope for a browser-app reference. |
 

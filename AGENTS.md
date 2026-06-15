@@ -70,6 +70,8 @@ Never:
 - store any token, code, or claim in `localStorage`, `sessionStorage`,
   IndexedDB, or JS-readable cookies
 - disable issuer, audience, expiration, signature, or algorithm validation
+- accept arbitrary or missing JWT `typ` values where the token profile defines
+  an allowlist; the Resource Server accepts only `JWT` and `at+JWT`
 - use wildcard redirect URIs or wildcard Cross-Origin Resource Sharing (CORS) origins for protected APIs
 - hand-roll crypto, Proof Key for Code Exchange (PKCE), OIDC discovery, JSON Web Key Set (JWKS) parsing, callback
   validation, or session encoding when proven libraries exist

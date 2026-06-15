@@ -31,6 +31,7 @@ import org.springframework.stereotype.Component;
 @Component
 class JwtOidcIdTokenValidator implements IdTokenValidator {
   private final IDTokenValidator validator;
+  private final String clientId;
   // Path into the ID-token claims that holds the roles array. Different IdPs
   // emit roles at different shapes:
   //   Keycloak: realm_access.roles          → ["realm_access", "roles"]
@@ -61,6 +62,7 @@ class JwtOidcIdTokenValidator implements IdTokenValidator {
           new ClientID(md.clientId()),
           keySelector,
           null);
+      this.clientId = md.clientId();
       this.rolesClaimPath = List.copyOf(props.rolesClaimPath());
     } catch (Exception e) {
       throw new IllegalStateException("Failed to initialize ID token validator", e);
@@ -71,8 +73,10 @@ class JwtOidcIdTokenValidator implements IdTokenValidator {
   // IDTokenValidator built against an in-memory JWKSet — avoids spinning up
   // an HTTP JWKS endpoint to exercise negative-path validation (alg=none,
   // alg confusion, wrong-iss/aud, expired, nonce mismatch, kid swap, etc.).
-  JwtOidcIdTokenValidator(IDTokenValidator validator, List<String> rolesClaimPath) {
+  JwtOidcIdTokenValidator(
+      IDTokenValidator validator, String clientId, List<String> rolesClaimPath) {
     this.validator = validator;
+    this.clientId = clientId;
     this.rolesClaimPath = List.copyOf(rolesClaimPath);
   }
 
@@ -82,6 +86,7 @@ class JwtOidcIdTokenValidator implements IdTokenValidator {
     try {
       JWT parsed = JWTParser.parse(idToken);
       IDTokenClaimsSet claims = validator.validate(parsed, new Nonce(transaction.nonce()));
+      enforceAuthorizedParty(claims);
       enforceAtHash(parsed, claims, accessToken);
       return userClaims(claims, rolesClaimPath);
     } catch (BadCredentialsException e) {
@@ -99,12 +104,28 @@ class JwtOidcIdTokenValidator implements IdTokenValidator {
       // nonce. All other checks (signature against JWKS, issuer, audience,
       // expiry) are still enforced by the Nimbus validator.
       IDTokenClaimsSet claims = validator.validate(parsed, null);
+      enforceAuthorizedParty(claims);
       enforceAtHash(parsed, claims, accessToken);
       return userClaims(claims, rolesClaimPath);
     } catch (BadCredentialsException e) {
       throw e;
     } catch (Exception e) {
       throw new BadCredentialsException("refreshed ID token validation failed", e);
+    }
+  }
+
+  // OIDC Core §3.1.3.7 steps 4-5. Keep this explicit rather than relying on
+  // Nimbus behavior, which changed between dependency releases: multi-audience
+  // ID tokens require azp, and every present azp must identify this client.
+  private void enforceAuthorizedParty(IDTokenClaimsSet claims) {
+    var audiences = claims.getAudience();
+    var authorizedParty = claims.getAuthorizedParty();
+    if (audiences.size() > 1 && authorizedParty == null) {
+      throw new BadCredentialsException(
+          "ID token with multiple audiences is missing azp");
+    }
+    if (authorizedParty != null && !clientId.equals(authorizedParty.getValue())) {
+      throw new BadCredentialsException("ID token azp does not match the client id");
     }
   }
 

@@ -66,7 +66,7 @@
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 2.3 | Least privilege (`SHOULD`) | ✅ | Auth Service client default scopes: `openid profile email roles api.audience api.read` (no admin/write by default). Service client default scopes: `api.audience service.jobs`. |
-| 2.3 | Audience restriction (`SHOULD`); Resource Server (RS) verifies (`MUST`) | ✅ | `api.audience` client scope's `oidc-audience-mapper` adds `oidc-reference-api` to `aud`. Resource Server validates `aud` with a custom `JwtClaimValidator` on `app.audience` (env `OIDC_AUDIENCE`, default `oidc-reference-api`) in `SecurityConfig`, accepting both the RFC-7519 string and array shapes. Wrong-audience rejection asserted by `ApiSecurityTest`. |
+| 2.3 | Audience restriction (`SHOULD`); Resource Server (RS) verifies (`MUST`) | ✅ | `api.audience` client scope's `oidc-audience-mapper` adds `oidc-reference-api` to `aud`. Resource Server validates `aud` with a custom `JwtClaimValidator` on `app.audience` (env `OIDC_AUDIENCE`, default `oidc-reference-api`) in `SecurityConfig`, accepting both the RFC-7519 string and array shapes. Wrong-, string-, and missing-audience rejection asserted by `JwtDecoderNegativeTest`. |
 | 2.3 | Resource/action restriction (scope or `authorization_details`) | ✅ | Scopes: `api.read`, `api.write`, `admin.read`, `service.jobs`. Rich Authorization Requests (RAR) (RFC 9396) not used. |
 
 ## §2.4 — ROPC
@@ -166,7 +166,7 @@
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 4.9.3 | Sender-constrained tokens to prevent replay | ⏳ | DPoP / mTLS not implemented. |
-| 4.9.3 | Audience restriction | ✅ | Wrong-audience tokens rejected at the RS. Asserted by `ApiSecurityTest`. |
+| 4.9.3 | Audience restriction | ✅ | Wrong-audience tokens rejected at the RS. Asserted by `JwtDecoderNegativeTest`. |
 | 4.9.3 | Treat tokens as secrets; no plaintext store/transfer (`MUST`) | ✅ | RS does not persist tokens. Auth Service stores tokens in `sess:{sid}` only after ID-token validation succeeds. `SecurityAudit` log lines hash subject + sid; no token bytes ever logged. Production guidance still requires Valkey AUTH + TLS + encryption-at-rest. |
 
 ## §4.10 — Misuse of Stolen Tokens
@@ -174,7 +174,7 @@
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
 | 4.10.1 | mTLS (RFC 8705) or DPoP (RFC 9449) | ⏳ | Deferred. |
-| 4.10.2 | AS binds token to RS; RS verifies (`MUST` refuse on failure) | ✅ | `api.audience` mapper binds `aud=oidc-reference-api`; RS rejects mismatched audience. Asserted by `ApiSecurityTest`. |
+| 4.10.2 | AS binds token to RS; RS verifies (`MUST` refuse on failure) | ✅ | `api.audience` mapper binds `aud=oidc-reference-api`; RS rejects mismatched audience. Asserted by `JwtDecoderNegativeTest`. |
 | 4.10.2 | Resource indicator (RFC 8707) `resource` parameter | 🟡 | Not used. Scope-based audience binding via the `api.audience` scope is BCP-acceptable. |
 | 4.10.2 | Express audience as the URL the client calls (not logical name) | 🟡 | Using logical name `oidc-reference-api`. Defensible for a single-RS reference; switch to URL form for multi-RS. |
 
@@ -203,8 +203,8 @@
 
 | RFC § | Practice | Status | Where / How |
 |---|---|---|---|
-| 4.14 | Rotation with reuse detection | ✅ | Realm: `revokeRefreshToken: true`, `refreshTokenMaxReuse: 0`. `AuthorizationCodeTokenRefreshClient` surfaces Keycloak's `invalid_grant` as `InvalidRefreshTokenException`; `InternalResolveController` deletes `sess:{sid}` and returns 409. Per-session refresh serialized via `ReentrantLock` keyed on `sid`. Asserted by `InternalResolveControllerTest`. |
-| 4.14 | Audit on refresh rejection (incl. reuse) | ✅ | `InternalResolveController` emits `SecurityAudit.event(... "refresh_token_rejected", "session_invalidated", subjectClaim)` with `sid_hash` (never the raw sid) before the 409. `invalid_grant` is not provably reuse at the Relying Party (RP) (RFC 6749 §5.2), so the event is labeled honestly; reuse still invalidates the session. |
+| 4.14 | Refresh-token rotation (reuse detection at the IdP, not the RP) | ✅ | Realm: `revokeRefreshToken: true`, `refreshTokenMaxReuse: 0` — the IdP detects reuse. `AuthorizationCodeTokenRefreshClient` surfaces Keycloak's `invalid_grant` as `InvalidRefreshTokenException`; `InternalResolveController` deletes `sess:{sid}` and returns 409. Per-session refresh is serialized via the `RefreshLock` seam (`InProcessRefreshLock` default, a per-`sid` in-process lock; `app.refresh-lock=distributed` selects the Valkey-backed `DistributedRefreshKeyLock` so serialization holds across replicas). Asserted by `InternalResolveControllerTest`. |
+| 4.14 | Audit on refresh rejection | ✅ | `InternalResolveController` emits `SecurityAudit.event(... "refresh_token_rejected", "session_invalidated", subjectClaim)` with `sid_hash` (never the raw sid) before the 409. `invalid_grant` is not provably reuse at the Relying Party (RP) (RFC 6749 §5.2), so the event is labeled honestly; reuse still invalidates the session. |
 
 ## §4.15 — Client Impersonating Resource Owner
 

@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import javax.crypto.spec.SecretKeySpec;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
@@ -70,6 +71,7 @@ class JwtDecoderNegativeTest {
 
     decoder = NimbusJwtDecoder.withJwkSource(jwkSource)
         .jwsAlgorithm(SignatureAlgorithm.RS256)
+        .jwtProcessorCustomizer(SecurityConfig::customizeJwtProcessor)
         .build();
     decoder.setJwtValidator(SecurityConfig.jwtValidator(ISSUER, AUDIENCE));
   }
@@ -93,6 +95,31 @@ class JwtDecoderNegativeTest {
     var jwt = decoder.decode(token);
 
     assertThat(jwt.getAudience()).contains(AUDIENCE);
+  }
+
+  @Test
+  void rfc9068AccessTokenTypeDecodes() throws Exception {
+    String token = signRS256(
+        signingKey, LEGIT_KID, new JOSEObjectType("at+JWT"), baseClaims().build());
+
+    assertThat(decoder.decode(token).getSubject()).isEqualTo("alice");
+  }
+
+  @Test
+  void missingJoseTypeIsRejected() throws Exception {
+    String token = signRS256(signingKey, LEGIT_KID, null, baseClaims().build());
+
+    assertThatThrownBy(() -> decoder.decode(token))
+        .isInstanceOf(JwtException.class);
+  }
+
+  @Test
+  void unrelatedJoseTypeIsRejected() throws Exception {
+    String token = signRS256(
+        signingKey, LEGIT_KID, new JOSEObjectType("logout+jwt"), baseClaims().build());
+
+    assertThatThrownBy(() -> decoder.decode(token))
+        .isInstanceOf(JwtException.class);
   }
 
   @Test
@@ -240,11 +267,21 @@ class JwtDecoderNegativeTest {
   }
 
   private static String signRS256(RSAKey key, String kid, JWTClaimsSet claims) throws Exception {
+    return signRS256(key, kid, JOSEObjectType.JWT, claims);
+  }
+
+  private static String signRS256(
+      RSAKey key,
+      String kid,
+      @Nullable JOSEObjectType type,
+      JWTClaimsSet claims) throws Exception {
+    JWSHeader.Builder header = new JWSHeader.Builder(JWSAlgorithm.RS256)
+        .keyID(kid);
+    if (type != null) {
+      header.type(type);
+    }
     SignedJWT signed = new SignedJWT(
-        new JWSHeader.Builder(JWSAlgorithm.RS256)
-            .type(JOSEObjectType.JWT)
-            .keyID(kid)
-            .build(),
+        header.build(),
         claims);
     signed.sign(new RSASSASigner(key));
     return signed.serialize();

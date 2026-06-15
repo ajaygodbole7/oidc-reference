@@ -27,7 +27,8 @@ state store, secret manager, and incident process.
 - Rotate the gateway client-credentials secret at the IdP.
 - Redeploy gateway configuration.
 - Review `/internal/resolve` caller failures and unusual gateway token issuance.
-- Confirm Auth Service still rejects wrong `azp` / `client_id` and wrong
+- Confirm Auth Service still rejects a wrong or conflicting gateway identity
+  across `azp`, `client_id`, and Entra v1 `appid`, and rejects the wrong
   audience.
 
 ## Refresh Token Reuse Spike

@@ -86,5 +86,10 @@ The following tests are skipped without their gating env var:
 `test_query_string_preserved`, and `test_hop_by_hop_headers_stripped` use
 `/api/_test/echo` on the Resource Server. That endpoint exists only under the
 `gateway-test` Spring profile and reflects only the narrow fields the gateway
-harness needs. It does not echo `Authorization`. The default profile returns
-404 for the same path, which is covered by the Resource Server test suite.
+harness needs. It never echoes `Authorization`; it returns only the header value
+count, the recognized scheme, and a SHA-256 fingerprint so the harness can prove
+the exact injected bearer without returning a live token to the caller. The
+default profile returns 404 for the same path, which is covered by the Resource
+Server test suite. Gateway forwarding assertions accept only deliberate 2xx/4xx
+responses; redirects, transport failures, and 5xx responses are not treated as
+proof that the intended upstream handler received the request.

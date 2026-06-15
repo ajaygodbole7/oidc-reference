@@ -231,8 +231,9 @@ test_internal_path_is_not_routable_through_gateway() {
 # eviction header as the sole reliable signal that the gateway did or did
 # not short-circuit; a bare `200|401` check was a false positive that
 # masked a months-long plugin-load failure (module 'apisix.plugins.bff-
-# session' not found). Accept any 2xx/4xx/5xx as long as it didn't come
-# from the plugin's no-session path.
+# session' not found). A 5xx is not forwarding proof: it can be produced by
+# APISIX or an unreachable/broken upstream before the request reaches the
+# intended handler.
 assert_plugin_forwarded() {
   name="$1"
   status="$2"
@@ -260,6 +261,20 @@ assert_plugin_forwarded() {
     FAILED=$((FAILED + 1))
     return 1
   fi
+
+  # 3. Only a successful or deliberate 4xx response is forwarding evidence.
+  #    A 5xx, redirect, empty status, or curl's 000 can originate before the
+  #    intended upstream handler receives the request.
+  case "$status" in
+    2??|4??)
+      ;;
+    *)
+      printf '[FAIL] %s gateway/upstream returned status=%s; forwarding is not proven\n' \
+        "$name" "${status:-<empty>}"
+      FAILED=$((FAILED + 1))
+      return 1
+      ;;
+  esac
 
   printf '[PASS] %s gateway_forwarded (status=%s; passed through plugin to upstream)\n' \
     "$name" "$status"
@@ -302,10 +317,10 @@ test_valid_session_returns_200_with_bearer_injected() {
 # C1 — the gateway's single most important security function: translate the
 # opaque session cookie into the EXACT upstream Authorization: Bearer <token>
 # (from /internal/resolve), and leak no credential. Earlier tests only inferred
-# this (the RS didn't 401); this asserts the injected bearer value directly via
-# the echo upstream, and that neither the sid nor the CSRF token reaches the RS
-# in any header. A wrong/empty/duplicated bearer, or the raw cookie as bearer,
-# fails here.
+# this (the RS didn't 401); this asserts a fingerprint of the exact injected
+# bearer via the echo upstream, and that neither the sid nor the CSRF token
+# reaches the RS in any header. A wrong/empty/duplicated bearer, or the raw
+# cookie as bearer, fails here.
 test_valid_session_injects_exact_bearer_and_strips_credentials() {
   name="valid_session_injects_exact_bearer_and_strips_credentials"
   sid="echo-bearer-1"
@@ -337,17 +352,28 @@ test_valid_session_injects_exact_bearer_and_strips_credentials() {
 
   # 2. The upstream Authorization is EXACTLY the resolved access token: not a
   #    wrong token, not empty, not duplicated ("Bearer X, Bearer X"), not the
-  #    raw cookie.
-  upstream_auth="$(json_get "$BODY_TMP" "headers.authorization")"
-  assert_status "$name exact_bearer_injected" "Bearer $access_token" "$upstream_auth"
+  #    raw cookie. The test-only RS endpoint returns only a SHA-256 fingerprint
+  #    and count so it never reflects a live bearer into a response.
+  expected_auth_sha256="$(
+    printf '%s' "Bearer $access_token" | openssl dgst -sha256 | awk '{print $NF}'
+  )"
+  upstream_auth_sha256="$(json_get "$BODY_TMP" "authorization.sha256")"
+  upstream_auth_count="$(json_get "$BODY_TMP" "authorization.value_count")"
+  upstream_auth_scheme="$(json_get "$BODY_TMP" "authorization.scheme")"
+  assert_status "$name exact_bearer_injected" "$expected_auth_sha256" "$upstream_auth_sha256"
+  assert_status "$name single_authorization_value" "1" "$upstream_auth_count"
+  assert_status "$name bearer_scheme" "Bearer" "$upstream_auth_scheme"
+  upstream_raw_auth="$(json_get "$BODY_TMP" "headers.authorization")"
+  assert_status "$name authorization_not_reflected" "" "$upstream_raw_auth"
 
   # 3. The session cookie is stripped from the upstream request.
   upstream_cookie="$(json_get "$BODY_TMP" "headers.cookie")"
   assert_status "$name cookie_stripped" "" "$upstream_cookie"
 
-  # 4. Neither the sid nor the CSRF token value appears in ANY forwarded header
-  #    (the echo reflects every inbound header, so this covers all of them).
+  # 4. Neither the sid nor the CSRF token value appears in any forwarded
+  #    non-Authorization header; Authorization itself is fingerprint-only.
   echo_body="$(cat "$BODY_TMP" 2>/dev/null || true)"
+  assert_not_contains "$name no_access_token_reflection" "$echo_body" "$access_token"
   assert_not_contains "$name no_sid_leak_to_upstream"  "$echo_body" "$sid"
   assert_not_contains "$name no_csrf_leak_to_upstream" "$echo_body" "$csrf_sentinel"
 

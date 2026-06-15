@@ -6,10 +6,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
@@ -149,6 +151,104 @@ class SessionIndexesTest {
     assertThat(store.get("sess:local-1")).isEmpty();
     assertThat(store.get("sess:local-2")).isEmpty();
     assertThat(store.members("idp_sid:kc-1")).isEmpty();
+  }
+
+  @Test
+  void deleteByIdpSidDrainsASessionAddedAfterTheFirstSnapshot() {
+    // A fresh login can add a local sid to idp_sid:{opSid} while a back-channel
+    // logout is draining the same OP sid. The index must not be deleted up front:
+    // the drain must re-read and catch the late member, or the new sess:{sid}
+    // survives the logout.
+    SessionRecord late = sessionWithIdpSid("alice", "kc-1");
+    InMemoryStateStore store = new AddAfterFirstMembersStore(
+        "idp_sid:kc-1", "late", late, JSON);
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord first = sessionWithIdpSid("alice", "kc-1");
+    store.put("sess:first", JSON.encode(first), Duration.ofMinutes(30));
+    indexes.index("first", first);
+
+    int deleted = indexes.deleteByIdpSid("kc-1");
+
+    assertThat(deleted).isEqualTo(2);
+    assertThat(store.get("sess:first")).isEmpty();
+    assertThat(store.get("sess:late")).isEmpty();
+    assertThat(store.members("idp_sid:kc-1")).isEmpty();
+  }
+
+  @Test
+  void deleteBySubjectDrainsASessionAddedAfterTheFirstSnapshot() {
+    SessionRecord late = sessionForSubject("alice");
+    InMemoryStateStore store = new AddAfterFirstMembersStore(
+        "sub_sessions:alice", "late", late, JSON);
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord first = sessionForSubject("alice");
+    store.put("sess:first", JSON.encode(first), Duration.ofMinutes(30));
+    indexes.index("first", first);
+
+    int deleted = indexes.deleteBySubject("alice");
+
+    assertThat(deleted).isEqualTo(2);
+    assertThat(store.get("sess:first")).isEmpty();
+    assertThat(store.get("sess:late")).isEmpty();
+    assertThat(store.members("sub_sessions:alice")).isEmpty();
+  }
+
+  @Test
+  void deleteByIdpSidRetryCanStillFindSessionsAfterPartialDeleteFailure() {
+    // The replay marker is written only after deletion succeeds. That only helps
+    // if a retry can still enumerate the index after a mid-loop store failure.
+    // Keeping the index live until members are removed makes the retry safe.
+    InMemoryStateStore store = new FailOnceDeletingSessionStore("local-1");
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord session = sessionWithIdpSid("alice", "kc-1");
+    store.put("sess:local-1", JSON.encode(session), Duration.ofMinutes(30));
+    indexes.index("local-1", session);
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> indexes.deleteByIdpSid("kc-1"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("injected delete failure");
+    assertThat(store.get("sess:local-1")).isPresent();
+    assertThat(store.members("idp_sid:kc-1")).containsExactly("local-1");
+
+    int deleted = indexes.deleteByIdpSid("kc-1");
+
+    assertThat(deleted).isEqualTo(1);
+    assertThat(store.get("sess:local-1")).isEmpty();
+    assertThat(store.members("idp_sid:kc-1")).isEmpty();
+  }
+
+  @Test
+  void drainRemovesCorruptIndexMembersAndStillDeletesReadableSiblings() {
+    InMemoryStateStore store = new InMemoryStateStore();
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord good = sessionForSubject("alice");
+    store.put("sess:good", JSON.encode(good), Duration.ofMinutes(30));
+    indexes.index("good", good);
+    store.put("sess:corrupt", "{not-json", Duration.ofMinutes(30));
+    store.addToSet("sub_sessions:alice", "corrupt", Duration.ofMinutes(30));
+
+    int deleted = indexes.deleteBySubject("alice");
+
+    assertThat(deleted).isEqualTo(1);
+    assertThat(store.get("sess:good")).isEmpty();
+    assertThat(store.get("sess:corrupt")).isEmpty();
+    assertThat(store.members("sub_sessions:alice"))
+        .as("explicit SREM makes progress even when sess:{sid} cannot be decoded")
+        .isEmpty();
+  }
+
+  @Test
+  void drainFailsClosedWhenConcurrentAddsNeverQuiesce() {
+    InMemoryStateStore store = new AddOnEveryMembersStore(
+        "sub_sessions:alice", "storm", sessionForSubject("alice"), JSON);
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    SessionRecord first = sessionForSubject("alice");
+    store.put("sess:first", JSON.encode(first), Duration.ofMinutes(30));
+    indexes.index("first", first);
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> indexes.deleteBySubject("alice"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("session index drain incomplete");
   }
 
   @Test
@@ -312,5 +412,81 @@ class SessionIndexesTest {
         "access-token", "refresh-token", jwtWithSid(idpSid),
         now.plusSeconds(300), now.plusSeconds(1800), now,
         now.plusSeconds(28800), now, Map.of("sub", sub));
+  }
+
+  private static final class AddAfterFirstMembersStore extends InMemoryStateStore {
+    private final String indexKey;
+    private final String lateSid;
+    private final SessionRecord lateSession;
+    private final JsonCodec json;
+    private final AtomicBoolean injected = new AtomicBoolean();
+
+    private AddAfterFirstMembersStore(
+        String indexKey,
+        String lateSid,
+        SessionRecord lateSession,
+        JsonCodec json) {
+      this.indexKey = indexKey;
+      this.lateSid = lateSid;
+      this.lateSession = lateSession;
+      this.json = json;
+    }
+
+    @Override
+    public Set<String> members(String key) {
+      Set<String> snapshot = super.members(key);
+      if (indexKey.equals(key) && injected.compareAndSet(false, true)) {
+        super.put("sess:" + lateSid, json.encode(lateSession), Duration.ofMinutes(30));
+        super.addToSet(indexKey, lateSid, Duration.ofMinutes(30));
+      }
+      return snapshot;
+    }
+  }
+
+  private static final class FailOnceDeletingSessionStore extends InMemoryStateStore {
+    private final String sid;
+    private final AtomicBoolean failed = new AtomicBoolean();
+
+    private FailOnceDeletingSessionStore(String sid) {
+      this.sid = sid;
+    }
+
+    @Override
+    public void delete(String key) {
+      if (("sess:" + sid).equals(key) && failed.compareAndSet(false, true)) {
+        throw new IllegalStateException("injected delete failure");
+      }
+      super.delete(key);
+    }
+  }
+
+  private static final class AddOnEveryMembersStore extends InMemoryStateStore {
+    private final String indexKey;
+    private final String sidPrefix;
+    private final SessionRecord session;
+    private final JsonCodec json;
+    private int counter;
+
+    private AddOnEveryMembersStore(
+        String indexKey,
+        String sidPrefix,
+        SessionRecord session,
+        JsonCodec json) {
+      this.indexKey = indexKey;
+      this.sidPrefix = sidPrefix;
+      this.session = session;
+      this.json = json;
+    }
+
+    @Override
+    public Set<String> members(String key) {
+      Set<String> snapshot = super.members(key);
+      if (indexKey.equals(key) && counter < 10) {
+        String sid = sidPrefix + "-" + counter++;
+        super.put("sess:" + sid, json.encode(session), Duration.ofMinutes(30));
+        super.addToSet(indexKey, sid, Duration.ofMinutes(30));
+      }
+      return snapshot;
+    }
   }
 }

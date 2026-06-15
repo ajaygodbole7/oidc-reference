@@ -41,6 +41,12 @@ class ApiControllerTest {
   }
 
   @Test
+  void meDeniesAConfiguredEntraAppIdServiceClient() {
+    assertThatThrownBy(() -> controller.me(() -> "custom-service", jwtWithAppId("custom-service")))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
   void meTreatsADefaultClientIdOutsideTheConfiguredAllowlistAsAUser() {
     // oidc-reference-api-gateway is the shipped default but NOT in this
     // controller's custom allowlist, so it must be treated as a normal user.
@@ -53,6 +59,23 @@ class ApiControllerTest {
   void jobsAcceptsTheConfiguredJobsClient() {
     assertThat(controller.jobs(jwtWithAzp("custom-jobs")).status())
         .isEqualTo("job accepted");
+  }
+
+  @Test
+  void jobsAcceptsTheConfiguredEntraAppIdJobsClient() {
+    assertThat(controller.jobs(jwtWithAppId("custom-jobs")).status())
+        .isEqualTo("job accepted");
+  }
+
+  @Test
+  void jobsRejectsConflictingClientIdentityClaims() {
+    Jwt jwt = jwtBuilder()
+        .claim("azp", "different-client")
+        .claim("appid", "custom-jobs")
+        .build();
+
+    assertThatThrownBy(() -> controller.jobs(jwt))
+        .isInstanceOf(AccessDeniedException.class);
   }
 
   @Test
@@ -139,12 +162,22 @@ class ApiControllerTest {
   }
 
   private static Jwt jwtWithAzp(String azp) {
+    return jwtBuilder()
+        .claim("azp", azp)
+        .build();
+  }
+
+  private static Jwt jwtWithAppId(String appId) {
+    return jwtBuilder()
+        .claim("appid", appId)
+        .build();
+  }
+
+  private static Jwt.Builder jwtBuilder() {
     return Jwt.withTokenValue("t")
         .header("alg", "RS256")
-        .claim("azp", azp)
         .issuedAt(Instant.now())
-        .expiresAt(Instant.now().plusSeconds(300))
-        .build();
+        .expiresAt(Instant.now().plusSeconds(300));
   }
 
   private static Jwt jwtWithAuthTime(Instant authTime) {

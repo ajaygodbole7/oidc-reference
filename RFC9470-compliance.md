@@ -40,7 +40,7 @@ Mapping and portability:
 | §3 | The challenge uses the new error code `error="insufficient_user_authentication"` | ✅ | Emitted verbatim in the `WWW-Authenticate` header and echoed as `"error":"insufficient_user_authentication"` in the `application/problem+json` body. |
 | §3 | Distinct from `insufficient_scope` — the token IS authorized; only its authentication recency is insufficient | ✅ | Scope/role failures remain a `403` `insufficient_scope` (Spring `AccessDeniedHandler`); step-up is a separate `401` path. The `ROLE_admin` check still runs first (`SecurityConfig`), so an unauthorized caller never reaches the step-up gate. |
 | §3 | The challenge MAY include `max_age` indicating the maximum acceptable authentication age | ✅ | `max_age=<app.step-up.max-age in seconds>` is included in the challenge. |
-| §3 | The challenge MAY include `error_description` | ✅ | `error_description="A more recent authentication is required"`. |
+| §3 | The challenge MAY include `error_description` | ✅ | `error_description="A stronger or more recent authentication is required"` (`ApiController`). |
 | §3 | The challenge MAY include `acr_values` indicating a required Authentication Context Class Reference (the `acr` claim) | ✅ | The RS step-up challenge advertises `acr_values="<app.step-up.required-acr>"` (alongside `max_age`) when acr enforcement is on (`ApiController#handleStepUpRequired`). Asserted by `ApiSecurityTest#adminWithMissingAcrChallengesForStepUp`. |
 
 ## §4 — Client behavior on receiving the challenge

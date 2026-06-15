@@ -11,23 +11,28 @@ This project is IdP-agnostic at the application boundary:
 
 Keycloak is the local reference Authorization Server, not a code dependency.
 
-A provider swap is configuration-only for a standard OIDC provider. The
-following are all env-configurable:
+A provider swap is configuration-only when the provider fits the supported
+token profile: RS256-signed JWT access tokens with `typ=JWT` or `typ=at+JWT`,
+standard discovery or explicitly configured endpoints, and inline claims. The
+following values are env-configurable:
 
 - the issuer, endpoints, audience, scopes, and role-claim path;
 - the internal trust identifiers: the gateway's client id, the internal-refresh
   audience, and the Resource Server's service-account allowlist.
 
-No provider-facing identifier is baked into Java or APISIX. The alternate-claim
+No provider-facing identifier is baked into Java or APISIX. Cryptographic
+algorithm and accepted token-profile choices remain explicit code policy, not
+provider identifiers. The alternate-claim
 Keycloak realm gate (`just e2e-portability`) proves a config-only swap of the
 token shape end-to-end. If an IdP requires application-code branches by provider
 brand, that provider is outside the current reference contract.
 
 ### Portability scope
 
-Everything an IdP swap touches is configuration. The defaults are this
-reference's local Keycloak names. Real IdPs (Okta/Auth0/Entra) assign client
-ids you don't choose, so the trust identifiers are knobs, not constants.
+Within the supported token profile, everything an IdP swap touches is
+configuration. The defaults are this reference's local Keycloak names. Real
+IdPs (Okta/Auth0/Entra) assign client ids you don't choose, so the trust
+identifiers are knobs, not constants.
 
 | Config knob | Default | Env var |
 |---|---|---|
@@ -73,7 +78,7 @@ provider-specific overlay.
 | `AUTH_CLIENT_SECRET` | Auth Service | Confidential OIDC client secret. |
 | `OIDC_SCOPES` | Auth Service | Comma-separated requested scopes. Defaults to the local Keycloak scopes. |
 | `OIDC_ROLES_CLAIM_PATH` | Auth Service, Resource Server | Comma-separated claim path for roles/groups, for example `realm_access,roles` or `groups`. |
-| `GATEWAY_CLIENT_ID` | Auth Service, APISIX | Client id the gateway authenticates as for `/internal/resolve`, and the value the Auth Service requires in the caller's `azp`/`client_id`. Set in both. Default `oidc-reference-api-gateway`. |
+| `GATEWAY_CLIENT_ID` | Auth Service, APISIX | Client id the gateway authenticates as for `/internal/resolve`. The Auth Service accepts `azp`, `client_id`, or Entra v1 `appid`; at least one must be present and all present values must equal this setting. Set in both components. Default `oidc-reference-api-gateway`. |
 | `INTERNAL_REFRESH_AUDIENCE` | Auth Service | Audience the gateway's Client-Credentials token must carry for `/internal/resolve`. Default `oidc-reference-auth-internal`. |
 | `RS_SERVICE_CLIENT_IDS` | Resource Server | Comma-separated client ids treated as service accounts (denied on `/api/me`). Default `oidc-reference-api-gateway,oidc-reference-service`. |
 | `RS_JOBS_CLIENT_ID` | Resource Server | The single service client authorized to `POST /api/jobs`. Default `oidc-reference-service`. |
@@ -126,7 +131,7 @@ admin UI and OIDC metadata.
 | Keycloak | `https://idp.example/realms/{realm}` | `realm_access,roles` | Custom audience mapper can emit API audience. | Standard OIDC end-session works. |
 | Okta | `https://{org}.okta.com/oauth2/{serverId}` | `groups` | Use a custom authorization server for API audience/scopes. | Standard end-session is available on OIDC apps. |
 | Auth0 | `https://{tenant}.auth0.com/` | namespaced claim, for example `https://example.com/roles` | API Identifier becomes access-token audience. Auth0 often needs an `audience` request parameter, which is not implemented as a first-class config knob yet. |
-| Microsoft Entra ID | `https://login.microsoftonline.com/{tenant}/v2.0` | `roles` or `groups` | App ID URI, often `api://{app-id}`, is the audience. Group overage can replace inline groups with references. |
+| Microsoft Entra ID | `https://login.microsoftonline.com/{tenant}/v2.0` | `roles` or `groups` | App ID URI, often `api://{app-id}`, is the audience. Entra v2 identifies the calling client with `azp`; v1 uses `appid`, and both are accepted. Group overage can replace inline groups with references and is not resolved by this reference. |
 | AWS Cognito | `https://cognito-idp.{region}.amazonaws.com/{userPoolId}` | `cognito:groups` | Access-token audience behavior differs from API-audience providers. Validate with real tokens before relying on RS rules. |
 | Google | `https://accounts.google.com` | none by default | Google ID/access tokens are not a good fit for role-based RS authorization without an app-side role source. | Treat upstream logout as local-only unless tested for your account type. |
 | Ping / PingOne | tenant/environment issuer | commonly `groups` | Configure API resource/audience in the provider. | Standard OIDC end-session is commonly available. |
@@ -139,9 +144,13 @@ For a provider to pass the reference's portability bar:
 2. Login uses Authorization Code + Proof Key for Code Exchange (PKCE) and returns through `/auth/callback/idp`.
 3. ID token validates: `iss`, `aud=AUTH_CLIENT_ID`, signature, `exp`, and nonce.
 4. Access token validates at the Resource Server: `iss`, signature, `exp`,
-   `aud=OIDC_AUDIENCE`, standard `scope` / `scp` authorities, and configured
-   role claim path.
-5. API Gateway obtains a client-credentials token that Auth Service accepts for `/internal/resolve`.
+   `aud=OIDC_AUDIENCE`, JOSE `typ=JWT` or RFC 9068 `typ=at+JWT`, standard
+   `scope` / `scp` authorities (including space-delimited `scp`), and the
+   configured role claim path.
+5. API Gateway obtains a client-credentials token that Auth Service accepts for
+   `/internal/resolve`: the configured internal audience is present, and its
+   caller identity is supplied consistently as `azp`, `client_id`, or Entra v1
+   `appid`.
 6. Refresh behavior is understood:
    - Keep `APP_REFRESH_REQUIRE_ROTATION=true` for providers with refresh-token rotation and reuse detection.
    - Set it false only for a provider that does not rotate refresh tokens, and document that downgrade.
@@ -162,6 +171,12 @@ For a provider to pass the reference's portability bar:
   a first-class Auth Service config setting.
 - Cognito and Google need provider-specific validation before claiming full
   parity with the Keycloak reference.
+- Access-token signatures are pinned to RS256. A provider or tenant policy that
+  emits ES256, PS256, or another algorithm requires a deliberate code and test
+  change; algorithm negotiation is not configuration-driven.
+- Entra group-overage references are not dereferenced. Use app roles, keep
+  groups below the inline-token limit, or add a deployment-specific group
+  resolution layer.
 - Back-channel logout is implemented for providers that support the standard
   logout-token contract and can reach the Auth Service. Pushed Authorization Requests (PAR), JWT-Secured Authorization Request (JAR), Demonstrating Proof-of-Possession (DPoP), mutual TLS (mTLS),
   and `private_key_jwt` remain out of scope for the local reference. See

@@ -20,17 +20,17 @@ import org.springframework.validation.annotation.Validated;
  *   <li>{@code app.refresh-lock=distributed} — {@link DistributedRefreshKeyLock}.</li>
  * </ul>
  *
- * <p>Defaults match the previous self-documenting {@code @Value} defaults: the
- * distributed lease TTL sits above the IdP connect+read budget (3s+5s) so the
- * lease covers a full refresh round-trip; {@code maxWait} sits above the TTL so
- * a crashed holder's lease always lapses within a contender's wait.
+ * <p>The distributed lease TTL must cover the whole guarded refresh action:
+ * IdP connect timeout + IdP read timeout + local validation / rotation / GC
+ * margin. {@link RefreshLockConfig} validates that cross-property budget when
+ * distributed mode is selected.
  */
 @Validated
 @ConfigurationProperties(prefix = "app")
 public record RefreshLockProperties(
     @NotBlank @DefaultValue("in-process") String refreshLock,
-    @NotNull @DefaultValue("10s") Duration refreshLockTtl,
-    @NotNull @DefaultValue("12s") Duration refreshLockMaxWait,
+    @NotNull @DefaultValue("20s") Duration refreshLockTtl,
+    @NotNull @DefaultValue("24s") Duration refreshLockMaxWait,
     @NotNull @DefaultValue("50ms") Duration refreshLockPoll) {
 
   // Reject an unrecognized mode at boot. distributed() treats any non-

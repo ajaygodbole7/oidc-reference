@@ -83,7 +83,10 @@ because it is open source and Redis-wire-compatible.
 The application contract is expressed as logical keyspaces: `tx:{state}` for
 OAuth transactions and `sess:{sid}` for post-callback sessions. The BFF must
 not depend on Valkey-specific commands, modules, clustering behavior, or admin
-APIs. Redis-compatible alternatives are swappable by configuration.
+APIs. A single-primary Redis-compatible store is a configuration swap; a sharded
+Redis Cluster is not a drop-in, because sid rotation and the session indexes
+(`idp_sid:{opSid}`, `sub_sessions:{sub}`) span several keys that a cluster would
+scatter across hash slots.
 
 This is a server-side state store, not just a cache. `sess:{sid}` contains
 tokens and claims and must be treated as sensitive state.
@@ -104,7 +107,9 @@ admin APIs, or claim shapes. Provider differences belong in configuration and
 provider setup docs: scopes, audience mappers, role/group claim paths, logout
 support, refresh-token policy, and service-client settings.
 
-This does not mean every provider is a zero-work swap. It means the BFF and
+This does not mean every provider is a zero-work swap. The JWS signature
+algorithm is pinned to RS256 in code (both services), so an IdP that signs with a
+different algorithm needs a code change, not just config. Otherwise the BFF and
 Resource Server application code stay provider-agnostic.
 
 Spec: SPEC-0001 Authorization Server Portability.
@@ -526,13 +531,16 @@ Spec: SPEC-0001 API Gateway proxy row.
 ### C5. Explicit Resource Server Token Validation
 
 The Resource Server does not trust issuer alone. It validates issuer,
-signature, expiration, algorithm, audience, scope, and roles. The access-token
-audience is the Resource Server audience. The ID-token audience is the BFF
-client ID and is validated only by the BFF during callback.
+signature, expiration, algorithm, JOSE token type, audience, scope, and roles.
+The access-token audience is the Resource Server audience. The ID-token audience
+is the BFF client ID and is validated only by the BFF during callback.
 
 Issuer-only trust was rejected because it permits audience confusion. Implicit
 role mapping was rejected because provider role/group claims differ. Algorithm
-defaults are pinned to avoid algorithm-confusion classes.
+defaults are pinned to avoid algorithm-confusion classes. The RS accepts the two
+deployed access-token JWT type conventions: `typ=JWT` for compatibility and
+RFC 9068 `typ=at+JWT`; missing or unrelated types are rejected to reduce
+cross-JWT confusion.
 
 Trade-off: an explicit JWT validator chain and custom authority converter.
 

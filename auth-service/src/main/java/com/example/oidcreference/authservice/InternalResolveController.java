@@ -110,7 +110,12 @@ class InternalResolveController {
       SecurityAudit.event(request, 404, "refresh_rejected", "no_such_session");
       return problem(404, "no such session");
     }
-    var session = json.decode(raw.get(), SessionRecord.class);
+    Optional<SessionRecord> decoded = decodeSessionOrDelete(req.sid(), raw.get());
+    if (decoded.isEmpty()) {
+      SecurityAudit.event(request, 404, "refresh_rejected", "corrupt_session");
+      return problem(404, "session is unusable");
+    }
+    var session = decoded.get();
 
     // Absolute-TTL ceiling. nextTtl() returns Duration.ZERO once the ceiling is
     // past, which would make a write/slide evict the key. Refuse here instead,
@@ -168,7 +173,12 @@ class InternalResolveController {
       SecurityAudit.event(request, 404, "refresh_rejected", "no_such_session");
       return problem(404, "no such session");
     }
-    var session = json.decode(raw.get(), SessionRecord.class);
+    Optional<SessionRecord> decoded = decodeSessionOrDelete(sid, raw.get());
+    if (decoded.isEmpty()) {
+      SecurityAudit.event(request, 404, "refresh_rejected", "corrupt_session");
+      return problem(404, "session is unusable");
+    }
+    var session = decoded.get();
     if (session.absoluteExpired()) {
       SecurityAudit.event(
           request, 404, "refresh_rejected", "session_absolute_expired", subjectClaim(session));
@@ -315,7 +325,7 @@ class InternalResolveController {
   // tagged with rotated_sid=sid' so the gateway switches the browser to the new
   // cookie. Returns null when there is no breadcrumb (genuinely no session) or
   // the forwarded session is itself gone/expired — the caller then 404s.
-  private @Nullable ResponseEntity<ResolveResponse> resolveViaBreadcrumb(
+  private @Nullable ResponseEntity<?> resolveViaBreadcrumb(
       String oldSid, HttpServletRequest request) {
     Optional<String> newSid = stateStore.get(ROTATED_PREFIX + oldSid);
     if (newSid.isEmpty()) {
@@ -326,12 +336,31 @@ class InternalResolveController {
     if (raw.isEmpty()) {
       return null;
     }
-    var session = json.decode(raw.get(), SessionRecord.class);
+    Optional<SessionRecord> decoded = decodeSessionOrDelete(newSid.get(), raw.get());
+    if (decoded.isEmpty()) {
+      stateStore.delete(ROTATED_PREFIX + oldSid);
+      SecurityAudit.event(request, 404, "refresh_rejected", "corrupt_session");
+      return problem(404, "session is unusable");
+    }
+    var session = decoded.get();
     if (session.absoluteExpired()) {
       return null;
     }
     slideIdle(newKey, session);
     return okRotated(session, newSid.get());
+  }
+
+  private Optional<SessionRecord> decodeSessionOrDelete(String sid, String raw) {
+    try {
+      return Optional.of(json.decode(raw, SessionRecord.class));
+    } catch (RuntimeException e) {
+      // A truncated write, schema drift, or manual store corruption must not
+      // turn the token-bearing resolve path into a 500. Treat the record as an
+      // unusable credential, evict it (including logout hints / rotation
+      // breadcrumbs), and let the gateway clear the browser session on 404.
+      sessionIndexes.deleteLocalSession(sid);
+      return Optional.empty();
+    }
   }
 
   // Package-private + parameterized so the configurable identity is unit-tested
@@ -342,12 +371,21 @@ class InternalResolveController {
   }
 
   static boolean hasExpectedCaller(Jwt jwt, String expectedClientId) {
-    var azp = jwt.getClaimAsString("azp");
-    if (expectedClientId.equals(azp)) {
-      return true;
+    boolean found = false;
+    // Microsoft Entra ID v1 access tokens identify the calling application
+    // with appid. Entra v2 and most OIDC providers use azp/client_id instead.
+    // If a token contains multiple identity claims, every present value must
+    // agree; a matching fallback must not mask a conflicting primary claim.
+    for (String claimName : List.of("azp", "client_id", "appid")) {
+      String value = jwt.getClaimAsString(claimName);
+      if (value != null) {
+        found = true;
+        if (!expectedClientId.equals(value)) {
+          return false;
+        }
+      }
     }
-    var clientId = jwt.getClaimAsString("client_id");
-    return expectedClientId.equals(clientId);
+    return found;
   }
 
   private static ResponseEntity<ProblemDetail> problem(int status, String detail) {

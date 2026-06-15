@@ -74,7 +74,8 @@ class JwtOidcIdTokenValidatorTest {
         new ClientID(CLIENT_ID),
         selector,
         null);
-    sut = new JwtOidcIdTokenValidator(validator, List.of("realm_access", "roles"));
+    sut = new JwtOidcIdTokenValidator(
+        validator, CLIENT_ID, List.of("realm_access", "roles"));
     // This test exercises ID-token validation in isolation; the
     // tx_cookie_hash is irrelevant to the validator, but null is no
     // longer a legal production value (the callback fail-closes on
@@ -141,6 +142,58 @@ class JwtOidcIdTokenValidatorTest {
     String token = signRs256(claimsBuilder().audience(List.of("other-client")).build());
 
     assertThatThrownBy(() -> sut.validate(token, ACCESS_TOKEN, transaction))
+        .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
+  void multipleAudiencesWithoutAuthorizedPartyAreRejected() throws Exception {
+    String token = signRs256(claimsBuilder()
+        .audience(List.of(CLIENT_ID, "another-audience"))
+        .build());
+
+    assertThatThrownBy(() -> sut.validate(token, ACCESS_TOKEN, transaction))
+        .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
+  void multipleAudiencesWithWrongAuthorizedPartyAreRejected() throws Exception {
+    String token = signRs256(claimsBuilder()
+        .audience(List.of(CLIENT_ID, "another-audience"))
+        .claim("azp", "other-client")
+        .build());
+
+    assertThatThrownBy(() -> sut.validate(token, ACCESS_TOKEN, transaction))
+        .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
+  void multipleAudiencesWithExpectedAuthorizedPartyAreAccepted() throws Exception {
+    String token = signRs256(claimsBuilder()
+        .audience(List.of(CLIENT_ID, "another-audience"))
+        .claim("azp", CLIENT_ID)
+        .build());
+
+    assertThat(sut.validate(token, ACCESS_TOKEN, transaction))
+        .containsEntry("sub", "alice");
+  }
+
+  @Test
+  void singleAudienceWithWrongAuthorizedPartyIsRejected() throws Exception {
+    String token = signRs256(claimsBuilder()
+        .claim("azp", "other-client")
+        .build());
+
+    assertThatThrownBy(() -> sut.validate(token, ACCESS_TOKEN, transaction))
+        .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
+  void refreshedTokenWithWrongAuthorizedPartyIsRejected() throws Exception {
+    String token = signRs256(claimsBuilder()
+        .claim("azp", "other-client")
+        .build());
+
+    assertThatThrownBy(() -> sut.validateRefreshed(token, ACCESS_TOKEN))
         .isInstanceOf(BadCredentialsException.class);
   }
 
@@ -220,7 +273,7 @@ class JwtOidcIdTokenValidatorTest {
   @Test
   void rolesClaimPath_okta_topLevelGroupsClaim() throws Exception {
     // Okta puts roles in a top-level "groups" claim. Path = ["groups"].
-    var oktaSut = new JwtOidcIdTokenValidator(validator, List.of("groups"));
+    var oktaSut = new JwtOidcIdTokenValidator(validator, CLIENT_ID, List.of("groups"));
     String token = signRs256(claimsBuilder()
         .claim("groups", List.of("user", "admin"))
         .build());
@@ -235,7 +288,8 @@ class JwtOidcIdTokenValidatorTest {
     // Auth0 emits roles via a namespaced URI-shaped claim. Path is a single
     // element so the URI's slashes aren't split — list-of-segments avoids
     // the dotted-string footgun.
-    var auth0Sut = new JwtOidcIdTokenValidator(validator, List.of("https://example.test/roles"));
+    var auth0Sut = new JwtOidcIdTokenValidator(
+        validator, CLIENT_ID, List.of("https://example.test/roles"));
     String token = signRs256(claimsBuilder()
         .claim("https://example.test/roles", List.of("editor"))
         .build());
@@ -260,7 +314,7 @@ class JwtOidcIdTokenValidatorTest {
 
   @Test
   void rolesClaimPath_missingClaimReturnsEmptyList() throws Exception {
-    var oktaSut = new JwtOidcIdTokenValidator(validator, List.of("groups"));
+    var oktaSut = new JwtOidcIdTokenValidator(validator, CLIENT_ID, List.of("groups"));
     // Build token WITHOUT the groups claim.
     String token = signRs256(claimsBuilder().build());
 

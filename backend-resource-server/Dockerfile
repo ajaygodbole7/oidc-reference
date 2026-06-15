@@ -3,7 +3,7 @@
 # OIDC Reference — Backend Resource Server
 #
 # Pure JWT-validating Spring Boot resource server. Public HTTP on 8082,
-# Spring Boot Actuator on 9082. Java 25 + Spring Boot 4.1.0-RC1, virtual
+# Spring Boot Actuator on 9082. Java 25 + Spring Boot 4.1.0, virtual
 # threads enabled by the application. Multi-stage build; runtime image is a
 # JRE-only layer with a non-root user and curl present so Compose can run
 # its healthcheck against /actuator/health.

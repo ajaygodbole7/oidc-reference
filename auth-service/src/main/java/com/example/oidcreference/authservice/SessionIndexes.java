@@ -5,14 +5,18 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
 class SessionIndexes {
+  private static final Logger log = LoggerFactory.getLogger(SessionIndexes.class);
   private static final String SESSION_PREFIX = "sess:";
   private static final String IDP_SID_PREFIX = "idp_sid:";
   private static final String SUBJECT_SESSIONS_PREFIX = "sub_sessions:";
   private static final String LOGOUT_HINT_PREFIX = "logout_hint:";
+  private static final int MAX_DRAIN_PASSES = 3;
   // Forward-pointer left by a sid rotation (A6, set by InternalResolveController).
   // A logout follows it so it cannot be outrun by a concurrent refresh-rotation.
   private static final String ROTATED_PREFIX = "rotated:";
@@ -89,39 +93,39 @@ class SessionIndexes {
 
   // idp_sid:{idpSid} is a SET of local sids: one OP session can back several
   // local sessions (e.g. repeated BFF logins while the IdP SSO session persists),
-  // and a back-channel logout by OP sid must terminate ALL of them. Mirrors
-  // deleteBySubject: snapshot the members, drop the index, delete each session.
+  // and a back-channel logout by OP sid must terminate ALL of them.
   int deleteByIdpSid(String idpSid) {
-    var key = IDP_SID_PREFIX + idpSid;
-    Set<String> localSids = stateStore.members(key);
-    if (localSids.isEmpty()) {
-      return 0;
-    }
-    stateStore.delete(key);
-    int deleted = 0;
-    for (String localSid : localSids) {
-      if (deleteLocalSession(localSid)) {
-        deleted++;
-      }
-    }
-    return deleted;
+    return deleteAllInIndex(IDP_SID_PREFIX + idpSid);
   }
 
   int deleteBySubject(String sub) {
-    var key = SUBJECT_SESSIONS_PREFIX + sub;
-    Set<String> localSids = stateStore.members(key);
-    if (localSids.isEmpty()) {
-      return 0;
-    }
-    // Drop the index up front: each deleteLocalSession below also SREMs the
-    // member, but removing the key now bounds the work to the snapshot and
-    // leaves no empty index behind.
-    stateStore.delete(key);
+    return deleteAllInIndex(SUBJECT_SESSIONS_PREFIX + sub);
+  }
+
+  private int deleteAllInIndex(String key) {
     int deleted = 0;
-    for (String localSid : localSids) {
-      if (deleteLocalSession(localSid)) {
-        deleted++;
+    for (int pass = 0; pass < MAX_DRAIN_PASSES; pass++) {
+      Set<String> localSids = stateStore.members(key);
+      if (localSids.isEmpty()) {
+        return deleted;
       }
+      for (String localSid : localSids) {
+        if (deleteLocalSession(localSid)) {
+          deleted++;
+        }
+        // Make progress even when sess:{sid} was corrupt or already gone and
+        // deleteLocalSession could not decode it to remove secondary indexes.
+        stateStore.removeFromSet(key, localSid);
+      }
+    }
+    Set<String> remaining = stateStore.members(key);
+    if (!remaining.isEmpty()) {
+      log.warn(
+          "session index drain incomplete after {} passes; key={} remaining_members={}",
+          MAX_DRAIN_PASSES,
+          key,
+          remaining.size());
+      throw new IllegalStateException("session index drain incomplete for " + key);
     }
     return deleted;
   }
