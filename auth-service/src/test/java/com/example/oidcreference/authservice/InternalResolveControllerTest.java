@@ -258,7 +258,7 @@ class InternalResolveControllerTest {
   void resolveFreshPathIsCheap_oneSlideNoRefresh() throws Exception {
     // SPEC-0001 Done Criterion #7 (test clause). This guards EXACTLY two things on
     // the fresh-token hot path, no more:
-    //   - no IdP/refresh call (and therefore the refresh-lock path is not entered),
+    //   - no IdP/refresh call and no refresh-lock entry,
     //   - the idle TTL is slid exactly once, not in a rewrite storm.
     // It is NOT a general round-trip guard: InMemoryStateStore counts expire() (and
     // zero-TTL put), not get()/ttl()/put(), so an added read would slip past it.
@@ -278,6 +278,7 @@ class InternalResolveControllerTest {
     stateStore.put("sess:" + sid, TestBeans.JSON.encode(fresh), Duration.ofSeconds(120));
     int slidesBefore = stateStore.expireCalls();
     int refreshesBefore = tokenRefreshClient.refreshCalls();
+    int refreshLocksBefore = refreshLock.lockCalls();
 
     mockMvc.perform(post("/internal/resolve")
             .with(validApiGatewayBearer())
@@ -287,6 +288,9 @@ class InternalResolveControllerTest {
 
     assertThat(tokenRefreshClient.refreshCalls() - refreshesBefore)
         .as("fresh path must not call the IdP")
+        .isZero();
+    assertThat(refreshLock.lockCalls() - refreshLocksBefore)
+        .as("fresh path must not enter the refresh lock")
         .isZero();
     assertThat(stateStore.expireCalls() - slidesBefore)
         .as("fresh path slides the idle TTL exactly once, not repeatedly")
@@ -888,14 +892,20 @@ class InternalResolveControllerTest {
   // delegating to a real InProcessRefreshLock keeps the serialization test honest.
   static class ToggleableRefreshLock implements RefreshLock {
     volatile boolean failAcquire = false;
+    private final AtomicInteger lockCalls = new AtomicInteger();
     private final RefreshLock delegate = new InProcessRefreshLock();
 
     @Override
     public <T> T withLock(String key, java.util.function.Supplier<T> action) {
+      lockCalls.incrementAndGet();
       if (failAcquire) {
         throw new RefreshLockUnavailableException("could not acquire refresh lock within PT12S");
       }
       return delegate.withLock(key, action);
+    }
+
+    int lockCalls() {
+      return lockCalls.get();
     }
   }
 
