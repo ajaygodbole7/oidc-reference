@@ -61,7 +61,8 @@ check("long one-byte differ", eq(long, string.rep("a", 63) .. "c"), false)
 
 -- get_session_cookie: __Host-sid is honored unconditionally; the bare `sid`
 -- fallback is accepted ONLY when allow_insecure_sid is true (B3 — not inferred
--- from a spoofable scheme). The strings below are the cookie VALUES returned.
+-- from a spoofable scheme). The function returns value, cookie-name so downstream
+-- eviction/rotation mirrors the actual credential accepted.
 local gsc = plugin._get_session_cookie
 assert(type(gsc) == "function",
     "bff-session.lua must export _get_session_cookie for tests")
@@ -71,6 +72,10 @@ check("__Host-sid wins over bare sid", gsc({ ["__Host-sid"] = "h1", ["sid"] = "s
 check("bare sid accepted when allowed", gsc({ ["sid"] = "s1" }, true), "s1")
 check("bare sid REJECTED by default", gsc({ ["sid"] = "s1" }, false), nil)
 check("no cookie -> nil", gsc({}, true), nil)
+local _, host_name = gsc({ ["__Host-sid"] = "h1", ["sid"] = "s1" }, true)
+local _, bare_name = gsc({ ["sid"] = "s1" }, true)
+check("__Host-sid reports actual cookie name", host_name, "__Host-sid")
+check("bare sid reports actual cookie name", bare_name, "sid")
 
 -- build_rotation_cookies (A6): the Set-Cookie strings re-issued on rotation. The
 -- PROD branch (__Host-sid + Secure) is never reached by the plain-HTTP live e2e,
@@ -82,8 +87,8 @@ assert(type(brc) == "function",
 local function has(s, sub) return s ~= nil and string.find(s, sub, 1, true) ~= nil end
 local function checkc(label, cond) check(label, cond and true or false, true) end
 
--- Prod: HTTPS, allow_insecure_sid = false
-local prod = brc("rsid", "val.hmac", 3600, false)
+-- Prod/secure envelope: __Host-sid + Secure
+local prod = brc("rsid", "val.hmac", 3600, "__Host-sid")
 checkc("prod sid is __Host-sid", has(prod[1], "__Host-sid=rsid"))
 checkc("prod sid HttpOnly", has(prod[1], "; HttpOnly"))
 checkc("prod sid SameSite=Lax", has(prod[1], "; SameSite=Lax"))
@@ -95,34 +100,40 @@ checkc("prod xsrf SameSite=Strict", has(prod[2], "; SameSite=Strict"))
 checkc("prod xsrf Secure", has(prod[2], "; Secure"))
 checkc("prod xsrf NOT HttpOnly", not has(prod[2], "HttpOnly"))
 
--- Local: HTTP, allow_insecure_sid = true
-local dev = brc("dsid", "val.hmac", 1800, true)
+-- Local bare envelope: sid without Secure
+local dev = brc("dsid", "val.hmac", 1800, "sid")
 checkc("dev sid is bare sid", has(dev[1], "sid=dsid") and not has(dev[1], "__Host-"))
 checkc("dev sid no Secure", not has(dev[1], "Secure"))
 checkc("dev xsrf no Secure", not has(dev[2], "Secure"))
 checkc("dev xsrf SameSite=Strict", has(dev[2], "; SameSite=Strict"))
 
+-- Local mode may accept a __Host-sid when one is present; rotation must preserve
+-- that secure envelope instead of downgrading it just because bare sid is allowed.
+local local_host = brc("hsid", "val.hmac", 1800, "__Host-sid")
+checkc("local accepted __Host-sid rotates as __Host-sid", has(local_host[1], "__Host-sid=hsid"))
+checkc("local accepted __Host-sid keeps Secure", has(local_host[1], "; Secure"))
+
 -- No CSRF -> only the sid cookie is emitted
-local nocsrf = brc("nsid", nil, 100, false)
+local nocsrf = brc("nsid", nil, 100, "__Host-sid")
 checkc("no-csrf -> single cookie", nocsrf[2] == nil)
 
--- expire_session_cookie (P2): the eviction cookie name/Secure key on the route's
--- allow_insecure_sid flag, NOT a spoofable forwarded scheme. Otherwise a spoofed
--- X-Forwarded-Proto could make prod clear "sid" and leave the live __Host-sid in
+-- expire_session_cookie (P2): the eviction cookie name/Secure key on the actual
+-- accepted cookie envelope, NOT a spoofable forwarded scheme. Otherwise a local
+-- route that permits bare sid could clear "sid" and leave the live __Host-sid in
 -- the browser (repeated 401/redirect). Mirrors the accept + rotation paths.
 local esc = plugin._expire_session_cookie_header
 assert(type(esc) == "function",
     "bff-session.lua must export _expire_session_cookie_header for tests")
--- Prod (flag off): clear __Host-sid, WITH Secure, Max-Age=0.
-checkc("evict prod clears __Host-sid", has(esc(false), "__Host-sid="))
-checkc("evict prod Max-Age=0", has(esc(false), "; Max-Age=0"))
-checkc("evict prod HttpOnly", has(esc(false), "; HttpOnly"))
-checkc("evict prod SameSite=Lax", has(esc(false), "; SameSite=Lax"))
-checkc("evict prod Secure", has(esc(false), "; Secure"))
--- Local HTTP (flag on): clear the bare sid, NO Secure (or the browser rejects it).
-checkc("evict dev clears bare sid", has(esc(true), "sid=") and not has(esc(true), "__Host-"))
-checkc("evict dev Max-Age=0", has(esc(true), "; Max-Age=0"))
-checkc("evict dev no Secure", not has(esc(true), "Secure"))
+-- Secure envelope: clear __Host-sid, WITH Secure, Max-Age=0.
+checkc("evict secure clears __Host-sid", has(esc("__Host-sid"), "__Host-sid="))
+checkc("evict secure Max-Age=0", has(esc("__Host-sid"), "; Max-Age=0"))
+checkc("evict secure HttpOnly", has(esc("__Host-sid"), "; HttpOnly"))
+checkc("evict secure SameSite=Lax", has(esc("__Host-sid"), "; SameSite=Lax"))
+checkc("evict secure Secure", has(esc("__Host-sid"), "; Secure"))
+-- Local bare envelope: clear the bare sid, NO Secure (or the browser rejects it).
+checkc("evict bare clears bare sid", has(esc("sid"), "sid=") and not has(esc("sid"), "__Host-"))
+checkc("evict bare Max-Age=0", has(esc("sid"), "; Max-Age=0"))
+checkc("evict bare no Secure", not has(esc("sid"), "Secure"))
 
 if failures > 0 then
   io.stderr:write(string.format("test-pure-fns: %d FAIL\n", failures))

@@ -179,12 +179,22 @@ local function get_session_cookie(cookies, allow_insecure_sid)
   -- honoring a bare sid where only a bare sid is present (e.g. a TLS-terminating
   -- LB forwarding plaintext). Production leaves the flag off: __Host-sid only. (B3)
   if cookies["__Host-sid"] then
-    return cookies["__Host-sid"]
+    return cookies["__Host-sid"], "__Host-sid"
   end
   if cookies["sid"] and allow_insecure_sid then
-    return cookies["sid"]
+    return cookies["sid"], "sid"
   end
-  return nil
+  return nil, nil
+end
+
+local function session_cookie_shape(cookie_name_or_allow_insecure_sid)
+  -- Preferred input is the actual cookie name accepted from the request. Boolean
+  -- input is kept for pure-test compatibility and for callers that explicitly
+  -- want the route-default shape.
+  if cookie_name_or_allow_insecure_sid == "sid" or cookie_name_or_allow_insecure_sid == true then
+    return "sid", false
+  end
+  return "__Host-sid", true
 end
 
 local function effective_scheme(ctx)
@@ -240,15 +250,13 @@ local function problem_json(status, title, detail)
 end
 
 -- Pure: the Set-Cookie string that evicts the session cookie. Name/Secure key on
--- the route's allow_insecure_sid flag (mirroring get_session_cookie and
--- build_rotation_cookies), NOT the spoofable forwarded scheme — otherwise a
--- spoofed X-Forwarded-Proto could make us clear the wrong cookie name and leave a
--- dead __Host-sid in the browser (repeated 401/redirect until it's replaced).
--- Max-Age=0 + matching attributes is the correct eviction; Secure is omitted only
--- on local HTTP so the browser doesn't reject the eviction cookie.
-local function expire_session_cookie_header(allow_insecure_sid)
-  local secure = not allow_insecure_sid
-  local name = secure and "__Host-sid" or "sid"
+-- the actual cookie envelope accepted from the request, NOT the spoofable
+-- forwarded scheme. This matters in local HTTP mode too: allow_insecure_sid means
+-- "also accept bare sid", not "downgrade every accepted __Host-sid response to
+-- sid". Max-Age=0 + matching attributes is the correct eviction; Secure is
+-- omitted only for the bare local cookie so the browser accepts the eviction.
+local function expire_session_cookie_header(cookie_name_or_allow_insecure_sid)
+  local name, secure = session_cookie_shape(cookie_name_or_allow_insecure_sid)
   local attrs = "; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
   if secure then
     attrs = attrs .. "; Secure"
@@ -256,8 +264,8 @@ local function expire_session_cookie_header(allow_insecure_sid)
   return name .. "=" .. attrs
 end
 
-local function expire_session_cookie(allow_insecure_sid)
-  core.response.set_header("Set-Cookie", expire_session_cookie_header(allow_insecure_sid))
+local function expire_session_cookie(cookie_name)
+  core.response.set_header("Set-Cookie", expire_session_cookie_header(cookie_name))
 end
 
 -- Build the Set-Cookie strings re-issued on a sid rotation (A6). Pure (string
@@ -265,12 +273,12 @@ end
 -- cookies EXACTLY so a later logout's clearCookie evicts them:
 --   sid        : HttpOnly, SameSite=Lax       (AuthController.sidCookie)
 --   XSRF-TOKEN : NOT HttpOnly (SPA reads it), SameSite=Strict (AuthController.xsrfCookie)
--- __Host-sid + Secure unless allow_insecure_sid (local HTTP) -> bare sid, no
--- Secure. The name/Secure decision keys on the route flag, NOT the spoofable
--- forwarded scheme. Max-Age = the session's remaining absolute lifetime.
-local function build_rotation_cookies(rotated_sid, csrf, max_age, allow_insecure_sid)
-  local secure = not allow_insecure_sid
-  local sid_name = secure and "__Host-sid" or "sid"
+-- __Host-sid + Secure unless the accepted session cookie was the local bare sid.
+-- The name/Secure decision keys on the accepted cookie envelope, NOT the
+-- spoofable forwarded scheme. Max-Age = the session's remaining absolute
+-- lifetime.
+local function build_rotation_cookies(rotated_sid, csrf, max_age, cookie_name_or_allow_insecure_sid)
+  local sid_name, secure = session_cookie_shape(cookie_name_or_allow_insecure_sid)
   local max_age_attr = ""
   if type(max_age) == "number" and max_age > 0 then
     max_age_attr = "; Max-Age=" .. math.floor(max_age)
@@ -755,7 +763,7 @@ function _M.access(conf, ctx)
   local cookies       = parse_cookies(cookie_header)
 
   -- Step 1 + 2: session cookie present?
-  local sid = get_session_cookie(cookies, conf.allow_insecure_sid)
+  local sid, session_cookie_name = get_session_cookie(cookies, conf.allow_insecure_sid)
   if not sid or sid == "" then
     return no_session_response(ctx, conf, scheme, host, uri)
   end
@@ -778,9 +786,10 @@ function _M.access(conf, ctx)
   if action == "401_clear" then
     -- 404 (session gone) or 409 (invalidated). Evict the now-useless cookie;
     -- the browser sees a no-session response (top-level nav -> 302 login,
-    -- XHR -> 401). Name keys on the route flag, NOT the spoofable scheme, so a
-    -- dead __Host-sid is always the cookie we clear (mirrors accept/rotation).
-    expire_session_cookie(conf.allow_insecure_sid)
+    -- XHR -> 401). Name keys on the actual cookie we accepted, so local mode
+    -- clears __Host-sid when that was the credential and clears bare sid only
+    -- when the local fallback was actually used.
+    expire_session_cookie(session_cookie_name)
     return no_session_response(ctx, conf, scheme, host, uri)
   elseif action == "503" then
     core.response.set_header("Retry-After", "1")
@@ -829,11 +838,10 @@ function _M.access(conf, ctx)
     ctx.bff_rotated_sid = rotation.sid
     ctx.bff_rotated_max_age = rotation.max_age
     ctx.bff_rotated_csrf = rotation.csrf
-    -- Drive the re-issued cookie's name/Secure from the route's allow_insecure_sid
-    -- flag (the same signal the ACCEPT path uses), NOT the spoofable
-    -- X-Forwarded-Proto-derived scheme — otherwise a forged proto could make the
-    -- gateway re-issue a bare `sid` the plugin then rejects (accept/re-issue skew).
-    ctx.bff_allow_insecure_sid = conf.allow_insecure_sid
+    -- Drive the re-issued cookie's name/Secure from the actual cookie we accepted,
+    -- NOT the spoofable X-Forwarded-Proto-derived scheme. Local mode accepts both
+    -- envelopes; rotation must preserve the one the browser is using.
+    ctx.bff_session_cookie_name = session_cookie_name
   end
 end
 
@@ -855,13 +863,13 @@ function _M.header_filter(conf, ctx)
   -- (HttpOnly) AND the signed-CSRF XSRF-TOKEN cookie (SPA-readable) — the latter
   -- is sid-bound, so without it every write would 403 after a rotation. Same
   -- name/attributes as the Auth Service's login cookies, with the Secure/__Host-
-  -- decision taken from the route's allow_insecure_sid flag (mirroring the accept
-  -- path), and Max-Age = the session's remaining absolute lifetime so rotation
-  -- never shortens persistence. Invisible to the SPA beyond the cookie swap.
+  -- decision taken from the accepted cookie envelope, and Max-Age = the session's
+  -- remaining absolute lifetime so rotation never shortens persistence.
+  -- Invisible to the SPA beyond the cookie swap.
   if ctx.bff_rotated_sid then
     ngx.header["Set-Cookie"] = build_rotation_cookies(
       ctx.bff_rotated_sid, ctx.bff_rotated_csrf,
-      ctx.bff_rotated_max_age, ctx.bff_allow_insecure_sid)
+      ctx.bff_rotated_max_age, ctx.bff_session_cookie_name)
   end
 end
 

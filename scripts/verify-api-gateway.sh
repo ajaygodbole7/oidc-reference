@@ -114,9 +114,11 @@ assert_render_rc "refuses short (<256-bit) csrf key" eq 3 \
 env REQUIRE_NONDEV_SECRETS=1 GATEWAY_CLIENT_SECRET="$REAL_GW" CSRF_SIGNING_KEY="$REAL_CSRF" \
   sh scripts/render-apisix-config.sh >/dev/null 2>&1 || fail "prod-intent render failed"
 grep -q 'id: api-test-echo' "$render_local" && fail "prod render must omit the test echo route"
+grep -q 'allow_insecure_sid:[[:space:]]*true' "$render_local" && fail "prod render must omit the local bare-sid opt-in"
 env GATEWAY_CLIENT_SECRET="$DEV_GW" CSRF_SIGNING_KEY="$DEV_CSRF" \
   sh scripts/render-apisix-config.sh >/dev/null 2>&1 || fail "dev render failed"
 grep -q 'id: api-test-echo' "$render_local" || fail "dev render must include the test echo route"
+grep -q 'allow_insecure_sid:[[:space:]]*true' "$render_local" || fail "dev render must include the local bare-sid opt-in"
 
 if [ -n "$guard_backup" ]; then mv "$guard_backup" "$render_local"; else rm -f "$render_local"; fi
 echo "sentinel-guard checks passed"

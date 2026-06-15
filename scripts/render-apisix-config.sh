@@ -127,15 +127,17 @@ fi
 envsubst '${GATEWAY_CLIENT_SECRET} ${CSRF_SIGNING_KEY} ${APISIX_IDP_TOKEN_URL} ${GATEWAY_CLIENT_ID}' \
   < "$TEMPLATE" > "$RENDERED"
 
-# Strip test-only routes from a production-intent render. The block is delimited
-# by sentinel comments in the template. The Resource Server endpoint behind
-# /api/_test/echo is gateway-test profile only (404 in prod), but a production
-# gateway config should not carry the route at all. The default dev/test render
-# keeps it for the gateway behaviour suite (which does not set this flag).
+# Strip local/test-only concessions from a production-intent render. The test
+# route block is delimited by sentinel comments in the template. The bare `sid`
+# opt-in exists only because local dev is plain HTTP; a production-intent render
+# must require the secure `__Host-sid` envelope.
 if [ "${REQUIRE_NONDEV_SECRETS:-0}" = "1" ]; then
   noecho="$(mktemp)"
   sed '/# >>> test-only routes/,/# <<< test-only routes/d' "$RENDERED" > "$noecho"
-  mv "$noecho" "$RENDERED"
+  nolocal="$(mktemp)"
+  sed '/^[[:space:]]*# Local dev is plain HTTP/,/^[[:space:]]*allow_insecure_sid: true/d' "$noecho" > "$nolocal"
+  mv "$nolocal" "$RENDERED"
+  rm -f "$noecho"
 fi
 
 # Startup guard: a REPLACE_ME_ in the rendered file means an unsubstituted
