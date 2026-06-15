@@ -141,6 +141,21 @@ RUN_FULL_STACK_AUTH=1 ./scripts/verify-all.sh
 `RUN_FULL_STACK_AUTH=1` when you want the live-infra gate included from
 `verify-all.sh`.
 
+## Dependency-Bump Re-check
+
+Library defaults move silently across versions. After any Spring Boot, Nimbus,
+or Spring Security bump, re-run both Maven suites and specifically re-check the
+two validations that used to be inherited from library defaults:
+
+- multi-audience `azp` rejection (auth-service `JwtOidcIdTokenValidator`), and
+- JWS `typ` acceptance of `JWT` and RFC 9068 `at+JWT` (Resource Server
+  `SecurityConfig`).
+
+The `4.1.0-RC1` → `4.1.0` GA bump silently relaxed both. Both are now enforced
+explicitly in code (`JwtTypeValidator("JWT", "at+JWT")` plus an explicit `azp`
+rule) rather than delegated to a default validator chain — keep them explicit so
+a future bump cannot silently re-break them.
+
 ## Reporting Rule
 
 Every task final report must include:
