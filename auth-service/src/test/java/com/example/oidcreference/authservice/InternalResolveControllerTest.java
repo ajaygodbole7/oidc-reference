@@ -113,7 +113,8 @@ class InternalResolveControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"sid-anything\"}"))
         .andExpect(status().isUnauthorized())
-        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
   }
 
   @Test
@@ -152,7 +153,8 @@ class InternalResolveControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"sid-does-not-exist\"}"))
         .andExpect(status().isNotFound())
-        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
 
     assertThat(output.getOut())
         .contains("event=refresh_rejected")
@@ -519,7 +521,8 @@ class InternalResolveControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"" + sid + "\"}"))
         .andExpect(status().isConflict())
-        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
 
     assertThat(stateStore.get("sess:" + sid)).isEmpty();
     assertThat(output.getOut())
@@ -586,7 +589,8 @@ class InternalResolveControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content("{\"sid\":\"" + sid + "\"}"))
         .andExpect(status().isBadGateway())
-        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
 
     assertThat(stateStore.get("sess:" + sid))
         .as("session must NOT be invalidated on transient Keycloak failure")

@@ -355,8 +355,13 @@ class InternalResolveController {
     pd.setTitle(titleFor(status));
     pd.setDetail(detail);
     pd.setType(URI.create("about:blank"));
+    // Explicit no-store: these are token/session-adjacent error responses on the
+    // resolve path. The Order-1 /internal chain inherits Spring Security's default
+    // cache-control writer, but stating it here keeps the whole resolve contract
+    // (success, transient, AND error) local to the endpoint and consistent.
     return ResponseEntity.status(status)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .header("Cache-Control", "no-store")
         .body(pd);
   }
 
