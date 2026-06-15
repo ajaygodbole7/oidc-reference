@@ -168,3 +168,16 @@ PY
 done
 
 echo "== summary: both-200=$pass  409-conflict=$conflict  other=$fail  write-visibility-ok=$wvok  write-visibility-fail=$wvfail (trials=$TRIALS) =="
+
+# Gate, not just a demo. The distributed lock has FAILED if any concurrent pair
+# produced a 409 cross-instance reuse (Keycloak's reuse detection firing because
+# the replicas did not coordinate), any trial returned a non-200 outcome, or a
+# rotated sid was not visible on both replicas (shared-state regression). Require
+# at least one successful both-200 trial so an empty or degenerate run cannot pass
+# vacuously. Exit non-zero so CI and `just`/verify wrappers turn red on regression
+# instead of relying on a human reading the summary line.
+if [ "$pass" -eq 0 ] || [ "$conflict" -ne 0 ] || [ "$fail" -ne 0 ] || [ "$wvfail" -ne 0 ]; then
+  echo "FAIL: distributed-lock gate not satisfied (need both-200>0, 409-conflict=0, other=0, write-visibility-fail=0)"
+  exit 1
+fi
+echo "PASS: distributed-lock gate satisfied"
