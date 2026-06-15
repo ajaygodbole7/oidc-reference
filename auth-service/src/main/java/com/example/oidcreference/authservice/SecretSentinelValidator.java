@@ -55,6 +55,16 @@ class SecretSentinelValidator {
 
   @PostConstruct
   void validateOnReady() {
+    // An un-decodable cookie-signing key cannot be HmacSHA256 material — it would
+    // throw at the first CSRF op in EVERY profile. Fail fast at boot, before the
+    // web server starts, regardless of profile (the dev sentinel is valid base64,
+    // so local dev is unaffected; only a genuinely malformed key trips this).
+    if (isInvalidBase64(props.cookieSigningKey())) {
+      throw new IllegalStateException(
+          "APP_COOKIE_SIGNING_KEY is not valid base64 and cannot be used as an "
+              + "HmacSHA256 key. Set a base64-encoded 256-bit key.");
+    }
+
     boolean clientSecretIsSentinel = containsSentinel(props.clientSecret());
     boolean cookieKeyIsSentinel = isDevCookieKey(props.cookieSigningKey());
     boolean cookieKeyTooShort = isCookieKeyTooShort(props.cookieSigningKey());
@@ -116,9 +126,8 @@ class SecretSentinelValidator {
   }
 
   // True only when the value is valid base64 that decodes to fewer than
-  // MIN_COOKIE_KEY_BYTES. An unparseable value is left to SignedCsrfSupport's
-  // runtime decode (which throws a clear "not valid Base64" error) rather than
-  // misreported as a length problem here.
+  // MIN_COOKIE_KEY_BYTES. An unparseable value is handled earlier (validateOnReady
+  // fails boot via isInvalidBase64), so it never reaches here as a length problem.
   private static boolean isCookieKeyTooShort(String value) {
     if (value == null) {
       return false;
@@ -127,6 +136,20 @@ class SecretSentinelValidator {
       return Base64.getDecoder().decode(value).length < MIN_COOKIE_KEY_BYTES;
     } catch (IllegalArgumentException e) {
       return false;
+    }
+  }
+
+  // A non-empty value that the base64 decoder rejects. Null/empty is left to the
+  // required-property machinery, not flagged as malformed base64 here.
+  private static boolean isInvalidBase64(String value) {
+    if (value == null || value.isEmpty()) {
+      return false;
+    }
+    try {
+      Base64.getDecoder().decode(value);
+      return false;
+    } catch (IllegalArgumentException e) {
+      return true;
     }
   }
 }

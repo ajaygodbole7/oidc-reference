@@ -22,7 +22,9 @@ import org.springframework.mock.env.MockEnvironment;
 class SecretSentinelValidatorTest {
   private static final String SENTINEL = "LOCAL_DEV_AUTH_CLIENT_SECRET__CHANGE_BEFORE_DEPLOY";
   private static final String COOKIE_KEY_SENTINEL = SecretSentinelValidator.DEV_COOKIE_SIGNING_KEY;
-  private static final String REAL_KEY = "BASE64_REAL_KEY_AAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  // Valid standard base64 decoding to a full 32 bytes (the prior placeholder had
+  // '_' and was not decodable — the boot guard now fails fast on such a key).
+  private static final String REAL_KEY = "UmVhbEtleS0zMi1ieXRlcy1mb3ItaG1hYy10ZXN0cyE=";
 
   @Test
   void refusesToStart_whenSentinelInUseUnderNoExplicitProfile() {
@@ -60,7 +62,7 @@ class SecretSentinelValidatorTest {
     // a marker substring (unlike client secrets, which carry the literal
     // CHANGE_BEFORE_DEPLOY marker). A real base64 key that merely starts
     // with "AAAA" must NOT be flagged.
-    var props = properties("real-secret", "AAAAAAAA-but-this-is-a-real-key-aaaaaaaaaaaa=");
+    var props = properties("real-secret", "AAAAbm90LXRoZS1hbGwtQS1zZW50aW5lbC0yOWJ5dGU=");
     new SecretSentinelValidator(props, new MockEnvironment()).validateOnReady();
     assertThat(out.getOut()).doesNotContain("APP_COOKIE_SIGNING_KEY is the local-dev sentinel");
   }
@@ -108,6 +110,25 @@ class SecretSentinelValidatorTest {
     assertThatThrownBy(() -> new SecretSentinelValidator(props, env).validateOnReady())
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("at least 32 bytes");
+  }
+
+  @Test
+  void refusesToStart_whenCookieKeyIsInvalidBase64_inAnyProfile() {
+    // An un-decodable cookie key cannot be HmacSHA256 material — it is broken in
+    // EVERY profile (verify throws at the first CSRF op), so fail fast at boot
+    // rather than at the first request. Unlike the dev sentinel (valid base64),
+    // invalid base64 is never a dev convenience, so even a local profile fails.
+    var props = properties("real-client-secret", "@@not-valid-base64@@");
+    assertThatThrownBy(
+            () -> new SecretSentinelValidator(props, new MockEnvironment()).validateOnReady())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("not valid base64");
+
+    var localEnv = new MockEnvironment();
+    localEnv.setActiveProfiles("local");
+    assertThatThrownBy(() -> new SecretSentinelValidator(props, localEnv).validateOnReady())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("not valid base64");
   }
 
   @Test
