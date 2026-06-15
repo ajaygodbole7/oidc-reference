@@ -379,6 +379,12 @@ class AuthController {
       @JsonProperty("auth_time") @Nullable Long authTime,
       @Nullable String acr) {}
 
+  // Logout hands the SPA a SAME-ORIGIN continuation URL to navigate to; the IdP
+  // end-session redirect (carrying id_token_hint) is emitted server-side at
+  // /auth/logout/continue, so no id_token reaches the browser. Typed so the wire
+  // contract is explicit rather than an ad-hoc map.
+  record LogoutResponse(String logoutUrl) {}
+
   private static MeResponse projectMe(Map<String, Object> claims) {
     return new MeResponse(
         claimString(claims, "sub"),
@@ -431,7 +437,7 @@ class AuthController {
             .cacheControl(CacheControl.noStore())
             .header(HttpHeaders.SET_COOKIE, clearSid.toString())
             .header(HttpHeaders.SET_COOKIE, clearXsrf.toString())
-            .body(Map.of("logoutUrl", continuation));
+            .body(new LogoutResponse(continuation));
       }
       return ResponseEntity.status(HttpStatus.FOUND)
           .cacheControl(CacheControl.noStore())
@@ -463,7 +469,7 @@ class AuthController {
           .cacheControl(CacheControl.noStore())
           .header(HttpHeaders.SET_COOKIE, clearSid.toString())
           .header(HttpHeaders.SET_COOKIE, clearXsrf.toString())
-          .body(Map.of("logoutUrl", continuation));
+          .body(new LogoutResponse(continuation));
     }
     return ResponseEntity.status(HttpStatus.FOUND)
         .cacheControl(CacheControl.noStore())

@@ -1,11 +1,10 @@
 package com.example.oidcreference;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.security.Principal;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -55,8 +54,8 @@ class ApiController {
   }
 
   @GetMapping("/public")
-  Map<String, String> publicResource() {
-    return Map.of("status", "public");
+  StatusResponse publicResource() {
+    return new StatusResponse("public");
   }
 
   // Service-account clients are identified by token claims, not by a
@@ -66,11 +65,11 @@ class ApiController {
   // Match on azp / client_id against the configured service-account clients
   // instead — the same shape /api/jobs uses below.
   @GetMapping("/me")
-  Map<String, String> me(Principal principal, @AuthenticationPrincipal Jwt jwt) {
+  SubjectResponse me(Principal principal, @AuthenticationPrincipal Jwt jwt) {
     if (isServiceClient(jwt)) {
       throw new AccessDeniedException("User identity is required");
     }
-    return Map.of("subject", principal.getName());
+    return new SubjectResponse(principal.getName());
   }
 
   private boolean isServiceClient(Jwt jwt) {
@@ -87,18 +86,14 @@ class ApiController {
   // privilege). Service fan-out would require token exchange (RFC 8693), which
   // is documented out of scope in architecture-decisions §F.
   @GetMapping("/user-data")
-  Map<String, Object> userData(JwtAuthenticationToken authentication) {
+  UserDataResponse userData(JwtAuthenticationToken authentication) {
     Jwt token = authentication.getToken();
-    Map<String, Object> profile = new LinkedHashMap<>();
-    profile.put("subject", token.getSubject());
-    profile.put("username", token.getClaimAsString("preferred_username"));
-    String email = token.getClaimAsString("email");
-    if (email != null) {
-      profile.put("email", email);
-    }
-    profile.put("roles", authorityValues(authentication, "ROLE_"));
-    profile.put("scopes", authorityValues(authentication, "SCOPE_"));
-    return profile;
+    return new UserDataResponse(
+        token.getSubject(),
+        token.getClaimAsString("preferred_username"),
+        token.getClaimAsString("email"), // null -> omitted by @JsonInclude(NON_NULL)
+        authorityValues(authentication, "ROLE_"),
+        authorityValues(authentication, "SCOPE_"));
   }
 
   private static List<String> authorityValues(JwtAuthenticationToken authentication, String prefix) {
@@ -117,9 +112,9 @@ class ApiController {
   // strongly enough authenticated" — the "re-authenticate before a high-value
   // action" pattern.
   @PostMapping("/admin")
-  Map<String, String> admin(@AuthenticationPrincipal Jwt jwt) {
+  StatusResponse admin(@AuthenticationPrincipal Jwt jwt) {
     requireStepUpAuthentication(jwt);
-    return Map.of("status", "admin");
+    return new StatusResponse("admin");
   }
 
   // RFC 9470 step-up gate. The token is valid and correctly authorized; only its
@@ -176,12 +171,28 @@ class ApiController {
   }
 
   @PostMapping("/jobs")
-  Map<String, String> jobs(@AuthenticationPrincipal Jwt jwt) {
+  StatusResponse jobs(@AuthenticationPrincipal Jwt jwt) {
     String authorizedParty = jwt.getClaimAsString("azp");
     String clientId = jwt.getClaimAsString("client_id");
     if (!jobsClientId.equals(authorizedParty) && !jobsClientId.equals(clientId)) {
       throw new AccessDeniedException("Service client token is required");
     }
-    return Map.of("status", "job accepted");
+    return new StatusResponse("job accepted");
   }
+
+  // Typed response contracts (SPEC-0001 #15): fixed-shape JSON the gateway/SPA
+  // read, as records instead of ad-hoc maps so a stray field can't drift in.
+  // Field names are the wire contract (snake_case not needed — all single words).
+  record StatusResponse(String status) {}
+
+  record SubjectResponse(String subject) {}
+
+  // email is omitted when the token carries none (matches the prior conditional
+  // put); subject/username/roles/scopes are always serialized.
+  record UserDataResponse(
+      String subject,
+      String username,
+      @JsonInclude(JsonInclude.Include.NON_NULL) String email,
+      List<String> roles,
+      List<String> scopes) {}
 }

@@ -45,14 +45,14 @@ class ApiControllerTest {
     // oidc-reference-api-gateway is the shipped default but NOT in this
     // controller's custom allowlist, so it must be treated as a normal user.
     assertThat(controller.me(() -> "oidc-reference-api-gateway",
-            jwtWithAzp("oidc-reference-api-gateway")))
-        .containsEntry("subject", "oidc-reference-api-gateway");
+            jwtWithAzp("oidc-reference-api-gateway")).subject())
+        .isEqualTo("oidc-reference-api-gateway");
   }
 
   @Test
   void jobsAcceptsTheConfiguredJobsClient() {
-    assertThat(controller.jobs(jwtWithAzp("custom-jobs")))
-        .containsEntry("status", "job accepted");
+    assertThat(controller.jobs(jwtWithAzp("custom-jobs")).status())
+        .isEqualTo("job accepted");
   }
 
   @Test
@@ -78,7 +78,7 @@ class ApiControllerTest {
     ApiController noAcr = new ApiController(
         props(Set.of("custom-gateway", "custom-jobs"), "custom-jobs", Set.of()));
     Jwt jwt = jwtWithAuthTime(Instant.now().minusSeconds(30));
-    assertThat(noAcr.admin(jwt)).containsEntry("status", "admin");
+    assertThat(noAcr.admin(jwt).status()).isEqualTo("admin");
   }
 
   // -- step-up freshness on the sensitive route ---------------------------
@@ -88,7 +88,7 @@ class ApiControllerTest {
     // Both step-up axes satisfied: fresh interactive auth (auth_time) AND a
     // sufficient assurance level (acr "1", the controller's required-acr).
     Jwt jwt = jwtWithAuthTimeAndAcr(Instant.now().minusSeconds(30), "1");
-    assertThat(controller.admin(jwt)).containsEntry("status", "admin");
+    assertThat(controller.admin(jwt).status()).isEqualTo("admin");
   }
 
   @Test
