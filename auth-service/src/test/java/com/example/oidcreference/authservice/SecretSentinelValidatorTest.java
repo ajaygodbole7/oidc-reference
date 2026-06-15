@@ -132,6 +132,43 @@ class SecretSentinelValidatorTest {
   }
 
   @Test
+  void refusesToStart_whenBaseUrlBlank_underNonLocalProfile() {
+    // A blank app.base-url outside a local profile means AuthController.baseUrl()
+    // derives the public origin AND the secure-cookie decision from spoofable
+    // X-Forwarded-* headers. Fail closed regardless of which gateway/IdP fronts
+    // it — secrets are fine here, only the origin anchor is missing.
+    var props = properties("real-secret", REAL_KEY, "");
+    var env = new MockEnvironment();
+    env.setActiveProfiles("prod");
+    assertThatThrownBy(() -> new SecretSentinelValidator(props, env).validateOnReady())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("APP_BASE_URL must be set");
+  }
+
+  @Test
+  void refusesToStart_whenBaseUrlBlank_underNoExplicitProfile() {
+    // No active profile is NOT a local opt-in (the unsafe-by-omission posture):
+    // a copied artifact run without APP_BASE_URL must fail closed, not silently
+    // trust forwarded headers for the origin.
+    var props = properties("real-secret", REAL_KEY, "");
+    assertThatThrownBy(
+            () -> new SecretSentinelValidator(props, new MockEnvironment()).validateOnReady())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("APP_BASE_URL must be set");
+  }
+
+  @Test
+  void allowsBlankBaseUrl_underExplicitLocalProfile() {
+    // Header-derived origin resolution is the documented inner-loop dev
+    // convenience: an explicit local profile may run without app.base-url.
+    var props = properties("real-secret", REAL_KEY, "");
+    var env = new MockEnvironment();
+    env.setActiveProfiles("local");
+    new SecretSentinelValidator(props, env).validateOnReady();
+    // reached here without throwing — local dev must not require APP_BASE_URL
+  }
+
+  @Test
   void warnsButPasses_underExplicitLocalProfile() {
     // An explicit local-dev profile (local/dev/test) is allow-listed: the
     // sentinel warns but does not abort boot.
@@ -143,9 +180,16 @@ class SecretSentinelValidatorTest {
   }
 
   private static AuthProperties properties(String clientSecret, String cookieKey) {
+    // A properly-configured deployment names its public origin; secret-focused
+    // tests use a real base-url so they exercise the secret path, not the
+    // separate base-url guard.
+    return properties(clientSecret, cookieKey, "https://app.example");
+  }
+
+  private static AuthProperties properties(String clientSecret, String cookieKey, String baseUrl) {
     return new AuthProperties(
         "idp",
-        "",                                       // base-url
+        baseUrl,                                  // base-url
         Duration.ofSeconds(60),
         Duration.ofSeconds(1800),
         Duration.ofSeconds(28800),

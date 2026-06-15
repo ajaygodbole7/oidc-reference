@@ -819,7 +819,9 @@ Auth Service preconditions and behavior:
      window, return 200 with the current access_token + expiry. No lock, no
      Keycloak call — the hot path taken by the vast majority of /api requests.
   6. NEAR-EXPIRY PATH: acquire the per-session refresh lock (in-process
-     ReentrantLock keyed by sid; or Valkey SET NX EX for clustered deployments).
+     ReentrantLock keyed by sid by default; or the state-store-backed lock
+     SET NX PX / compare-and-delete keyed by sid via app.refresh-lock=distributed
+     for multi-replica deployments).
   7. Re-read sess:{sid} under the lock and re-check the window (another caller may
      have just refreshed). If now fresh, return 200 with the current token —
      this makes the near-expiry path idempotent under contention.

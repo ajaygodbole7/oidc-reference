@@ -9,8 +9,11 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 /**
- * Refuses to ship known-dev or weak secrets to a non-local profile, and warns
- * when the sentinel values are in use at all.
+ * Boot-time fail-closed guard for unsafe-by-omission configuration. Refuses to
+ * ship known-dev or weak secrets to a non-local profile (warning when sentinel
+ * values are in use at all), and refuses to boot a non-local profile without an
+ * explicit {@code app.base-url} so the public origin is never derived from
+ * spoofable {@code X-Forwarded-*} headers.
  *
  * <p>The reference repo seeds three confidential-client secrets and one
  * cookie-signing key for zero-config local dev. Each default value contains
@@ -65,6 +68,24 @@ class SecretSentinelValidator {
               + "HmacSHA256 key. Set a base64-encoded 256-bit key.");
     }
 
+    // Public-origin trust anchor. Outside a local profile, app.base-url MUST name
+    // the public-facing origin. When it is blank, AuthController.baseUrl() falls
+    // back to deriving the origin — and the secure-cookie / __Host-sid decision —
+    // from X-Forwarded-Host / X-Forwarded-Proto, which any client can spoof. That
+    // fallback is the inner-loop dev convenience; in a real deployment it is a
+    // Host-header-injection footgun regardless of which gateway or IdP sits in
+    // front. Fail closed so a copied artifact cannot ship header-derived origin
+    // resolution simply by forgetting APP_BASE_URL (SECURITY.md §D-1 —
+    // unsafe-by-omission). This is environment-portable hardening: it does not
+    // assume the reference gateway, only that prod must not trust forwarded
+    // headers for the origin.
+    if (!isLocalProfile() && isBlank(props.baseUrl())) {
+      throw new IllegalStateException(
+          "APP_BASE_URL must be set to the public-facing origin outside a local "
+              + "profile. Without it the OAuth redirect_uri and the secure-cookie "
+              + "decision are derived from spoofable X-Forwarded-* headers.");
+    }
+
     boolean clientSecretIsSentinel = containsSentinel(props.clientSecret());
     boolean cookieKeyIsSentinel = isDevCookieKey(props.cookieSigningKey());
     boolean cookieKeyTooShort = isCookieKeyTooShort(props.cookieSigningKey());
@@ -115,6 +136,10 @@ class SecretSentinelValidator {
       }
     }
     return true;
+  }
+
+  private static boolean isBlank(String value) {
+    return value == null || value.isBlank();
   }
 
   private static boolean containsSentinel(String value) {
