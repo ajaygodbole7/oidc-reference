@@ -63,15 +63,23 @@ class RedisStateStore implements StateStore {
       Long.class);
 
   // Set-member compare-and-swap: iff ARGV[1] is a member of the set KEYS[1],
-  // SREM it, SADD ARGV[2], and PEXPIRE KEYS[1] ARGV[3] ms; else a no-op
-  // returning 0. Repoints idp_sid:{idpSid} (a SET of local sids) on sid rotation
-  // only if a concurrent logout hasn't already removed the rotating member or
-  // deleted the set — else the logout's revocation would be undone.
+  // SREM it, SADD ARGV[2], and set KEYS[1]'s TTL to ARGV[3] ms EXTEND-ONLY; else a
+  // no-op returning 0. Repoints idp_sid:{idpSid} (a SET of local sids) on sid
+  // rotation only if a concurrent logout hasn't already removed the rotating
+  // member or deleted the set — else the logout's revocation would be undone.
+  // The TTL is extend-only for the SAME reason as ADD_TO_SET_WITH_TTL: the set is
+  // shared across all of one OP session's local sids, each with its own remaining
+  // absolute lifetime, so rotating a short-lived sid must NOT shrink the shared
+  // key below a still-live longer sid (which would expire idp_sid early and make a
+  // back-channel logout by OP sid miss that session). Set the TTL only when the
+  // key has none (PTTL < 0) or the new TTL is greater than the current remaining.
   private static final RedisScript<Long> SWAP_MEMBER_IF_PRESENT = new DefaultRedisScript<>(
       "if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then "
           + "redis.call('SREM', KEYS[1], ARGV[1]); "
           + "redis.call('SADD', KEYS[1], ARGV[2]); "
-          + "redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[3])); "
+          + "local cur = redis.call('PTTL', KEYS[1]); "
+          + "if cur < 0 or tonumber(ARGV[3]) > cur then "
+          + "redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[3])); end; "
           + "return 1 else return 0 end",
       Long.class);
 

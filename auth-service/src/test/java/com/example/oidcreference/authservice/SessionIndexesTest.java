@@ -193,6 +193,38 @@ class SessionIndexesTest {
   }
 
   @Test
+  void rotateDoesNotShrinkSharedIdpSidTtlBelowALiveSibling() {
+    // Two local sessions share one OP sid (idp_sid:kc-shared is a SET). The
+    // long-lived one sets the shared TTL high. Rotating the SHORT-lived sibling
+    // must NOT shrink the shared idp_sid TTL below the long-lived session — else
+    // idp_sid expires first and a back-channel logout by OP sid misses the live
+    // session. The fix is an extend-only TTL on swapMemberIfPresent (the rotation
+    // repoint), the same property addToSet already has for sub_sessions.
+    InMemoryStateStore store = new InMemoryStateStore();
+    SessionIndexes indexes = new SessionIndexes(store, JSON);
+    Instant now = Instant.now();
+    SessionRecord longLived = new SessionRecord(
+        "access-token", "refresh-token", jwtWithSid("kc-shared"),
+        now.plusSeconds(300), now.plusSeconds(1800), now,
+        now.plusSeconds(3600), now, Map.of("sub", "alice"));
+    SessionRecord shortLived = new SessionRecord(
+        "access-token", "refresh-token", jwtWithSid("kc-shared"),
+        now.plusSeconds(300), now.plusSeconds(1800), now,
+        now.plusSeconds(10), now, Map.of("sub", "alice"));
+    indexes.index("long", longLived);
+    indexes.index("short", shortLived);
+    assertThat(store.members("idp_sid:kc-shared")).containsExactlyInAnyOrder("long", "short");
+
+    boolean rotated = indexes.rotate("short", "short-new", shortLived);
+
+    assertThat(rotated).isTrue();
+    assertThat(store.members("idp_sid:kc-shared")).containsExactlyInAnyOrder("long", "short-new");
+    assertThat(store.ttl("idp_sid:kc-shared"))
+        .as("rotating the short-lived sibling must not shrink the shared idp_sid TTL")
+        .isGreaterThan(Duration.ofSeconds(60));
+  }
+
+  @Test
   void rotateWithoutIdpSidStillSucceedsAndMovesSubjectIndex() {
     // No id_token / sid claim (a portability shape) -> no idp_sid CAS to engage;
     // rotation must still proceed and move the subject index.

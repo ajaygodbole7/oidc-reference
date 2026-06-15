@@ -170,7 +170,10 @@ class InMemoryStateStore implements StateStore {
         set.remove(oldMember);
         set.add(newMember);
         swapped[0] = true;
-        ttls.put(k, ttl == null ? Duration.ZERO : ttl);
+        // Extend-only TTL (mirrors the Redis PTTL-compare): rotating a short-lived
+        // sid must not shrink the shared idp_sid set below a still-live longer sid.
+        Duration next = ttl == null ? Duration.ZERO : ttl;
+        ttls.merge(k, next, (cur, n) -> n.compareTo(cur) > 0 ? n : cur);
       }
       return set.isEmpty() ? null : set;
     });

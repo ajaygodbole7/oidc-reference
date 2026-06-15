@@ -256,6 +256,38 @@ class RedisStateStoreParityTest {
     assertThat(memoryStore.members("idp_sid:gone")).isEmpty();
   }
 
+  @Test
+  void swapMemberIfPresent_shorterTtl_doesNotShrinkTheSetTtlBelowASibling() {
+    // The real shrink scenario: two local sids share one OP sid (idp_sid:k). A
+    // long-lived SIBLING keeps the shared set non-empty and its TTL high; rotating
+    // the SHORT-lived member must not pull the shared TTL below the sibling — the
+    // swap extends, never lowers (same property as addToSet). Otherwise idp_sid
+    // expires before a live sibling and a back-channel logout by OP sid misses it.
+    // (A single-member set is NOT the bug: SREM of the last member empties the key,
+    // so the rotated session's own TTL is correct — there is no sibling to protect.)
+    Duration longTtl = Duration.ofSeconds(120);
+    Duration shortTtl = Duration.ofSeconds(5);
+    redisStore.addToSet("idp_sid:k", "sibling", longTtl);
+    memoryStore.addToSet("idp_sid:k", "sibling", longTtl);
+    redisStore.addToSet("idp_sid:k", "old", shortTtl);
+    memoryStore.addToSet("idp_sid:k", "old", shortTtl);
+
+    boolean r = redisStore.swapMemberIfPresent("idp_sid:k", "old", "new", shortTtl);
+    boolean m = memoryStore.swapMemberIfPresent("idp_sid:k", "old", "new", shortTtl);
+
+    assertThat(r).as("return-value parity").isEqualTo(m);
+    assertThat(r).isTrue();
+    assertThat(redisStore.ttl("idp_sid:k"))
+        .as("redis: a shorter swap must not shrink the shared set TTL below the sibling")
+        .isGreaterThan(shortTtl);
+    assertThat(memoryStore.ttl("idp_sid:k"))
+        .as("memory: a shorter swap must not shrink the shared set TTL below the sibling")
+        .isGreaterThan(shortTtl);
+    assertThat(redisStore.members("idp_sid:k"))
+        .containsExactlyInAnyOrderElementsOf(memoryStore.members("idp_sid:k"))
+        .containsExactlyInAnyOrder("sibling", "new");
+  }
+
   // --- addToSet extend-only TTL ----------------------------------------------
 
   @Test
