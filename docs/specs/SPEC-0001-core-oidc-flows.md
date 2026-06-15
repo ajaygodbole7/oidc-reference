@@ -1050,7 +1050,8 @@ cannot forge a valid signature.
 - Resource Server rejects invalid issuer, audience, expiration, algorithm,
   scope, role. Every check has a negative test.
 - Audience checks are token-type-specific: Auth Service validates
-  `id_token.aud` against `oidc-reference-auth`; Auth Service `/internal/*`
+  `id_token.aud` against the configured Auth Service client id (local default
+  `oidc-reference-auth`); Auth Service `/internal/*`
   validates Bearer `aud` contains the configured internal-refresh audience
   and `azp/client_id` equals the configured gateway client id; RS validates
   `access_token.aud` against the configured API audience.
@@ -1093,7 +1094,7 @@ cannot forge a valid signature.
 
 - Realm import succeeds; OIDC discovery returns expected issuer; JWKS
   reachable.
-- Auth Service client (`oidc-reference-auth`): confidential, PKCE `S256`
+- Auth Service client (local default `oidc-reference-auth`): confidential, PKCE `S256`
   required, refresh rotation enabled.
 - API Gateway client (`oidc-reference-api-gateway` local default):
   confidential, Client Credentials only, service accounts enabled, browser
@@ -1126,7 +1127,8 @@ cannot forge a valid signature.
 - Callback rejects mismatched `state` (no matching `tx:{state}` record).
 - Callback rejects mismatched `id_token` `nonce`.
 - Callback rejects unsigned / expired / wrong-issuer / wrong-audience
-  `id_token`. Wrong audience means `id_token.aud != oidc-reference-auth`;
+  `id_token`. Wrong audience means `id_token.aud` != the configured Auth Service
+  client id (local default `oidc-reference-auth`);
   it is not the Resource Server audience.
 - Callback responds with a direct `302` to the validated saved-request URL
   (no intermediate landing page); response sets `__Host-sid` with

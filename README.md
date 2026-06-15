@@ -7,7 +7,7 @@ A complete, **runnable** reference for the Backend-for-Frontend (BFF) session pa
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4-green)
 ![Status](https://img.shields.io/badge/status-reference%20implementation-informational)
 
-> **No access, refresh, or ID token ever reaches the browser, and an end-to-end test asserts it.** The browser holds only an opaque `HttpOnly` session cookie; the tokens live server-side in a Redis-compatible store. The test inspects the browser's storage and cookies to confirm it.
+> **No access, refresh, or ID token ever reaches browser JavaScript or browser storage, and an end-to-end test asserts the browser-visible surfaces.** The browser holds only an opaque `HttpOnly` session cookie; the tokens live server-side in a Redis-compatible store. The only deliberate ID-token front-channel use is the server-generated RP-initiated logout redirect, where the token is sent as `id_token_hint` to the IdP.
 
 ---
 
@@ -49,9 +49,9 @@ Full rationale and reconsideration triggers live in [`docs/architecture/architec
 
 ## What's included
 
-- **A live test asserts no token reaches the browser.** The `id_token` never reaches browser JS, storage, SPA-readable JSON, SPA-visible cookies, or app logs; only the server's `/auth/logout/continue` → IdP redirect carries `id_token_hint`, and the test confirms it by inspecting the browser.
+- **A live test asserts no token reaches browser-visible surfaces.** The `id_token` never reaches browser JS, storage, SPA-readable JSON, or SPA-visible cookies; only the server's `/auth/logout/continue` → IdP redirect carries `id_token_hint`, and the test confirms that browser-observable path.
 - **Each control is linked to its spec, code, and test.** The [Security controls](#security-controls) table maps each control to its RFC/OIDC section, the code that implements it, and the gate that proves it.
-- **Identity Providers are swappable by configuration.** The code carries no provider-specific behavior; it branches on standard OIDC values from discovery. `just e2e-portability` runs the same code against a second realm whose tokens carry a different shape.
+- **Identity Providers are swappable through standard OIDC configuration.** The code avoids provider-specific branches; issuer, audiences, scopes, claim paths, and client identities are config. Provider-specific setup notes live in the provider-adapter docs. `just e2e-portability` runs the same code against a second realm whose tokens carry a different shape.
 
 ---
 
