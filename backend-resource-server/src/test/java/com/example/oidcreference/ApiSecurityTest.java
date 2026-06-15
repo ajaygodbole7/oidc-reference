@@ -125,6 +125,37 @@ class ApiSecurityTest {
   }
 
   @Test
+  void apiResponsesAreNoStoreAcrossOutcomes() throws Exception {
+    // SPEC-0001 §7: /api/** responses carry per-user data and must be no-store —
+    // and the Resource Server itself must guarantee it (the header has to survive
+    // a gateway swap, so it cannot be the gateway's job). Assert it on every
+    // outcome: 200, 401 (no token), 403 (insufficient scope), and the RFC 9470
+    // step-up 401.
+    org.hamcrest.Matcher<String> noStore = org.hamcrest.Matchers.containsString("no-store");
+
+    mockMvc.perform(get("/api/me")
+            .with(jwt().jwt(j -> j.claim("preferred_username", "alice"))))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", noStore));
+
+    mockMvc.perform(get("/api/me"))
+        .andExpect(status().isUnauthorized())
+        .andExpect(header().string("Cache-Control", noStore));
+
+    mockMvc.perform(get("/api/user-data").with(jwt()))
+        .andExpect(status().isForbidden())
+        .andExpect(header().string("Cache-Control", noStore));
+
+    mockMvc.perform(post("/api/admin")
+            .with(jwt().jwt(j -> j
+                    .claim("realm_access", Map.of("roles", List.of("admin")))
+                    .claim("auth_time", java.time.Instant.now().minusSeconds(3600).getEpochSecond()))
+                .authorities(new SimpleGrantedAuthority("ROLE_admin"))))
+        .andExpect(status().isUnauthorized())
+        .andExpect(header().string("Cache-Control", noStore));
+  }
+
+  @Test
   void meRejectsServiceAccountTokenWithoutUserIdentity() throws Exception {
     mockMvc.perform(get("/api/me")
             .with(jwt().jwt(j -> j

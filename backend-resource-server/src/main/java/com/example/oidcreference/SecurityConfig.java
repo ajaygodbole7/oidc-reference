@@ -84,6 +84,13 @@ class SecurityConfig {
         .exceptionHandling(e -> e
             .authenticationEntryPoint(authenticationEntryPoint)
             .accessDeniedHandler(accessDeniedHandler))
+        // No .headers() override on purpose: Spring Security's DEFAULT header
+        // writers stay ON, and that is what stamps `Cache-Control: no-store` on
+        // every /api/** response (SPEC-0001 §7 — these carry per-user data and
+        // must not be cached). This guarantee is RS-side, so it holds regardless
+        // of which gateway fronts the RS. If you ever add a .headers(...) block,
+        // keep cacheControl enabled. Guarded across 200/401/403/step-up by
+        // ApiSecurityTest.apiResponsesAreNoStoreAcrossOutcomes.
         .build();
   }
 
