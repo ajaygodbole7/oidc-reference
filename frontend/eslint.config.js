@@ -50,6 +50,8 @@ export default tseslint.config(
       // direct property assignment. Reads stay allowed (debug tooling). Alias
       // writes (const s = localStorage; s.setItem(...)) are not statically
       // catchable here and are caught by the e2e no-token-in-browser proof.
+      // Direct document.cookie writes are also banned; tests may still use them
+      // to seed XSRF fixtures through the test-file override below.
       "no-restricted-syntax": [
         "error",
         {
@@ -99,6 +101,26 @@ export default tseslint.config(
         {
           selector: "Identifier[name='indexedDB']",
           message: "SPEC-0001: the SPA holds no tokens. Do not touch indexedDB."
+        },
+        {
+          selector:
+            "AssignmentExpression[left.object.name='document'][left.property.name='cookie']",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write document.cookie."
+        },
+        {
+          selector:
+            "AssignmentExpression[left.object.name='document'][left.property.value='cookie']",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write document.cookie (bracket access)."
+        },
+        {
+          selector:
+            "AssignmentExpression[left.object.type='MemberExpression'][left.object.property.name='document'][left.property.name='cookie']",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write document.cookie (qualified access)."
+        },
+        {
+          selector:
+            "AssignmentExpression[left.object.type='MemberExpression'][left.object.property.value='document'][left.property.value='cookie']",
+          message: "SPEC-0001: the SPA holds no tokens. Do not write document.cookie (fully bracket-qualified)."
         }
       ]
     }

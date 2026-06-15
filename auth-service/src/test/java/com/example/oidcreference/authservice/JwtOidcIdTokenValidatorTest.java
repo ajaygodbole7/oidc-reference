@@ -8,6 +8,7 @@ import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.OctetSequenceKey;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
@@ -266,6 +267,35 @@ class JwtOidcIdTokenValidatorTest {
 
     assertThatThrownBy(() -> sut.validate(token, ACCESS_TOKEN, transaction))
         .isInstanceOf(BadCredentialsException.class);
+  }
+
+  @Test
+  void atHashRejectsAlgorithmOutsideIdTokenAllowlistAtUseSite() throws Exception {
+    byte[] secret = new byte[32];
+    new SecureRandom().nextBytes(secret);
+    OctetSequenceKey hmacKey = new OctetSequenceKey.Builder(secret)
+        .keyID(KID)
+        .algorithm(JWSAlgorithm.HS256)
+        .build();
+    JWKSource<SecurityContext> source = new ImmutableJWKSet<>(new JWKSet(hmacKey));
+    IDTokenValidator hs256Validator = new IDTokenValidator(
+        new Issuer(ISSUER),
+        new ClientID(CLIENT_ID),
+        new JWSVerificationKeySelector<>(JWSAlgorithm.HS256, source),
+        null);
+    JwtOidcIdTokenValidator hs256Sut = new JwtOidcIdTokenValidator(
+        hs256Validator, CLIENT_ID, List.of("realm_access", "roles"));
+
+    String atHash = AccessTokenHash.compute(
+        new BearerAccessToken(ACCESS_TOKEN), JWSAlgorithm.HS256).getValue();
+    SignedJWT jwt = new SignedJWT(
+        new JWSHeader.Builder(JWSAlgorithm.HS256).keyID(KID).build(),
+        claimsBuilder().claim("at_hash", atHash).build());
+    jwt.sign(new MACSigner(secret));
+
+    assertThatThrownBy(() -> hs256Sut.validate(jwt.serialize(), ACCESS_TOKEN, transaction))
+        .isInstanceOf(BadCredentialsException.class)
+        .hasMessageContaining("ID token alg is not accepted for at_hash validation");
   }
 
   // -- IdP-portable roles claim (G1) --------------------------------------

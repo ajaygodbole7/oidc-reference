@@ -380,6 +380,56 @@ test_valid_session_injects_exact_bearer_and_strips_credentials() {
   clear_session "$sid"
 }
 
+# C1 regression guard: a browser-supplied Authorization header must not append
+# to or override the gateway-injected bearer. APISIX must replace the inbound
+# value with exactly one upstream Authorization header derived from sess:{sid}.
+test_client_authorization_header_is_overwritten() {
+  name="client_authorization_header_is_overwritten"
+  sid="echo-auth-overwrite-1"
+  attacker_auth="Bearer attacker-supplied-token"
+
+  if ! access_token="$(mint_service_access_token 2>"$BODY_TMP")"; then
+    detail="$(cat "$BODY_TMP" 2>/dev/null || true)"
+    printf '[FAIL] %s could not mint service token: %s\n' "$name" "$detail"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+  if [ -z "$access_token" ]; then
+    printf '[FAIL] %s minted empty service token\n' "$name"
+    FAILED=$((FAILED + 1))
+    return 1
+  fi
+  setup_session "$sid" "$access_token" 300
+
+  status="$(curl -s -o "$BODY_TMP" -D "$HEADERS_TMP" -w '%{http_code}' \
+    -H "Cookie: __Host-sid=$sid" \
+    -H "Authorization: $attacker_auth" \
+    "$GATEWAY_BASE/api/_test/echo" 2>/dev/null || true)"
+  assert_status "$name status" 200 "$status"
+
+  expected_auth_sha256="$(
+    printf '%s' "Bearer $access_token" | openssl dgst -sha256 | awk '{print $NF}'
+  )"
+  attacker_auth_sha256="$(
+    printf '%s' "$attacker_auth" | openssl dgst -sha256 | awk '{print $NF}'
+  )"
+  upstream_auth_sha256="$(json_get "$BODY_TMP" "authorization.sha256")"
+  upstream_auth_count="$(json_get "$BODY_TMP" "authorization.value_count")"
+
+  assert_status "$name exact_gateway_bearer" "$expected_auth_sha256" "$upstream_auth_sha256"
+  assert_status "$name single_authorization_value" "1" "$upstream_auth_count"
+  if [ "$upstream_auth_sha256" = "$attacker_auth_sha256" ]; then
+    printf '[FAIL] %s upstream Authorization matched attacker-supplied bearer\n' "$name"
+    FAILED=$((FAILED + 1))
+  else
+    printf '[PASS] %s attacker_authorization_not_forwarded\n' "$name"
+    PASSED=$((PASSED + 1))
+  fi
+  assert_not_contains "$name no_attacker_auth_reflection" "$(cat "$BODY_TMP" 2>/dev/null || true)" "$attacker_auth"
+
+  clear_session "$sid"
+}
+
 test_canonical_fixture_payload_parses_through_plugin() {
   # B8: the gateway's tolerant reader MUST parse the canonical
   # schema/sess-payload.example.json fixture and extract access_token +
@@ -947,6 +997,7 @@ test_unknown_path_returns_404                       || true
 test_internal_path_is_not_routable_through_gateway  || true
 test_valid_session_returns_200_with_bearer_injected || true
 test_valid_session_injects_exact_bearer_and_strips_credentials || true
+test_client_authorization_header_is_overwritten     || true
 test_canonical_fixture_payload_parses_through_plugin || true
 test_session_with_extra_fields_is_tolerated         || true
 test_expiring_session_triggers_refresh_delegation   || true

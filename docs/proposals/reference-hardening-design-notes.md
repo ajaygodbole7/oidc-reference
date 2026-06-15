@@ -1,6 +1,8 @@
 # Reference hardening — design notes for review
 
-**Status:** Draft, for review. Nothing here is implemented yet.
+**Status:** Draft, for review. §1 at-hash algorithm guard, §3 direct
+`document.cookie` lint coverage, and the §4 Authorization-overwrite live
+assertion have been implemented; the remaining items are still proposals.
 **Date:** 2026-06-15.
 **Author:** raised during a "would you adopt this as the canonical BFF shape"
 review.
@@ -54,12 +56,15 @@ advertised algorithms (see §2) — silently re-opens it, because the `at_hash` 
 will then trust whatever `typ`/`alg` the token carries.
 
 ### Current state
-Correct, but the coupling is implicit and undocumented at the `at_hash` site.
+Implemented: the signature selector and the `at_hash` use site now share the
+same RS256 constant, and `enforceAtHash` rejects any signed ID token whose header
+algorithm is outside that allow-list before delegating to Nimbus's
+`AccessTokenValidator`.
 
 ### Proposed approach
 Make the coupling explicit and fail-closed at the point of use. Options:
 
-- **A (recommended): assert the header algorithm against the pinned/allowed set
+- **A (implemented): assert the header algorithm against the pinned/allowed set
   before using it for `at_hash`.** Before calling `AccessTokenValidator.validate`,
   check `signed.getHeader().getAlgorithm()` is in the same allow-list the key
   selector enforces; reject otherwise. This keeps `at_hash` safe even if the key
@@ -71,14 +76,14 @@ Make the coupling explicit and fail-closed at the point of use. Options:
   selector pin and that the two must move together. Cheapest, weakest — relies on
   the next editor reading the comment.
 
-Recommend **A**, and revisit toward **B** if §2 lands (so the allowed-algorithm
+Implemented **A**. Revisit toward **B** if §2 lands (so the allowed-algorithm
 set has a single source of truth).
 
 ### Verification plan
-Add a negative unit test: an ID token whose header advertises an unexpected
-algorithm for the `at_hash` computation is rejected at `enforceAtHash`, not
-silently accepted. The existing `JwtOidcIdTokenValidatorTest` at_hash cases
-(present/absent/mismatch) stay green.
+`JwtOidcIdTokenValidatorTest` includes a negative unit test with an HS256-signed
+ID token accepted by an HS256-configured Nimbus validator; the SUT still rejects
+it at `enforceAtHash`, proving the use-site guard has teeth. The existing
+at-hash cases (present/absent/mismatch) stay green.
 
 ---
 
@@ -152,9 +157,10 @@ gaps remain:
 
 - **Aliasing is not statically catchable** and is acknowledged in-rule
   (`eslint.config.js:51`): `const s = localStorage; s.setItem(...)` passes lint.
-- **`document.cookie` writes are not covered at all** — there is no selector for
-  `document.cookie = ...`, though the README explicitly discusses `document.cookie`
-  as a token-exfiltration surface.
+- **`document.cookie` writes were not covered at all** — this gap is now closed
+  for direct, bracket-access, and qualified writes. Alias-style cookie writes
+  remain out of scope for static lint and are covered by the live e2e
+  no-token-in-browser proof.
 
 The authoritative proof that no token reaches the browser is the live e2e guard
 `assertNoBrowserTokens()` in `frontend/tests/e2e/reference-flow.spec.ts`, which
@@ -172,10 +178,10 @@ setting, not an open hole. But a canonical boundary rule should ban what it can
 and be explicit about what it cannot.
 
 ### Proposed approach
-- **Add a `document.cookie` write selector** to the rule
+- **Implemented: add a `document.cookie` write selector** to the rule
   (`AssignmentExpression` with `left.object.name === 'document'` and
   `left.property.name === 'cookie'`), matching the existing assignment-selector
-  style. Add a spelling to the meta-test.
+  style. Direct, bracket, and qualified spellings are covered by the meta-test.
 - **State the alias limitation in the rule message** so a reader knows lint is a
   fast first line and the e2e is the backstop — rather than leaving it only in a
   source comment.
@@ -184,15 +190,14 @@ and be explicit about what it cannot.
   `verify-all`, not `verify-frontend`. This is expectation-setting, not a code
   change.
 
-Reviewers: is `document.cookie` worth banning given the SPA can only ever set a
-non-HttpOnly cookie (which the e2e already catches)? Argument for: a canonical
-rule should be complete and self-documenting. Argument against: lint scope creep
-for a case the runtime guard covers. Recommendation: add it — it is one selector
-and removes a "why isn't this caught?" question.
+Decision made: ban the statically visible `document.cookie` write spellings.
+Alias-style writes remain a known lint limitation; the live e2e
+no-token-in-browser proof remains the authoritative runtime guard.
 
 ### Verification plan
-Extend `eslint-boundary.test.ts` with a `document.cookie = ...` case (must be
-flagged) and confirm the existing spellings stay flagged. No change to the live
+`eslint-boundary.test.ts` covers direct, bracket-access, and qualified
+`document.cookie` writes, and confirms the existing storage spellings stay
+flagged. No change to the live
 e2e guard, which already inspects `document.cookie`.
 
 ---
@@ -235,7 +240,7 @@ would catch.
 
 ### Current state
 Fixture committed; Java asserts against it; Lua parity proven only by the live
-battery; `Authorization` overwrite is a documented-but-untested assumption.
+battery; `Authorization` overwrite now has a live gateway assertion.
 
 ### Proposed approach
 - **Close the Lua half of the fixture parity.** Add a Lua test that loads the
@@ -244,10 +249,10 @@ battery; `Authorization` overwrite is a documented-but-untested assumption.
   fixture's `expected.hmac_base64url`, and that `csrf_ok` accepts the
   `expected.signed_token`. This makes byte-for-byte parity a tested invariant on
   both sides, not a prose claim plus a Java-only test.
-- **Make the `Authorization` overwrite a live assertion.** The `gateway-test` echo
-  controller already reports `value_count` and a SHA-256 fingerprint of the
-  injected bearer. Add an e2e case: a request carrying its own
-  `Authorization: Bearer <attacker>` must yield `value_count == 1` and a
+- **Implemented: make the `Authorization` overwrite a live assertion.** The `gateway-test` echo
+  controller reports `value_count` and a SHA-256 fingerprint of the injected
+  bearer. The live gateway case sends its own
+  `Authorization: Bearer <attacker>` and requires `value_count == 1` plus a
   fingerprint matching the *injected* token, proving the strip-then-set actually
   overwrote rather than appended.
 - **Documentation:** the fixture's `$comment` already says new implementations

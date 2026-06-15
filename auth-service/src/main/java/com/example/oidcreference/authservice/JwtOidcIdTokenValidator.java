@@ -30,6 +30,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 class JwtOidcIdTokenValidator implements IdTokenValidator {
+  private static final JWSAlgorithm ID_TOKEN_SIGNING_ALGORITHM = JWSAlgorithm.RS256;
+
   private final IDTokenValidator validator;
   private final String clientId;
   // Path into the ID-token claims that holds the roles array. Different IdPs
@@ -56,7 +58,7 @@ class JwtOidcIdTokenValidator implements IdTokenValidator {
           .outageTolerant(900_000L)
           .build();
       JWSKeySelector<SecurityContext> keySelector =
-          new JWSVerificationKeySelector<>(JWSAlgorithm.RS256, jwks);
+          new JWSVerificationKeySelector<>(ID_TOKEN_SIGNING_ALGORITHM, jwks);
       this.validator = new IDTokenValidator(
           new Issuer(md.issuer()),
           new ClientID(md.clientId()),
@@ -148,10 +150,15 @@ class JwtOidcIdTokenValidator implements IdTokenValidator {
       throw new BadCredentialsException(
           "ID token carries at_hash but no access token was supplied for the check");
     }
+    JWSAlgorithm algorithm = signed.getHeader().getAlgorithm();
+    if (!ID_TOKEN_SIGNING_ALGORITHM.equals(algorithm)) {
+      throw new BadCredentialsException(
+          "ID token alg is not accepted for at_hash validation");
+    }
     try {
       AccessTokenValidator.validate(
           new BearerAccessToken(accessToken),
-          signed.getHeader().getAlgorithm(),
+          algorithm,
           claimed);
     } catch (Exception e) {
       throw new BadCredentialsException("at_hash mismatch", e);

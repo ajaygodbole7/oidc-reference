@@ -40,5 +40,8 @@ just e2e-auth                             # Authenticated full-stack proof (refe
 - `package.json` defines `build`, `test`, and `test:e2e`.
 - `playwright.config.ts` stores traces and screenshots under
   `frontend/test-results/`.
-- Tests assert no tokens are written to `localStorage`, `sessionStorage`,
-  `document.cookie`, or IndexedDB.
+- Fast lint/unit tests reject direct writes to `localStorage`,
+  `sessionStorage`, `document.cookie`, and IndexedDB in SPA source.
+- The authenticated Playwright proof is the authoritative runtime check that
+  no token-shaped value appears in browser storage, `document.cookie`, or
+  cookies visible through the browser context.

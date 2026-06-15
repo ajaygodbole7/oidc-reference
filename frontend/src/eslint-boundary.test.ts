@@ -67,6 +67,31 @@ describe("ESLint storage-ban boundary", () => {
     expect(restricted, "no-restricted-syntax must flag indexedDB").toBeDefined();
   });
 
+  it("blocks direct document.cookie writes in src/", { timeout: 30000 }, () => {
+    writeFileSync(TEMP_FILE, "export function leak() { document.cookie = 'access_token=x'; }\n");
+    const restricted = lint(TEMP_FILE).find((m) => m.ruleId === "no-restricted-syntax");
+    expect(restricted, "must flag document.cookie assignment").toBeDefined();
+    expect(restricted?.message).toMatch(/document\.cookie/i);
+  });
+
+  it("blocks bracket-access document.cookie writes in src/", { timeout: 30000 }, () => {
+    writeFileSync(TEMP_FILE, "export function leak() { document['cookie'] = 'access_token=x'; }\n");
+    const restricted = lint(TEMP_FILE).find((m) => m.ruleId === "no-restricted-syntax");
+    expect(restricted, "must flag document['cookie'] assignment").toBeDefined();
+  });
+
+  it("blocks qualified document.cookie writes in src/", { timeout: 30000 }, () => {
+    writeFileSync(TEMP_FILE, "export function leak() { window.document.cookie = 'access_token=x'; }\n");
+    const restricted = lint(TEMP_FILE).find((m) => m.ruleId === "no-restricted-syntax");
+    expect(restricted, "must flag window.document.cookie assignment").toBeDefined();
+  });
+
+  it("blocks fully bracket-qualified document.cookie writes in src/", { timeout: 30000 }, () => {
+    writeFileSync(TEMP_FILE, "export function leak() { globalThis['document']['cookie'] = 'access_token=x'; }\n");
+    const restricted = lint(TEMP_FILE).find((m) => m.ruleId === "no-restricted-syntax");
+    expect(restricted, "must flag globalThis['document']['cookie'] assignment").toBeDefined();
+  });
+
   it("blocks window-qualified storage writes in src/", { timeout: 30000 }, () => {
     writeFileSync(TEMP_FILE, "export function leak() { window.localStorage.setItem('t', 'x'); }\n");
     const restricted = lint(TEMP_FILE).find((m) => m.ruleId === "no-restricted-syntax");

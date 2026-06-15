@@ -149,7 +149,8 @@ PY
   if [ "$c1" = "200" ] && [ "$c2" = "200" ]; then
     NEWSID=$(jget rotated_sid < /tmp/dlock-r1.body); [ -n "$NEWSID" ] || NEWSID=$(jget rotated_sid < /tmp/dlock-r2.body)
     if [ -z "$NEWSID" ]; then
-      printf '  write-visibility trial %s: WARN both-200 but no rotated_sid observed (no rotation)\n' "$trial"
+      wvfail=$((wvfail+1))
+      printf '  write-visibility trial %s: FAIL both-200 but no rotated_sid observed (refresh rotation evidence missing)\n' "$trial"
     else
       vbody="{\"sid\":\"$NEWSID\"}"
       v1=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$R1/internal/resolve" \
