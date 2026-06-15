@@ -187,8 +187,6 @@ and `OIDC-compliance.md`. Address before any non-local deployment:
   mTLS) for Financial-grade API (FAPI) / PSD2 (RFC 9700 §2.5).
 - Add `Referrer-Policy: no-referrer` and a baseline CSP to every
   response, not only the logout 302 and callback errors.
-- Sid rotation on token refresh if the threat model values defending
-  against an attacker who briefly observed the sid.
 
 ## Reporting a vulnerability
 
