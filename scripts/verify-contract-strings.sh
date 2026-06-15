@@ -59,6 +59,17 @@ require_present "return_to" docs/specs/SPEC-0001-core-oidc-flows.md
 require_present "return_to" README.md
 require_absent "\\?next=" AGENTS.md README.md RFC9700-compliance.md docs
 
+# Frontend SPEC section must not reintroduce a "default saved request" (F4):
+# return_to is mandatory and a bare /auth/login is rejected with 400.
+require_absent "saved request defaults" docs/specs/SPEC-0001-core-oidc-flows.md
+
+# Token-invariant precision (F5): the README keeps the id_token_hint logout
+# carveout and must NOT use the ID-token-inclusive false-short that drops it.
+# ("access/refresh tokens never reach the browser" is correct and allowed; only
+# the "ID token(s) never reach[es] the browser" shorthand is forbidden.)
+require_present "id_token_hint" README.md
+require_absent "ID tokens? never reach" README.md
+
 # Auth Service ↔ SPA wire-contract pins. A rename of any cookie name,
 # header name, or path prefix below silently breaks the SPA; these
 # assertions make that drift fail the gate instead.

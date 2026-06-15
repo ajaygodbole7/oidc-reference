@@ -1,6 +1,6 @@
 # oidc-reference
 
-A complete, **runnable** reference for the Backend-for-Frontend (BFF) session pattern: browser-app OAuth 2.1 and OpenID Connect Core 1.0 with **no tokens in the browser**, and a live test that fails if one ever leaks.
+A complete, **runnable** reference for the Backend-for-Frontend (BFF) session pattern: browser-app OAuth 2.1 and OpenID Connect Core 1.0 with **no tokens in browser JS or storage**, and a live test that fails if one ever leaks.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 ![Java](https://img.shields.io/badge/Java-25-orange)
@@ -13,7 +13,7 @@ A complete, **runnable** reference for the Backend-for-Frontend (BFF) session pa
 
 ## 30-second tour
 
-1. **The browser holds no tokens and runs no OIDC library**: just an opaque `__Host-sid` cookie and a CSRF token.
+1. **The browser stores no tokens and runs no OIDC library**: just an opaque `__Host-sid` cookie and a CSRF token.
 2. **A confidential server-side BFF owns the OAuth client role**, split into a dedicated **Auth Service** (the OIDC client) and an **API Gateway** (routing + bearer injection).
 3. **Every `/api/**` call is the phantom-token pattern:** the gateway swaps the opaque cookie for a real access token (resolved by the Auth Service) and injects it as the `Bearer` proxied to the Resource Server.
 
@@ -36,7 +36,7 @@ Most OIDC walkthroughs hand the SPA a public client running PKCE in the browser.
 
 | Decision | This reference | Common alternative |
 | --- | --- | --- |
-| Where tokens live | Server-side BFF; access, refresh, and ID tokens never reach the browser | A public-client SPA running PKCE in the browser (tokens are XSS-reachable), or a backend that still hands the access token to JavaScript |
+| Where tokens live | Server-side BFF; access and refresh tokens never reach the browser, and the ID token only as a server-emitted `id_token_hint` on the RP-logout redirect (never in JS/storage/cookies) | A public-client SPA running PKCE in the browser (tokens are XSS-reachable), or a backend that still hands the access token to JavaScript |
 | Component shape | Split Auth Service (the OAuth/OIDC client) + API Gateway (routing, bearer injection) | One combined service; valid, but mixes the OAuth-client and API-gateway roles |
 | Session state | Two server-side keyspaces, `tx:{state}` (pre-auth, keyed by the OAuth `state`) and `sess:{sid}` (post-auth); no pre-auth session cookie, so no session-fixation class | A framework HTTP-session blob |
 | Provider coupling | Branch on `iss` / `aud` / scopes / claim paths from `.well-known/openid-configuration`; differences live in config | Provider-specific APIs baked into Java or the gateway |
@@ -72,7 +72,7 @@ The vendor choices (Keycloak, APISIX, Valkey) are interchangeable. Appendix A of
 
 Login starts when the browser hits a protected `/api/**` URL with no session, or when the user clicks "Sign in". On the no-session `/api/**` case:
 
-- top-level navigation → `302` to `/auth/login`;
+- top-level navigation → `302` to `/auth/login?return_to=…`;
 - XHR → `401`, and the SPA navigates itself.
 
 The Auth Service then runs the OAuth round-trip and returns the browser to the originally requested URL with the session and CSRF cookies set.

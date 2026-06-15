@@ -564,11 +564,12 @@ format, validation algorithm, and signing-key handling.
 ## Frontend Behavior
 
 - No OAuth/OIDC client library.
-- Sign in is a top-level navigation to `/auth/login` (not a fetch).
+- Sign in is a top-level navigation to `/auth/login?return_to=<current path>`
+  (not a fetch). `return_to` is mandatory — a bare `/auth/login` is rejected with
+  `400` (see §"`return_to` validation rules"), so there is no default saved request.
 - After the OAuth round-trip the Auth Service responds with a direct `302`
-  to the saved-request URL with `__Host-sid` and `XSRF-TOKEN` cookies set.
-  For explicit `/auth/login`, the saved request defaults to `/`. The SPA
-  then loads user state from `/auth/me`.
+  to the saved-request URL (the validated `return_to`) with `__Host-sid` and
+  `XSRF-TOKEN` cookies set. The SPA then loads user state from `/auth/me`.
 - All API calls go to `/api/**` (same origin via the dev proxy or APISIX)
   with `credentials: "include"`.
 - Logout is `POST /auth/logout` with the `X-XSRF-TOKEN` header.
