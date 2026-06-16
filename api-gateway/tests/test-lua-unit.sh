@@ -9,7 +9,9 @@ set -eu
 
 APISIX_IMAGE="${APISIX_IMAGE:-apache/apisix:3.16.0-debian}"
 GATEWAY_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$GATEWAY_DIR/.." && pwd)
 LUAJIT=/usr/local/openresty/luajit/bin/luajit
+RESTY=/usr/bin/resty
 
 command -v docker >/dev/null 2>&1 || {
   echo "test-lua-unit: docker is required (runs the pinned APISIX image)" >&2
@@ -29,8 +31,7 @@ if ! docker run --rm \
 fi
 
 # Pure helpers: constant-time byte comparison (the primitive under signed-CSRF /
-# HMAC validation). hmac_b64url + csrf_ok need OpenResty's resty.hmac / ngx and
-# are covered by the live CSRF battery in test-gateway-behavior.sh instead.
+# HMAC validation), cookie selection, and cookie builders that need no ngx/resty.
 echo "== pure functions (constant_time_equals) =="
 if ! docker run --rm \
     -v "$GATEWAY_DIR:/gateway:ro" -w /gateway \
@@ -38,9 +39,22 @@ if ! docker run --rm \
   status=1
 fi
 
+# Signed-CSRF parity: run with OpenResty's `resty` so the test uses the same
+# resty.hmac + ngx.encode_base64 primitives as APISIX, then compare the Lua
+# implementation to schema/csrf-fixture.json and auth-service's Java fixture
+# test.
+echo "== signed CSRF fixture parity =="
+if ! docker run --rm \
+    -v "$REPO_ROOT:/repo:ro" -w /repo \
+    -e 'LUA_PATH=/usr/local/apisix/deps/share/lua/5.1/?.lua;/usr/local/apisix/deps/share/lua/5.1/?/init.lua;;' \
+    "$APISIX_IMAGE" "$RESTY" api-gateway/tests/test-csrf-fixture.lua \
+      api-gateway/plugins/bff-session.lua schema/csrf-fixture.json; then
+  status=1
+fi
+
 if [ "$status" -ne 0 ]; then
   echo "test-lua-unit: FAIL" >&2
 else
-  echo "test-lua-unit: PASS (resolve-flow)"
+  echo "test-lua-unit: PASS"
 fi
 exit $status

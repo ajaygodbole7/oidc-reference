@@ -704,6 +704,13 @@ _M._resolve_session = resolve_session
 -- exercises its correctness directly in bare LuaJIT. Not part of the contract.
 _M._constant_time_equals = constant_time_equals
 
+-- Test hooks: signed-CSRF parity with the Auth Service. These need real
+-- OpenResty primitives (resty.hmac + ngx.encode_base64), so
+-- test-csrf-fixture.lua runs under `resty` inside the pinned APISIX image.
+-- Not part of the APISIX plugin contract.
+_M._hmac_b64url = hmac_b64url
+_M._csrf_ok = csrf_ok
+
 -- Test hook: session-cookie selection. Pure (table lookups), so test-pure-fns.lua
 -- exercises the __Host-sid-vs-bare-sid + allow_insecure_sid gate directly. Not
 -- part of the APISIX plugin contract.

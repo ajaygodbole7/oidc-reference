@@ -59,6 +59,12 @@ if grep -E -q 'valkey_host|valkey_port|valkey_password|idle_ttl_seconds' "$apisi
   fail "$apisix_yaml still wires Valkey into the bff-session plugin — remove valkey_*/idle_ttl_seconds"
 fi
 
+# The Lua plugin is copyable gateway mechanics. Keep its decision-table tests
+# and the signed-CSRF Java/Lua fixture parity in the non-live gateway gate so a
+# checkout can prove the APISIX implementation matches the contract without
+# starting the full stack.
+sh api-gateway/tests/test-lua-unit.sh || fail "Lua unit/parity tests failed"
+
 # ---- Sentinel guard (render-apisix-config.sh fails closed on dev secrets) ----
 # REQUIRE_NONDEV_SECRETS=1 must REFUSE a dev-sentinel GATEWAY_CLIENT_SECRET /
 # CSRF_SIGNING_KEY — the gateway's render-time analogue of the Auth Service's

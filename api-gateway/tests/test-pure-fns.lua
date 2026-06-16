@@ -1,11 +1,8 @@
 -- Unit tests for bff-session.lua's pure helper functions, run by test-lua-unit.sh
--- inside the pinned APISIX image (bare LuaJIT). Covers constant_time_equals — the
--- constant-time byte comparison under signed-CSRF and HMAC validation.
---
--- The HMAC digest (hmac_b64url) and the full csrf_ok validator need OpenResty's
--- resty.hmac and ngx.encode_base64, which are NOT present in bare LuaJIT; they are
--- covered end-to-end by the live signed-CSRF battery in test-gateway-behavior.sh
--- (no-CSRF / unsigned / mismatched / forged-HMAC / cross-session / valid).
+-- inside the pinned APISIX image (bare LuaJIT). Covers helpers that do not need
+-- OpenResty's ngx/resty primitives: constant_time_equals, cookie selection, and
+-- cookie builders. Signed-CSRF HMAC parity lives in test-csrf-fixture.lua, which
+-- runs under `resty` so it uses real resty.hmac + ngx.encode_base64.
 
 -- Stub the I/O deps so the plugin module loads under bare LuaJIT.
 package.preload["apisix.core"] = function()

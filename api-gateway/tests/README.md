@@ -31,6 +31,10 @@ The harness asserts HTTP status, `Set-Cookie`/`Location` headers, and
   field extraction falls back to `sed` for flat JSON).
 - `docker compose` available and the `valkey` service reachable via
   `docker compose exec`.
+- `docker` available for `test-lua-unit.sh`, which runs the Lua unit/parity
+  tests inside the pinned APISIX image. The signed-CSRF fixture parity test uses
+  OpenResty's `resty` runner so it exercises real `resty.hmac` and
+  `ngx.encode_base64`.
 - Frontend dev dependencies installed (`cd frontend && npm install`) when
   `RUN_REFRESH_TESTS=1`, because the refresh test uses Playwright to complete a
   real local Keycloak login and obtain a real `sess:{sid}`.
